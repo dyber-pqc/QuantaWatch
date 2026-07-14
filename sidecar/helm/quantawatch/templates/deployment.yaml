@@ -1,0 +1,126 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "quantawatch.fullname" . }}
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.gateway.replicas }}
+  selector:
+    matchLabels:
+      {{- include "quantawatch.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+      labels:
+        {{- include "quantawatch.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: gateway
+          image: {{ include "quantawatch.gateway.image" . }}
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.gateway.ports.proxy }}
+              protocol: TCP
+            - name: admin
+              containerPort: {{ .Values.gateway.ports.admin }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: proxy
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: proxy
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 2
+          env:
+            - name: RUST_LOG
+              value: "info"
+            {{- range $key, $value := .Values.gateway.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- if .Values.gateway.apiKeySecret }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.gateway.apiKeySecret }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/quantawatch.yaml
+              subPath: quantawatch.yaml
+              readOnly: true
+            {{- if .Values.persistence.audit.enabled }}
+            - name: audit-data
+              mountPath: /data/audit
+            {{- end }}
+            {{- if .Values.persistence.keys.enabled }}
+            - name: key-data
+              mountPath: /data/keys
+            {{- end }}
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "quantawatch.fullname" . }}-config
+        {{- if .Values.persistence.audit.enabled }}
+        - name: audit-data
+          persistentVolumeClaim:
+            claimName: {{ include "quantawatch.fullname" . }}-audit
+        {{- end }}
+        {{- if .Values.persistence.keys.enabled }}
+        - name: key-data
+          persistentVolumeClaim:
+            claimName: {{ include "quantawatch.fullname" . }}-keys
+        {{- end }}
+---
+{{- if .Values.persistence.audit.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "quantawatch.fullname" . }}-audit
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.audit.accessModes | nindent 4 }}
+  {{- if .Values.persistence.audit.storageClass }}
+  storageClassName: {{ .Values.persistence.audit.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.audit.size }}
+{{- end }}
+---
+{{- if .Values.persistence.keys.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "quantawatch.fullname" . }}-keys
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.keys.accessModes | nindent 4 }}
+  {{- if .Values.persistence.keys.storageClass }}
+  storageClassName: {{ .Values.persistence.keys.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.keys.size }}
+{{- end }}

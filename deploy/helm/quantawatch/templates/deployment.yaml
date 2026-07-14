@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "quantawatch.fullname" . }}
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate          # SQLite: single writer, avoid RWO multi-attach
+  selector:
+    matchLabels:
+      {{- include "quantawatch.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ .Values.config | sha256sum }}
+      labels:
+        {{- include "quantawatch.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      {{- with .Values.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: gateway
+          image: {{ include "quantawatch.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args: ["/app/quantawatch.yaml"]
+          env:
+            - name: RUST_LOG
+              value: {{ .Values.gateway.logLevel | quote }}
+          {{- if .Values.secretEnv }}
+          envFrom:
+            - secretRef:
+                name: {{ include "quantawatch.fullname" . }}-secrets
+          {{- end }}
+          ports:
+            - name: proxy
+              containerPort: {{ .Values.gateway.proxyPort }}
+            - name: admin
+              containerPort: {{ .Values.gateway.adminPort }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: admin
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: admin
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /app/quantawatch.yaml
+              subPath: quantawatch.yaml
+              readOnly: true
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /app/data
+              subPath: data
+            - name: data
+              mountPath: /app/keys
+              subPath: keys
+            - name: data
+              mountPath: /app/audit
+              subPath: audit
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "quantawatch.fullname" . }}-config
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "quantawatch.fullname" . }}-data
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

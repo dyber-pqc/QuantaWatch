@@ -1,0 +1,57 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.eggs/
+*.whl
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# QuantaWatch runtime
+/audit/
+/keys/
+*.key
+*.pem
+/data/
+quantawatch.yaml
+!quantawatch.yaml.example
+
+# Generated verification/demo artifacts
+cbom.json
+cbom-tampered.json
+evidence.json
+evidence-tampered.json
+
+# Claude Code local settings (personal, per-machine)
+.claude/settings.local.json
+
+# Environment
+.env
+.env.*
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log

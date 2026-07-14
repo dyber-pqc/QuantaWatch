@@ -1,0 +1,107 @@
+# Default values for QuantaWatch Helm chart.
+
+# -- Gateway settings ----------------------------------------------------------
+gateway:
+  image:
+    repository: ghcr.io/dyber-inc/quantawatch
+    tag: ""  # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  replicas: 1
+  ports:
+    proxy: 9090
+    admin: 9091
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  # Environment variables injected into the gateway pod.
+  env: {}
+    # RUST_LOG: info
+  # Reference to an existing Secret that contains provider API keys.
+  # The secret should have keys like ANTHROPIC_API_KEY, OPENAI_API_KEY.
+  apiKeySecret: ""
+
+# -- Gateway configuration (quantawatch.yaml) ----------------------------------
+config:
+  gateway:
+    listen: "0.0.0.0:9090"
+    admin_listen: "0.0.0.0:9091"
+  providers:
+    anthropic:
+      upstream: "https://api.anthropic.com"
+      protocol: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+    openai:
+      upstream: "https://api.openai.com"
+      protocol: openai
+      api_key_env: OPENAI_API_KEY
+  identity:
+    session_ttl: 3600
+    key_dir: "/data/keys"
+  monitor:
+    blocking_threshold: high
+    scan_responses: true
+    prompt_injection: true
+    data_exfiltration: true
+    pii_detection: true
+  audit:
+    path: "/data/audit"
+    merkle_batch_size: 64
+  policy:
+    default: deny
+
+# -- Dashboard settings --------------------------------------------------------
+dashboard:
+  enabled: true
+  image:
+    repository: ghcr.io/dyber-inc/quantawatch-dashboard
+    tag: ""  # defaults to .Chart.AppVersion
+    pullPolicy: IfNotPresent
+  replicas: 1
+  port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# -- Persistence ---------------------------------------------------------------
+persistence:
+  audit:
+    enabled: true
+    size: 1Gi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+  keys:
+    enabled: true
+    size: 100Mi
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+# -- Ingress -------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: quantawatch.example.com
+  tls: []
+    # - secretName: quantawatch-tls
+    #   hosts:
+    #     - quantawatch.example.com
+
+# -- Common settings -----------------------------------------------------------
+nameOverride: ""
+fullnameOverride: ""
+imagePullSecrets: []
+serviceAccount:
+  create: false
+  name: ""

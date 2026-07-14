@@ -1,0 +1,159 @@
+# QuantaWatch Configuration
+# Copy to quantawatch.yaml and customize
+
+gateway:
+  listen: "0.0.0.0:9090"
+  admin_listen: "0.0.0.0:9091"
+
+providers:
+  anthropic:
+    upstream: "https://api.anthropic.com"
+    protocol: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+  openai:
+    upstream: "https://api.openai.com"
+    protocol: openai
+    api_key_env: OPENAI_API_KEY
+  ollama:
+    upstream: "http://localhost:11434"
+    protocol: ollama
+
+agents:
+  support-bot:
+    description: "Customer support agent"
+    allowed_models:
+      - "claude-sonnet-*"
+      - "gpt-4o"
+    allowed_tools:
+      - web_search
+      - crm_read
+    blocked_tools:
+      - code_execution
+      - file_delete
+      - email_send
+    max_tokens_per_session: 100000
+    max_requests_per_minute: 60
+
+  dev-assistant:
+    description: "Engineering coding assistant"
+    allowed_models:
+      - "claude-*"
+      - "deepseek-*"
+      - "ollama/*"
+    allowed_tools:
+      - "*"
+    blocked_actions:
+      - "rm -rf"
+      - "DROP TABLE"
+      - "DELETE FROM"
+
+  research-agent:
+    description: "Research and analysis"
+    allowed_models:
+      - "ollama/*"
+    allowed_tools:
+      - web_search
+    offline: true
+
+identity:
+  session_ttl: 3600
+  key_dir: "./keys"
+
+monitor:
+  blocking_threshold: high
+  scan_responses: true
+  prompt_injection: true
+  data_exfiltration: true
+  pii_detection: true
+
+audit:
+  path: "./audit"
+  merkle_batch_size: 64
+
+policy:
+  default: deny
+
+# Cryptographic Posture Management (CPM)
+scanner:
+  store_path: "./scans"
+  # Auto-scan provider endpoints + dependency files on startup
+  auto_scan_on_start: true
+  tls:
+    enabled: true
+    timeout_secs: 10
+    # Extra TLS endpoints to fingerprint (provider upstreams are scanned automatically)
+    targets:
+      - "github.com:443"
+  dependencies:
+    enabled: true
+    paths:
+      - "."
+  certificates:
+    enabled: true
+  code:
+    enabled: false
+    paths:
+      - "./src"
+    exclude:
+      - "vendor"
+
+# Background scheduled re-scanning (0 disables)
+schedule:
+  scan_interval_secs: 3600
+
+# External integrations for discovery and remediation.
+# api_token_env names the ENV VAR holding the secret — never put secrets here.
+integrations:
+  - id: github-main
+    integration_type: github
+    api_token_env: GITHUB_TOKEN
+    settings:
+      org: your-org
+  # - id: jira-cloud
+  #   integration_type: jira
+  #   base_url: "https://your-domain.atlassian.net"
+  #   api_token_env: JIRA_API_TOKEN
+  #   default_project: SEC
+  #   settings:
+  #     email: you@example.com
+  # - id: linear-main
+  #   integration_type: linear
+  #   api_token_env: LINEAR_API_KEY
+  #   settings:
+  #     team_id: your-team-id
+
+# Continuous-attestation alerting. Channels are generic webhooks or Slack
+# incoming webhooks (covers Teams/PagerDuty/email-gateways via webhook too).
+alerts:
+  enabled: false
+  posture_drop_threshold: 5.0   # fire when overall posture falls this many points
+  alert_on_critical: true       # fire on high/critical findings
+  cert_expiry_days: 30
+  channels:
+    - id: ops-slack
+      channel_type: slack       # "slack" | "webhook"
+      url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+      min_severity: warning     # info | warning | critical
+
+# Authentication & RBAC for the admin API + dashboard (disabled by default).
+# Generate password hashes with:  qw hash-password 'your-password'
+# Generate API keys with:         qw hash-password --api-key
+# Roles: viewer (read), operator (+ trigger scans/remediation), admin (+ config).
+auth:
+  enabled: false
+  session_ttl_secs: 28800
+  # Each user/key is isolated to an `org` (tenant). Data (scans, findings,
+  # posture history, remediations, alerts) is partitioned per org in SQLite.
+  users:
+    - username: admin
+      password_hash: "$argon2id$v=19$m=19456,t=2,p=1$...replace-me..."
+      role: admin
+      org: default
+  api_keys:
+    - name: ci
+      key_hash: "sha3-256-hex-of-the-key"
+      role: operator
+      org: default
+
+# Persistence: all stores are SQLite, written to <scanner.store_path>/quantawatch.db
+# (no separate config needed; the store_path above controls the location).

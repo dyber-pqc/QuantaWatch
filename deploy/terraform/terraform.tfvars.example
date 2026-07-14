@@ -1,0 +1,22 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+# Or export as TF_VAR_* / use a secrets manager for the sensitive map.
+
+namespace       = "quantawatch"
+image_tag       = "1.0.0"
+
+ingress_enabled = true
+ingress_host    = "quantawatch.acme.example.com"
+
+storage_size    = "20Gi"
+# storage_class = "gp3"
+
+# Full config (optional) — otherwise the chart's built-in default is used.
+# config_file   = "./quantawatch.yaml"
+
+# Secrets rendered into the k8s Secret and exposed as env vars.
+secret_env = {
+  ANTHROPIC_API_KEY = "sk-ant-..."
+  OPENAI_API_KEY    = "sk-..."
+  QW_WEBHOOK_SECRET = "change-me"
+  GITHUB_TOKEN      = "ghp_..."
+}

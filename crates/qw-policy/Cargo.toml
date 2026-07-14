@@ -1,0 +1,26 @@
+[package]
+name = "qw-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Policy engine for QuantaWatch"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+regex.workspace = true
+glob = "0.3"
+
+[features]
+default = []
+cedar = ["dep:cedar-policy"]
+
+[dependencies.cedar-policy]
+version = "4"
+optional = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

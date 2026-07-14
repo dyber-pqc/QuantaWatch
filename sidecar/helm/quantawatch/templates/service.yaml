@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "quantawatch.fullname" . }}
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: proxy
+      port: {{ .Values.gateway.ports.proxy }}
+      targetPort: proxy
+      protocol: TCP
+    - name: admin
+      port: {{ .Values.gateway.ports.admin }}
+      targetPort: admin
+      protocol: TCP
+  selector:
+    {{- include "quantawatch.selectorLabels" . | nindent 4 }}

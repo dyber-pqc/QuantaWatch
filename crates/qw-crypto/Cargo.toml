@@ -1,0 +1,33 @@
+[package]
+name = "qw-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Post-quantum cryptography primitives for QuantaWatch"
+
+[dependencies]
+ml-dsa.workspace = true
+ml-kem.workspace = true
+sha3.workspace = true
+hex.workspace = true
+zeroize.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+signature.workspace = true
+tracing.workspace = true
+base64 = "0.22"
+getrandom.workspace = true
+rand_core.workspace = true
+argon2 = "0.5"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "pqc_bench"
+harness = false

@@ -1,0 +1,114 @@
+# QuantaWatch Helm values
+# ---------------------------------------------------------------------------
+# Every secret is supplied via env vars referenced (by NAME) from the gateway
+# config. Put the actual values in `secretEnv` below (rendered into a k8s
+# Secret) — never in the ConfigMap.
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/dyber/quantawatch
+  tag: ""            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+pullSecrets: []
+
+replicaCount: 1       # SQLite-backed: keep at 1 unless using an external DB
+
+# --- Gateway process -------------------------------------------------------
+gateway:
+  proxyPort: 9090     # in-path LLM proxy
+  adminPort: 9091     # admin API + dashboard
+  logLevel: info
+  resources:
+    requests:
+      cpu: 250m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 1Gi
+
+# --- Persistence (SQLite store + ML-DSA keys + audit log) ------------------
+persistence:
+  enabled: true
+  storageClass: ""    # "" = cluster default
+  size: 10Gi
+  accessMode: ReadWriteOnce
+  # Mounted at /app/data (SQLite), /app/keys (identity), /app/audit (log chain)
+
+# --- Dashboard (static SPA served by nginx) --------------------------------
+dashboard:
+  enabled: true
+  image:
+    repository: ghcr.io/dyber/quantawatch-dashboard
+    tag: ""
+    pullPolicy: IfNotPresent
+  port: 80
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+# --- Secrets (rendered into a Kubernetes Secret, exposed as env vars) ------
+# Keys here become env var NAMES the quantawatch.yaml references via
+# `*_env` fields (api_key_env, webhook_secret_env, oidc client_secret_env…).
+secretEnv:
+  ANTHROPIC_API_KEY: ""
+  OPENAI_API_KEY: ""
+  QW_WEBHOOK_SECRET: ""
+  GITHUB_TOKEN: ""
+  # GITHUB_WEBHOOK_SECRET: ""   # per-integration inbound secret
+  # OIDC_CLIENT_SECRET: ""
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, AZURE_*, GCP_* as needed
+
+# The full quantawatch.yaml. Rendered verbatim into a ConfigMap and mounted
+# at /app/quantawatch.yaml. Override with `--set-file config=path/to.yaml`
+# or an inline block in your own values file.
+config: |
+  server:
+    proxy_bind: "0.0.0.0:9090"
+    admin_bind: "0.0.0.0:9091"
+  auth:
+    enabled: true
+    webhook_secret_env: QW_WEBHOOK_SECRET
+  scanner:
+    store_path: /app/data
+    auto_scan_on_start: true
+  providers:
+    - id: anthropic
+      kind: anthropic
+      base_url: https://api.anthropic.com
+      api_key_env: ANTHROPIC_API_KEY
+
+service:
+  type: ClusterIP
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+  host: quantawatch.example.com
+  tls:
+    enabled: true
+    secretName: quantawatch-tls
+  # "/"     -> dashboard (admin UI)
+  # "/api"  -> gateway admin API (adminPort)
+
+podSecurityContext:
+  fsGroup: 1000
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

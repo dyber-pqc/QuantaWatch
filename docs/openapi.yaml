@@ -1,0 +1,394 @@
+openapi: "3.1.0"
+info:
+  title: QuantaWatch Admin API
+  description: |
+    The QuantaWatch Admin API provides observability and management endpoints
+    for the QuantaWatch post-quantum security gateway.  It runs on a separate
+    port (default 9091) from the proxy gateway (default 9090).
+
+    All responses use JSON.  Authentication is not required by default but can
+    be enabled in the gateway configuration.
+  version: "0.1.0"
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+  contact:
+    name: QuantaWatch
+    url: https://github.com/dyber-inc/quantawatch
+
+servers:
+  - url: http://localhost:9091
+    description: Local development (admin API)
+
+paths:
+  /api/sessions:
+    get:
+      operationId: listSessions
+      summary: List all sessions
+      description: |
+        Returns every active and historical gateway session.  Each session
+        represents a cryptographically authenticated connection from an AI
+        agent.
+      tags:
+        - Sessions
+      responses:
+        "200":
+          description: A list of sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SessionInfo"
+
+  /api/sessions/{id}:
+    get:
+      operationId: getSession
+      summary: Get session details
+      description: Retrieve full details for a single session by its ID.
+      tags:
+        - Sessions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Unique session identifier.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Session details.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionInfo"
+        "404":
+          description: Session not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/audit:
+    get:
+      operationId: listAuditEntries
+      summary: List audit entries
+      description: |
+        Returns entries from the tamper-evident, cryptographically signed
+        audit log.  Entries are ordered by sequence number (ascending).
+      tags:
+        - Audit
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of entries to return.
+          schema:
+            type: integer
+            minimum: 1
+            default: 100
+      responses:
+        "200":
+          description: A list of audit entries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AuditEntry"
+
+  /api/audit/verify:
+    post:
+      operationId: verifyAuditChain
+      summary: Verify audit chain integrity
+      description: |
+        Cryptographically verifies the entire audit chain.  The gateway
+        checks each entry's ML-DSA signature, validates hash-chain
+        linkage, and confirms Merkle root consistency.
+      tags:
+        - Audit
+      responses:
+        "200":
+          description: Verification result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VerifyResult"
+
+  /api/stats:
+    get:
+      operationId: getStats
+      summary: Get gateway statistics
+      description: |
+        Returns aggregate statistics about the gateway's operation since
+        it was started.
+      tags:
+        - Stats
+      responses:
+        "200":
+          description: Gateway statistics.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GatewayStats"
+
+  /api/config:
+    get:
+      operationId: getConfig
+      summary: Get gateway configuration info
+      description: |
+        Returns the active gateway configuration.  Secret values (API keys,
+        private keys) are redacted.
+      tags:
+        - Config
+      responses:
+        "200":
+          description: Active configuration (secrets redacted).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /health:
+    get:
+      operationId: healthCheck
+      summary: Health check
+      description: |
+        Lightweight liveness probe.  Returns 200 when the gateway is ready
+        to accept traffic.
+      tags:
+        - Health
+      responses:
+        "200":
+          description: Gateway is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+components:
+  schemas:
+    SessionInfo:
+      type: object
+      description: An active or historical gateway session.
+      required:
+        - session_id
+        - agent_name
+        - created_at
+        - expires_at
+        - request_count
+        - total_tokens
+        - public_key_fingerprint
+      properties:
+        session_id:
+          type: string
+          description: Unique identifier for the session.
+          examples:
+            - "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        agent_name:
+          type: string
+          description: Name of the AI agent that owns the session.
+          examples:
+            - "support-bot"
+        created_at:
+          type: string
+          format: date-time
+          description: When the session was created (ISO 8601).
+          examples:
+            - "2025-06-01T10:00:00Z"
+        expires_at:
+          type: string
+          format: date-time
+          description: When the session expires (ISO 8601).
+          examples:
+            - "2025-06-01T11:00:00Z"
+        request_count:
+          type: integer
+          description: Number of requests made in this session.
+          examples:
+            - 15
+        total_tokens:
+          type: integer
+          description: Total tokens consumed in this session.
+          examples:
+            - 8200
+        public_key_fingerprint:
+          type: string
+          description: Fingerprint of the ML-DSA public key used to create the session.
+          examples:
+            - "ML-DSA-65:ab12cd34ef56..."
+
+    AuditEntry:
+      type: object
+      description: A single entry in the tamper-evident audit log.
+      required:
+        - sequence
+        - timestamp
+        - event_type
+        - session_id
+        - details
+        - hash
+        - signature
+      properties:
+        sequence:
+          type: integer
+          description: Monotonically increasing sequence number.
+          examples:
+            - 42
+        timestamp:
+          type: string
+          format: date-time
+          description: When the event occurred (ISO 8601).
+          examples:
+            - "2025-06-01T10:05:00Z"
+        event_type:
+          type: string
+          description: |
+            Type of event.  Common values: `session_created`,
+            `request_proxied`, `threat_detected`, `session_expired`.
+          examples:
+            - "request_proxied"
+        session_id:
+          type: string
+          description: Session this event belongs to.
+          examples:
+            - "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        details:
+          type: object
+          additionalProperties: true
+          description: Arbitrary event-specific metadata.
+          examples:
+            - { "method": "POST", "path": "/v1/messages" }
+        hash:
+          type: string
+          description: SHA3-256 hash chaining this entry to the previous one.
+          examples:
+            - "3a7f1b2c..."
+        signature:
+          type: string
+          description: ML-DSA signature over the entry contents.
+          examples:
+            - "ML-DSA:a1b2c3..."
+
+    GatewayStats:
+      type: object
+      description: Aggregate gateway statistics.
+      required:
+        - total_sessions
+        - active_sessions
+        - total_requests
+        - total_audit_entries
+        - active_threats
+      properties:
+        total_sessions:
+          type: integer
+          description: Total sessions created since startup.
+          examples:
+            - 5
+        active_sessions:
+          type: integer
+          description: Currently active sessions.
+          examples:
+            - 2
+        total_requests:
+          type: integer
+          description: Total requests proxied since startup.
+          examples:
+            - 128
+        total_audit_entries:
+          type: integer
+          description: Total audit log entries.
+          examples:
+            - 256
+        active_threats:
+          type: integer
+          description: Currently active/unresolved threats.
+          examples:
+            - 0
+
+    VerifyResult:
+      type: object
+      description: Result of cryptographic audit chain verification.
+      required:
+        - valid
+        - entries_checked
+        - signatures_valid
+        - chain_intact
+        - merkle_roots_valid
+        - errors
+      properties:
+        valid:
+          type: boolean
+          description: Whether the entire audit chain is valid.
+          examples:
+            - true
+        entries_checked:
+          type: integer
+          description: Number of entries that were verified.
+          examples:
+            - 42
+        signatures_valid:
+          type: integer
+          description: Number of entries with valid ML-DSA signatures.
+          examples:
+            - 42
+        chain_intact:
+          type: boolean
+          description: Whether the hash chain is unbroken from the first entry.
+          examples:
+            - true
+        merkle_roots_valid:
+          type: boolean
+          description: Whether all Merkle tree roots are consistent.
+          examples:
+            - true
+        errors:
+          type: array
+          description: Descriptions of any integrity violations found.
+          items:
+            type: string
+          examples:
+            - []
+
+    HealthResponse:
+      type: object
+      description: Gateway health status.
+      required:
+        - status
+        - version
+        - uptime_seconds
+      properties:
+        status:
+          type: string
+          description: Health status string.
+          examples:
+            - "ok"
+        version:
+          type: string
+          description: Gateway version.
+          examples:
+            - "0.1.0"
+        uptime_seconds:
+          type: integer
+          description: Seconds since the gateway started.
+          examples:
+            - 3600
+
+    ErrorResponse:
+      type: object
+      description: Standard error response.
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Machine-readable error code.
+          examples:
+            - "not_found"
+        message:
+          type: string
+          description: Human-readable error message.
+          examples:
+            - "Session not found"

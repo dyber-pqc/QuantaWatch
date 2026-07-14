@@ -1,0 +1,15 @@
+[package]
+name = "qw-cbom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Cryptographic Bill of Materials (CBOM) generation and posture scoring"
+
+[dependencies]
+qw-scanner = { path = "../qw-scanner" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }

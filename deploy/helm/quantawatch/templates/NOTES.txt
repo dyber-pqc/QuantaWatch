@@ -1,0 +1,32 @@
+QuantaWatch {{ .Chart.AppVersion }} deployed as "{{ .Release.Name }}".
+
+Post-quantum Cryptographic Posture Management is now running.
+
+1. Gateway (in-path LLM proxy + admin API):
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "quantawatch.fullname" . }} {{ .Values.gateway.adminPort }}:{{ .Values.gateway.adminPort }}
+   -> Admin API:  http://localhost:{{ .Values.gateway.adminPort }}/api/health
+
+{{- if .Values.dashboard.enabled }}
+
+2. Dashboard:
+   kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "quantawatch.fullname" . }}-dashboard {{ .Values.dashboard.port }}:{{ .Values.dashboard.port }}
+   -> http://localhost:{{ .Values.dashboard.port }}
+{{- end }}
+
+{{- if .Values.ingress.enabled }}
+
+3. Ingress:
+   https://{{ .Values.ingress.host }}   (dashboard)
+   https://{{ .Values.ingress.host }}/api/health   (gateway)
+{{- else }}
+
+3. Ingress is disabled. Enable it with --set ingress.enabled=true --set ingress.host=<fqdn>.
+{{- end }}
+
+SECURITY:
+- Confirm every *_env secret is populated (helm get values {{ .Release.Name }}).
+- Rotate the default admin password immediately after first login.
+{{- if not .Values.persistence.enabled }}
+- WARNING: persistence is disabled — the SQLite store, ML-DSA identity keys, and
+  audit chain live in the pod and are LOST on restart. Enable persistence in prod.
+{{- end }}

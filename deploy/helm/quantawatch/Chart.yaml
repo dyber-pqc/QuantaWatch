@@ -1,0 +1,18 @@
+apiVersion: v2
+name: quantawatch
+description: QuantaWatch — post-quantum Cryptographic Posture Management gateway with hardware-attested CBOM, agent-aware crypto posture, and a quantum attack-path graph.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://dyber.io
+sources:
+  - https://github.com/dyber/quantawatch
+keywords:
+  - post-quantum
+  - pqc
+  - cbom
+  - security
+  - ai-gateway
+maintainers:
+  - name: Dyber, Inc.
+    email: security@dyber.io

@@ -1,0 +1,21 @@
+[package]
+name = "qw-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "QuantaWatch CLI tools"
+
+[[bin]]
+name = "qw"
+path = "src/main.rs"
+
+[dependencies]
+qw-crypto = { path = "../qw-crypto" }
+qw-audit = { path = "../qw-audit" }
+qw-scanner = { path = "../qw-scanner" }
+qw-cbom = { path = "../qw-cbom" }
+clap.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+hex.workspace = true

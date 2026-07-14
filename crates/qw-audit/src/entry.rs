@@ -1,0 +1,110 @@
+use chrono::{DateTime, Utc};
+use serde::{Serialize, Deserialize};
+use uuid::Uuid;
+
+/// A single audit log entry with PQC signature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub id: String,
+    pub timestamp: DateTime<Utc>,
+    pub sequence: u64,
+    pub session_id: String,
+    pub event: AuditEvent,
+    pub prev_hash: String,
+    pub content_hash: String,
+    pub signature: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merkle_root: Option<String>,
+}
+
+/// Types of audit events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AuditEvent {
+    SessionCreated {
+        agent_name: String,
+        provider: String,
+        model: String,
+        client_ip: String,
+    },
+    RequestProcessed {
+        provider: String,
+        model: String,
+        prompt_hash: String,
+        response_hash: String,
+        policy_decision: String,
+        tools_requested: Vec<String>,
+        tools_allowed: Vec<String>,
+        tools_denied: Vec<String>,
+        threats_detected: u32,
+        latency_ms: u64,
+    },
+    ThreatBlocked {
+        category: String,
+        severity: String,
+        pattern: String,
+    },
+    PolicyViolation {
+        rule: String,
+        reason: String,
+        agent_name: String,
+    },
+    SessionClosed {
+        total_requests: u64,
+        total_tokens: u64,
+    },
+    ScanCompleted {
+        scan_id: String,
+        scanner_id: String,
+        target: String,
+        finding_count: u32,
+        status: String,
+    },
+    FindingCreated {
+        finding_id: String,
+        category: String,
+        severity: String,
+        pqc_status: String,
+        asset: String,
+    },
+    PostureChanged {
+        previous_score: f64,
+        new_score: f64,
+        trigger: String,
+    },
+    IntegrationSync {
+        integration_id: String,
+        action: String,
+        detail: String,
+    },
+}
+
+impl AuditEntry {
+    /// Create the content bytes for hashing (everything except content_hash, signature, merkle_root).
+    pub fn content_bytes(&self) -> Vec<u8> {
+        let content = serde_json::json!({
+            "id": self.id,
+            "timestamp": self.timestamp.to_rfc3339(),
+            "sequence": self.sequence,
+            "session_id": self.session_id,
+            "event": self.event,
+            "prev_hash": self.prev_hash,
+        });
+        serde_json::to_vec(&content).unwrap_or_default()
+    }
+
+    /// Create a new entry from an event (without hash/signature, which are added by the logger).
+    pub fn new(sequence: u64, session_id: &str, event: AuditEvent, prev_hash: &str) -> Self {
+        Self {
+            id: Uuid::new_v4().to_string(),
+            timestamp: Utc::now(),
+            sequence,
+            session_id: session_id.to_string(),
+            event,
+            prev_hash: prev_hash.to_string(),
+            content_hash: String::new(),
+            signature: String::new(),
+            merkle_root: None,
+        }
+    }
+}

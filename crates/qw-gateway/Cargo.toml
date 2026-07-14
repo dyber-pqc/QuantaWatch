@@ -1,0 +1,55 @@
+[package]
+name = "qw-gateway"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "QuantaWatch gateway proxy server"
+
+[lib]
+name = "qw_gateway"
+path = "src/lib.rs"
+
+[[bin]]
+name = "quantawatch"
+path = "src/main.rs"
+
+[dependencies]
+qw-crypto = { path = "../qw-crypto" }
+qw-policy = { path = "../qw-policy" }
+qw-monitor = { path = "../qw-monitor" }
+qw-audit = { path = "../qw-audit" }
+qw-scanner = { path = "../qw-scanner" }
+qw-cbom = { path = "../qw-cbom" }
+qw-integrations = { path = "../qw-integrations" }
+qw-store = { path = "../qw-store" }
+
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+hyper.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+async-trait.workspace = true
+dashmap.workspace = true
+base64 = "0.22"
+bytes = "1"
+http = "1"
+hex.workspace = true
+sha2 = "0.10"
+hmac = "0.12"
+jsonwebtoken = "9"
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["json"] }
+tokio = { workspace = true, features = ["test-util", "macros"] }
+tower = { workspace = true, features = ["util"] }
+tempfile = "3"
