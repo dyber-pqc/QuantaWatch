@@ -8,7 +8,7 @@ nameOverride: ""
 fullnameOverride: ""
 
 image:
-  repository: ghcr.io/dyber/quantawatch
+  repository: ghcr.io/dyber-inc/quantawatch
   tag: ""            # defaults to .Chart.AppVersion
   pullPolicy: IfNotPresent
 pullSecrets: []
@@ -40,7 +40,7 @@ persistence:
 dashboard:
   enabled: true
   image:
-    repository: ghcr.io/dyber/quantawatch-dashboard
+    repository: ghcr.io/dyber-inc/quantawatch-dashboard
     tag: ""
     pullPolicy: IfNotPresent
   port: 80
@@ -67,21 +67,38 @@ secretEnv:
 # The full quantawatch.yaml. Rendered verbatim into a ConfigMap and mounted
 # at /app/quantawatch.yaml. Override with `--set-file config=path/to.yaml`
 # or an inline block in your own values file.
+#
+# Schema matches quantawatch.yaml.example: `gateway.*`, `providers` as a MAP
+# keyed by id, and stores pointed at the persistent volume mounts
+# (/app/data, /app/keys, /app/audit). All secrets are referenced by env-var
+# NAME (supplied via secretEnv above), never inline.
 config: |
-  server:
-    proxy_bind: "0.0.0.0:9090"
-    admin_bind: "0.0.0.0:9091"
+  gateway:
+    listen: "0.0.0.0:9090"
+    admin_listen: "0.0.0.0:9091"
+  providers:
+    anthropic:
+      upstream: "https://api.anthropic.com"
+      protocol: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+    openai:
+      upstream: "https://api.openai.com"
+      protocol: openai
+      api_key_env: OPENAI_API_KEY
+  identity:
+    session_ttl: 3600
+    key_dir: "/app/keys"
+  audit:
+    path: "/app/audit"
+    merkle_batch_size: 64
+  policy:
+    default: deny
+  scanner:
+    store_path: "/app/data"
+    auto_scan_on_start: true
   auth:
     enabled: true
     webhook_secret_env: QW_WEBHOOK_SECRET
-  scanner:
-    store_path: /app/data
-    auto_scan_on_start: true
-  providers:
-    - id: anthropic
-      kind: anthropic
-      base_url: https://api.anthropic.com
-      api_key_env: ANTHROPIC_API_KEY
 
 service:
   type: ClusterIP

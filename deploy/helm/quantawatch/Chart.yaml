@@ -6,7 +6,7 @@ version: 1.0.0
 appVersion: "1.0.0"
 home: https://dyber.io
 sources:
-  - https://github.com/dyber/quantawatch
+  - https://github.com/dyber-pqc/QuantaWatch
 keywords:
   - post-quantum
   - pqc

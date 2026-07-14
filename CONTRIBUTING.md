@@ -280,7 +280,8 @@ quantawatch/
 +-- sdk/
 |   +-- python/                # Python SDK for agent integration
 |   +-- typescript/            # TypeScript SDK for agent integration
-+-- sidecar/                   # Sidecar deployment configuration
++-- deploy/                    # Helm chart + Terraform module
++-- sidecar/                   # Dashboard nginx config
 +-- tests/                     # End-to-end integration tests
 +-- docs/                      # Documentation
 ```

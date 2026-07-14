@@ -18,11 +18,11 @@ externalize key storage (roadmap).
 
 ```sh
 # Gateway (Rust binary)
-docker build -t ghcr.io/dyber/quantawatch:1.0.0 -f Dockerfile .
+docker build -t ghcr.io/dyber-inc/quantawatch:1.0.0 -f Dockerfile .
 # Dashboard (static SPA)
-docker build -t ghcr.io/dyber/quantawatch-dashboard:1.0.0 -f Dockerfile.dashboard .
-docker push ghcr.io/dyber/quantawatch:1.0.0
-docker push ghcr.io/dyber/quantawatch-dashboard:1.0.0
+docker build -t ghcr.io/dyber-inc/quantawatch-dashboard:1.0.0 -f Dockerfile.dashboard .
+docker push ghcr.io/dyber-inc/quantawatch:1.0.0
+docker push ghcr.io/dyber-inc/quantawatch-dashboard:1.0.0
 ```
 
 ## Helm

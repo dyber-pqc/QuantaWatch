@@ -336,8 +336,8 @@ Services:
 ### Kubernetes (Helm)
 
 ```bash
-helm install quantawatch ./sidecar/helm/quantawatch \
-  --set gateway.env.ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
+helm install quantawatch ./deploy/helm/quantawatch \
+  --set-string secretEnv.ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 ```
 
 ### Sidecar Mode
@@ -426,7 +426,8 @@ quantawatch/
 |   +-- python/                # Python SDK (quantawatch on PyPI)
 |   +-- typescript/            # TypeScript SDK (@quantawatch/sdk on npm)
 +-- examples/                  # Usage examples
-+-- sidecar/                   # Docker + Helm deployment
++-- deploy/                    # Helm chart + Terraform module
++-- sidecar/                   # Dashboard nginx config
 +-- docs/                      # OpenAPI spec, architecture docs
 +-- tests/                     # Integration tests
 ```
