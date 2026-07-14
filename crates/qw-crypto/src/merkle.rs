@@ -17,7 +17,7 @@ impl MerkleTree {
         let mut current_level: Vec<[u8; 32]> = leaves.to_vec();
 
         while current_level.len() > 1 {
-            let mut next_level = Vec::with_capacity((current_level.len() + 1) / 2);
+            let mut next_level = Vec::with_capacity(current_level.len().div_ceil(2));
 
             for chunk in current_level.chunks(2) {
                 let combined = if chunk.len() == 2 {
@@ -43,7 +43,7 @@ impl MerkleTree {
 
         while current_level.len() > 1 {
             // Determine sibling
-            let sibling_idx = if idx % 2 == 0 {
+            let sibling_idx = if idx.is_multiple_of(2) {
                 if idx + 1 < current_level.len() { idx + 1 } else { idx }
             } else {
                 idx - 1
@@ -51,11 +51,11 @@ impl MerkleTree {
 
             proof.push(ProofNode {
                 hash: current_level[sibling_idx],
-                is_left: idx % 2 != 0,
+                is_left: !idx.is_multiple_of(2),
             });
 
             // Compute next level
-            let mut next_level = Vec::with_capacity((current_level.len() + 1) / 2);
+            let mut next_level = Vec::with_capacity(current_level.len().div_ceil(2));
             for chunk in current_level.chunks(2) {
                 let combined = if chunk.len() == 2 {
                     [chunk[0].as_slice(), chunk[1].as_slice()].concat()

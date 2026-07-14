@@ -43,6 +43,7 @@ fn sha256_hex(data: &[u8]) -> String {
 
 /// Compute an AWS SigV4 `Authorization` header for a POST request.
 /// Verified against AWS's official example test vector (see tests).
+#[allow(clippy::too_many_arguments)] // SigV4 inputs are fixed by the AWS spec
 pub fn sigv4_authorization(
     access_key: &str,
     secret_key: &str,

@@ -144,7 +144,7 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut blast: BTreeMap<String, f64> = BTreeMap::new();
 
-    let mut push = |nodes: &mut Vec<Node>, seen: &mut BTreeSet<String>, n: Node| {
+    let push = |nodes: &mut Vec<Node>, seen: &mut BTreeSet<String>, n: Node| {
         if seen.insert(n.id.clone()) { nodes.push(n); }
     };
 

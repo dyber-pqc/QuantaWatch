@@ -295,6 +295,7 @@ impl Default for CertScannerConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct CodeScannerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -304,11 +305,6 @@ pub struct CodeScannerConfig {
     pub exclude: Vec<String>,
 }
 
-impl Default for CodeScannerConfig {
-    fn default() -> Self {
-        Self { enabled: false, paths: vec![], exclude: vec![] }
-    }
-}
 
 #[cfg(test)]
 mod tests {

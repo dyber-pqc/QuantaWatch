@@ -29,6 +29,12 @@ pub struct ScannerRegistry {
     scanners: HashMap<String, Box<dyn Scanner>>,
 }
 
+impl Default for ScannerRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ScannerRegistry {
     pub fn new() -> Self {
         Self { scanners: HashMap::new() }

@@ -14,6 +14,7 @@ pub struct AuditLogger {
     tx: mpsc::Sender<LogCommand>,
 }
 
+#[allow(clippy::large_enum_variant)] // Log dominates; boxing the hot path adds an alloc per event
 enum LogCommand {
     Log {
         session_id: String,

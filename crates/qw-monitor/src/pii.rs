@@ -5,6 +5,12 @@ pub struct PiiDetector {
     patterns: Vec<PatternRule>,
 }
 
+impl Default for PiiDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PiiDetector {
     pub fn new() -> Self {
         Self {

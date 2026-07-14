@@ -30,7 +30,7 @@ pub enum AlertSeverity {
 }
 
 impl AlertSeverity {
-    pub fn from_str(s: &str) -> Self {
+    pub fn from_label(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "critical" => AlertSeverity::Critical,
             "warning" => AlertSeverity::Warning,

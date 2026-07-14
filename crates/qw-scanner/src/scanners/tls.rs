@@ -32,9 +32,10 @@ impl TlsScanner {
             PqcStatus::Hybrid
         } else if name_upper.contains("KYBER") || name_upper.contains("ML_KEM") || name_upper.contains("MLKEM") {
             PqcStatus::PqcReady
-        } else if name_upper.contains("AES_256") || name_upper.contains("CHACHA20") {
-            PqcStatus::ClassicalSecure
-        } else if name_upper.contains("AES_128") {
+        } else if name_upper.contains("AES_256")
+            || name_upper.contains("CHACHA20")
+            || name_upper.contains("AES_128")
+        {
             PqcStatus::ClassicalSecure
         } else if name_upper.contains("3DES") || name_upper.contains("RC4") || name_upper.contains("NULL") {
             PqcStatus::ClassicalWeak
@@ -195,9 +196,11 @@ impl Scanner for TlsScanner {
 
                     let cert_pqc = if sig_alg.contains("ml-dsa") || sig_alg.contains("dilithium") {
                         PqcStatus::PqcReady
-                    } else if sig_alg.contains("ecdsa") || sig_alg.contains("1.2.840.10045") {
-                        PqcStatus::ClassicalSecure
-                    } else if sig_alg.contains("rsa") || sig_alg.contains("1.2.840.113549") {
+                    } else if sig_alg.contains("ecdsa")
+                        || sig_alg.contains("1.2.840.10045")
+                        || sig_alg.contains("rsa")
+                        || sig_alg.contains("1.2.840.113549")
+                    {
                         PqcStatus::ClassicalSecure
                     } else {
                         PqcStatus::Unknown

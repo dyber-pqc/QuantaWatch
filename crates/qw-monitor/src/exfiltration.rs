@@ -5,6 +5,12 @@ pub struct ExfiltrationDetector {
     patterns: Vec<PatternRule>,
 }
 
+impl Default for ExfiltrationDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExfiltrationDetector {
     pub fn new() -> Self {
         Self {

@@ -12,6 +12,12 @@ pub struct ProviderRegistry {
     providers: HashMap<String, Box<dyn LlmProvider>>,
 }
 
+impl Default for ProviderRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProviderRegistry {
     pub fn new() -> Self {
         Self {
@@ -52,7 +58,7 @@ impl ProviderRegistry {
 
         // Check for provider-prefixed paths: /{provider}/...
         let parts: Vec<&str> = path.trim_start_matches('/').splitn(2, '/').collect();
-        if parts.len() >= 1 {
+        if !parts.is_empty() {
             if let Some(p) = self.providers.get(parts[0]) {
                 return Some((parts[0], p.as_ref()));
             }

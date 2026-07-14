@@ -3,7 +3,7 @@ use dashmap::DashMap;
 use anyhow::Result;
 use tokio::sync::RwLock;
 
-use qw_crypto::{GatewayIdentity, SessionIdentity};
+use qw_crypto::GatewayIdentity;
 use qw_policy::PolicyEngine;
 use qw_monitor::SecurityMonitor;
 use qw_audit::AuditLogger;

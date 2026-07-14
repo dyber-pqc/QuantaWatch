@@ -243,7 +243,7 @@ impl ComplianceEngine {
             refs: Vec<String>,
             max_sev: FindingSeverity,
         }
-        let mut new_bucket = |id, title, priority, current, target, deadline, frameworks, rec| Bucket {
+        let new_bucket = |id, title, priority, current, target, deadline, frameworks, rec| Bucket {
             id,
             title,
             priority,

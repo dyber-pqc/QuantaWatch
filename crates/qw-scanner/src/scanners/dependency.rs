@@ -56,6 +56,12 @@ const CRYPTO_LIBS: &[CryptoLib] = &[
 
 pub struct DependencyScanner;
 
+impl Default for DependencyScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DependencyScanner {
     pub fn new() -> Self {
         Self

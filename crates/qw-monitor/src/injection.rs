@@ -5,6 +5,12 @@ pub struct InjectionDetector {
     patterns: Vec<PatternRule>,
 }
 
+impl Default for InjectionDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InjectionDetector {
     pub fn new() -> Self {
         Self {

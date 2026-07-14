@@ -3,7 +3,6 @@ use axum::{
     middleware::Next,
     response::{Response, IntoResponse},
 };
-use bytes::Bytes;
 use std::collections::HashMap;
 
 use qw_policy::RequestContext;

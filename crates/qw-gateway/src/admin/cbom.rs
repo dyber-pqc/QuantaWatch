@@ -54,7 +54,7 @@ fn attest(state: &AppState, bom: &CryptoBom) -> Attestation {
     let quote_payload = format!("{bom_digest}|{nonce}|{measure_str}");
     let signature = identity
         .sign(quote_payload.as_bytes())
-        .map(|s| hex::encode(s))
+        .map(hex::encode)
         .unwrap_or_default();
 
     Attestation {

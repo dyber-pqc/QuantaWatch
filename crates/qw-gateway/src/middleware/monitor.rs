@@ -56,7 +56,7 @@ pub async fn monitor_layer(
                 // whether or not it is ultimately blocked — a blocked sensitive attempt is
                 // itself meaningful exposure signal.
                 let agent = session_ctx.as_ref().map(|c| c.agent_name.as_str()).unwrap_or("default");
-                state.store.record_flow(qw_store::DEFAULT_TENANT, agent, &provider_name, signal.sensitive, signal.threat);
+                state.store.record_flow(qw_store::DEFAULT_TENANT, agent, provider_name, signal.sensitive, signal.threat);
 
                 if assessment.should_block {
                     let session_id = session_ctx.as_ref()

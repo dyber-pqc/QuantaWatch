@@ -1,4 +1,4 @@
-use qw_crypto::{sha3_256_hex, MerkleTree};
+use qw_crypto::MerkleTree;
 
 /// Manages the hash chain state for audit entries.
 pub struct AuditChain {

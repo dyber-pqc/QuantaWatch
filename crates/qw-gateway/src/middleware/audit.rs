@@ -6,6 +6,12 @@ pub struct AuditContext {
     pub start_time: std::time::Instant,
 }
 
+impl Default for AuditContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AuditContext {
     pub fn new() -> Self {
         Self {

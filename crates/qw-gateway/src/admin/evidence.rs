@@ -51,7 +51,7 @@ pub async fn build_pack(state: &AppState, tenant: &str) -> serde_json::Value {
     let cbom = crate::admin::cbom::build_cbom(state);
 
     // 3. Compliance.
-    let findings = state.store.all_findings(&tenant);
+    let findings = state.store.all_findings(tenant);
     let compliance = ComplianceEngine::assess(&findings);
 
     // 4. Attack-path graph.

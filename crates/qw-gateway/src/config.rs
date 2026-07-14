@@ -167,17 +167,13 @@ fn default_org() -> String { "default".to_string() }
 
 /// Background scheduled-scanning configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ScheduleConfig {
     /// Interval in seconds between automatic re-scans. 0 disables scheduled scanning.
     #[serde(default)]
     pub scan_interval_secs: u64,
 }
 
-impl Default for ScheduleConfig {
-    fn default() -> Self {
-        Self { scan_interval_secs: 0 }
-    }
-}
 
 /// A posture SLO (service-level objective) — policy-as-code.
 #[derive(Debug, Clone, Serialize, Deserialize)]

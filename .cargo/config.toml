@@ -1,0 +1,6 @@
+# Raise the default thread stack size for test threads. AppState::new and the
+# proxy pipeline build large async futures (ML-DSA/ML-KEM keypairs use big
+# stack arrays); in debug builds these can overflow the platform-default test
+# thread stack (1 MB on Windows). 8 MB keeps `cargo test` reliable everywhere.
+[env]
+RUST_MIN_STACK = "8388608"
