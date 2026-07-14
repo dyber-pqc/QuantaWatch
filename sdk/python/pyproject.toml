@@ -39,10 +39,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/quantawatch/quantawatch"
-Documentation = "https://docs.quantawatch.dev"
-Repository = "https://github.com/quantawatch/quantawatch"
-Issues = "https://github.com/quantawatch/quantawatch/issues"
+Homepage = "https://github.com/dyber-pqc/QuantaWatch"
+Documentation = "https://github.com/dyber-pqc/QuantaWatch#readme"
+Repository = "https://github.com/dyber-pqc/QuantaWatch.git"
+Issues = "https://github.com/dyber-pqc/QuantaWatch/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["quantawatch"]

@@ -34,6 +34,14 @@
     "openai"
   ],
   "license": "MIT",
+  "homepage": "https://github.com/dyber-pqc/QuantaWatch#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dyber-pqc/QuantaWatch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/dyber-pqc/QuantaWatch/issues"
+  },
   "engines": {
     "node": ">=18.0.0"
   },
