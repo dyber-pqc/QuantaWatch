@@ -1,0 +1,23 @@
+# Normalize line endings: store text as LF in the repo, check out native.
+* text=auto eol=lf
+
+# Explicit LF for source and config (avoids CRLF churn on Windows checkouts).
+*.rs   text eol=lf
+*.toml text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.py   text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.sh   text eol=lf
+
+# Binary assets — never touch.
+*.png  binary
+*.jpg  binary
+*.ico  binary
+*.svg  text eol=lf

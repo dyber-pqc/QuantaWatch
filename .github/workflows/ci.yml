@@ -109,3 +109,22 @@ jobs:
       - name: Run tests
         run: npm test
         working-directory: sdk/typescript
+
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint chart
+        run: helm lint deploy/helm/quantawatch
+
+      - name: Render templates (default + ingress)
+        run: |
+          helm template quantawatch deploy/helm/quantawatch > /dev/null
+          helm template quantawatch deploy/helm/quantawatch \
+            --set ingress.enabled=true --set ingress.host=quantawatch.example.com > /dev/null
