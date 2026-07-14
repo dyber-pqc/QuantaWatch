@@ -7,8 +7,8 @@
 
 use axum::{
     extract::{Query, State},
-    response::{IntoResponse, Redirect},
     http::StatusCode,
+    response::{IntoResponse, Redirect},
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -19,23 +19,38 @@ use crate::state::AppState;
 
 /// Map id_token claims to a (username, role, org) using the OIDC config.
 pub fn map_claims(claims: &Value, cfg: &OidcConfig) -> (String, Role, String) {
-    let username = claims["email"].as_str()
+    let username = claims["email"]
+        .as_str()
         .or_else(|| claims["preferred_username"].as_str())
         .or_else(|| claims["sub"].as_str())
-        .unwrap_or("sso-user").to_string();
+        .unwrap_or("sso-user")
+        .to_string();
 
     // Groups may be an array or a single string.
     let groups: Vec<String> = match &claims[&cfg.groups_claim] {
-        Value::Array(a) => a.iter().filter_map(|v| v.as_str().map(String::from)).collect(),
+        Value::Array(a) => a
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect(),
         Value::String(s) => vec![s.clone()],
         _ => Vec::new(),
     };
-    let has = |g: &Option<String>| g.as_ref().map(|grp| groups.iter().any(|x| x == grp)).unwrap_or(false);
-    let role = if has(&cfg.admin_group) { Role::Admin }
-        else if has(&cfg.operator_group) { Role::Operator }
-        else { Role::Viewer };
+    let has = |g: &Option<String>| {
+        g.as_ref()
+            .map(|grp| groups.iter().any(|x| x == grp))
+            .unwrap_or(false)
+    };
+    let role = if has(&cfg.admin_group) {
+        Role::Admin
+    } else if has(&cfg.operator_group) {
+        Role::Operator
+    } else {
+        Role::Viewer
+    };
 
-    let org = cfg.org_claim.as_ref()
+    let org = cfg
+        .org_claim
+        .as_ref()
         .and_then(|c| claims[c].as_str())
         .map(String::from)
         .unwrap_or_else(|| cfg.default_org.clone());
@@ -51,9 +66,18 @@ struct Discovery {
 }
 
 async fn discover(client: &reqwest::Client, issuer: &str) -> Result<Discovery, String> {
-    let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
-    client.get(&url).send().await.map_err(|e| e.to_string())?
-        .json::<Discovery>().await.map_err(|e| e.to_string())
+    let url = format!(
+        "{}/.well-known/openid-configuration",
+        issuer.trim_end_matches('/')
+    );
+    client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Discovery>()
+        .await
+        .map_err(|e| e.to_string())
 }
 
 pub async fn login(State(state): State<AppState>) -> impl IntoResponse {
@@ -62,7 +86,13 @@ pub async fn login(State(state): State<AppState>) -> impl IntoResponse {
     };
     let disc = match discover(&state.http_client, &cfg.issuer).await {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("OIDC discovery failed: {e}")).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("OIDC discovery failed: {e}"),
+            )
+                .into_response()
+        }
     };
     let csrf = state.auth_manager.begin_oidc();
     let url = format!(
@@ -100,16 +130,24 @@ pub async fn callback(
         return (StatusCode::BAD_REQUEST, "invalid or expired state").into_response();
     }
     let Ok(secret) = std::env::var(&cfg.client_secret_env) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, "client secret env not set").into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "client secret env not set",
+        )
+            .into_response();
     };
 
     let disc = match discover(&state.http_client, &cfg.issuer).await {
         Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("discovery failed: {e}")).into_response(),
+        Err(e) => {
+            return (StatusCode::BAD_GATEWAY, format!("discovery failed: {e}")).into_response()
+        }
     };
 
     // Exchange the code for tokens.
-    let token_resp = state.http_client.post(&disc.token_endpoint)
+    let token_resp = state
+        .http_client
+        .post(&disc.token_endpoint)
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", &code),
@@ -117,10 +155,21 @@ pub async fn callback(
             ("client_id", &cfg.client_id),
             ("client_secret", &secret),
         ])
-        .send().await;
+        .send()
+        .await;
     let id_token = match token_resp {
-        Ok(r) => r.json::<Value>().await.ok().and_then(|j| j["id_token"].as_str().map(String::from)),
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("token exchange failed: {e}")).into_response(),
+        Ok(r) => r
+            .json::<Value>()
+            .await
+            .ok()
+            .and_then(|j| j["id_token"].as_str().map(String::from)),
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                format!("token exchange failed: {e}"),
+            )
+                .into_response()
+        }
     };
     let Some(id_token) = id_token else {
         return (StatusCode::BAD_GATEWAY, "no id_token in response").into_response();
@@ -129,11 +178,19 @@ pub async fn callback(
     // Verify the id_token against the IdP JWKS (RS256).
     let claims = match verify_id_token(&state.http_client, &disc.jwks_uri, &id_token, &cfg).await {
         Ok(c) => c,
-        Err(e) => return (StatusCode::UNAUTHORIZED, format!("id_token verification failed: {e}")).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                format!("id_token verification failed: {e}"),
+            )
+                .into_response()
+        }
     };
 
     let (username, role, org) = map_claims(&claims, &cfg);
-    let (token, _ttl) = state.auth_manager.create_external_session(&username, role, &org);
+    let (token, _ttl) = state
+        .auth_manager
+        .create_external_session(&username, role, &org);
     tracing::info!(user = %username, role = role.label(), org = %org, "OIDC login");
 
     let sep = if cfg.app_url.contains('?') { '&' } else { '?' };
@@ -141,18 +198,32 @@ pub async fn callback(
 }
 
 async fn verify_id_token(
-    client: &reqwest::Client, jwks_uri: &str, token: &str, cfg: &OidcConfig,
+    client: &reqwest::Client,
+    jwks_uri: &str,
+    token: &str,
+    cfg: &OidcConfig,
 ) -> Result<Value, String> {
-    use jsonwebtoken::{decode, decode_header, DecodingKey, Validation, Algorithm};
+    use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 
     let header = decode_header(token).map_err(|e| e.to_string())?;
     let kid = header.kid.ok_or("id_token missing kid")?;
 
-    let jwks: Value = client.get(jwks_uri).send().await.map_err(|e| e.to_string())?
-        .json().await.map_err(|e| e.to_string())?;
-    let key = jwks["keys"].as_array().and_then(|keys| keys.iter().find(|k| k["kid"].as_str() == Some(&kid)))
+    let jwks: Value = client
+        .get(jwks_uri)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json()
+        .await
+        .map_err(|e| e.to_string())?;
+    let key = jwks["keys"]
+        .as_array()
+        .and_then(|keys| keys.iter().find(|k| k["kid"].as_str() == Some(&kid)))
         .ok_or("no matching JWKS key")?;
-    let (n, e) = (key["n"].as_str().ok_or("jwk missing n")?, key["e"].as_str().ok_or("jwk missing e")?);
+    let (n, e) = (
+        key["n"].as_str().ok_or("jwk missing n")?,
+        key["e"].as_str().ok_or("jwk missing e")?,
+    );
     let decoding = DecodingKey::from_rsa_components(n, e).map_err(|e| e.to_string())?;
 
     let mut validation = Validation::new(Algorithm::RS256);
@@ -163,10 +234,14 @@ async fn verify_id_token(
 }
 
 fn urlencoding(s: &str) -> String {
-    s.bytes().map(|b| match b {
-        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-        _ => format!("%{:02X}", b),
-    }).collect()
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{:02X}", b),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -176,10 +251,16 @@ mod tests {
 
     fn cfg() -> OidcConfig {
         OidcConfig {
-            issuer: "https://idp".into(), client_id: "cid".into(), client_secret_env: "X".into(),
-            redirect_uri: "https://gw/cb".into(), app_url: "/".into(), groups_claim: "groups".into(),
-            admin_group: Some("qw-admins".into()), operator_group: Some("qw-ops".into()),
-            org_claim: Some("org".into()), default_org: "default".into(),
+            issuer: "https://idp".into(),
+            client_id: "cid".into(),
+            client_secret_env: "X".into(),
+            redirect_uri: "https://gw/cb".into(),
+            app_url: "/".into(),
+            groups_claim: "groups".into(),
+            admin_group: Some("qw-admins".into()),
+            operator_group: Some("qw-ops".into()),
+            org_claim: Some("org".into()),
+            default_org: "default".into(),
         }
     }
 

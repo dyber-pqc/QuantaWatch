@@ -1,9 +1,9 @@
-use tracing_subscriber::EnvFilter;
 use anyhow::Result;
+use tracing_subscriber::EnvFilter;
 
 use qw_gateway::config::GatewayConfig;
-use qw_gateway::state::AppState;
 use qw_gateway::router;
+use qw_gateway::state::AppState;
 
 fn main() -> Result<()> {
     // ML-DSA-65 key generation uses large stack-allocated arrays. The async runtime's
@@ -28,7 +28,7 @@ async fn run() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,qw_gateway=debug"))
+                .unwrap_or_else(|_| EnvFilter::new("info,qw_gateway=debug")),
         )
         .json()
         .init();

@@ -57,7 +57,9 @@ mod tests {
         let detector = ExfiltrationDetector::new();
         let threats = detector.scan("Here's your key: sk-1234567890abcdefghijklmnop");
         assert!(!threats.is_empty());
-        assert!(threats.iter().any(|t| t.category == ThreatCategory::DataExfiltration));
+        assert!(threats
+            .iter()
+            .any(|t| t.category == ThreatCategory::DataExfiltration));
     }
 
     #[test]
@@ -65,7 +67,9 @@ mod tests {
         let detector = ExfiltrationDetector::new();
         let threats = detector.scan("Run this command: rm -rf /var/data");
         assert!(!threats.is_empty());
-        assert!(threats.iter().any(|t| t.category == ThreatCategory::DangerousOutput));
+        assert!(threats
+            .iter()
+            .any(|t| t.category == ThreatCategory::DangerousOutput));
     }
 
     #[test]

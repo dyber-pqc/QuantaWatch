@@ -1,10 +1,10 @@
+use crate::registry::{Scanner, ScannerError};
+use crate::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
-use crate::types::*;
-use crate::registry::{Scanner, ScannerError};
 
 const MAX_FILES: usize = 2000;
 const MAX_FILE_SIZE: u64 = 1_048_576; // 1 MB
@@ -199,8 +199,12 @@ impl CodeScanner {
 
 #[async_trait]
 impl Scanner for CodeScanner {
-    fn id(&self) -> &str { "code" }
-    fn display_name(&self) -> &str { "Code Scanner" }
+    fn id(&self) -> &str {
+        "code"
+    }
+    fn display_name(&self) -> &str {
+        "Code Scanner"
+    }
 
     fn categories(&self) -> Vec<FindingCategory> {
         vec![
@@ -295,7 +299,10 @@ mod tests {
     use super::*;
 
     fn find_pattern(title: &str) -> CodePattern {
-        CodeScanner::build_patterns().into_iter().find(|p| p.title == title).unwrap()
+        CodeScanner::build_patterns()
+            .into_iter()
+            .find(|p| p.title == title)
+            .unwrap()
     }
 
     #[test]
@@ -393,6 +400,9 @@ mod tests {
         assert!(CodeScanner::should_skip_dir("target", &[]));
         assert!(CodeScanner::should_skip_dir("node_modules", &[]));
         assert!(!CodeScanner::should_skip_dir("src", &[]));
-        assert!(CodeScanner::should_skip_dir("vendor", &["vendor".to_string()]));
+        assert!(CodeScanner::should_skip_dir(
+            "vendor",
+            &["vendor".to_string()]
+        ));
     }
 }

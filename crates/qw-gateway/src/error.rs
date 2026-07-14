@@ -29,13 +29,31 @@ pub enum GatewayError {
 impl IntoResponse for GatewayError {
     fn into_response(self) -> Response {
         let (status, error_type, message) = match &self {
-            GatewayError::ProviderNotFound(msg) => (StatusCode::NOT_FOUND, "provider_not_found", msg.clone()),
-            GatewayError::PolicyDenied(msg) => (StatusCode::FORBIDDEN, "policy_denied", msg.clone()),
-            GatewayError::ThreatDetected(msg) => (StatusCode::BAD_REQUEST, "threat_detected", msg.clone()),
-            GatewayError::UpstreamError(msg) => (StatusCode::BAD_GATEWAY, "upstream_error", msg.clone()),
-            GatewayError::ConfigError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "config_error", msg.clone()),
-            GatewayError::SessionError(msg) => (StatusCode::UNAUTHORIZED, "session_error", msg.clone()),
-            GatewayError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", msg.clone()),
+            GatewayError::ProviderNotFound(msg) => {
+                (StatusCode::NOT_FOUND, "provider_not_found", msg.clone())
+            }
+            GatewayError::PolicyDenied(msg) => {
+                (StatusCode::FORBIDDEN, "policy_denied", msg.clone())
+            }
+            GatewayError::ThreatDetected(msg) => {
+                (StatusCode::BAD_REQUEST, "threat_detected", msg.clone())
+            }
+            GatewayError::UpstreamError(msg) => {
+                (StatusCode::BAD_GATEWAY, "upstream_error", msg.clone())
+            }
+            GatewayError::ConfigError(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "config_error",
+                msg.clone(),
+            ),
+            GatewayError::SessionError(msg) => {
+                (StatusCode::UNAUTHORIZED, "session_error", msg.clone())
+            }
+            GatewayError::Internal(msg) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                msg.clone(),
+            ),
         };
 
         let body = json!({

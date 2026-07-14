@@ -1,8 +1,8 @@
-pub mod types;
 pub mod registry;
-pub mod store;
 pub mod scanners;
+pub mod store;
+pub mod types;
 
-pub use types::*;
-pub use registry::{Scanner, ScannerError, ScannerRegistry, build_scanner_registry};
+pub use registry::{build_scanner_registry, Scanner, ScannerError, ScannerRegistry};
 pub use store::ScanStore;
+pub use types::*;

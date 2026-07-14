@@ -1,11 +1,11 @@
+use crate::state::{AppState, SessionInfo};
 use axum::{
     extract::{Request, State},
+    http::HeaderValue,
     middleware::Next,
     response::Response,
-    http::HeaderValue,
 };
 use uuid::Uuid;
-use crate::state::{AppState, SessionInfo};
 
 const SESSION_HEADER: &str = "x-quantawatch-session";
 const AGENT_HEADER: &str = "x-quantawatch-agent";
@@ -17,12 +17,14 @@ pub async fn identity_layer(
     next: Next,
 ) -> Response {
     // Check for existing session
-    let session_id = request.headers()
+    let session_id = request
+        .headers()
         .get(SESSION_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(String::from);
 
-    let agent_name = request.headers()
+    let agent_name = request
+        .headers()
         .get(AGENT_HEADER)
         .and_then(|v| v.to_str().ok())
         .map(String::from)
@@ -33,7 +35,8 @@ pub async fn identity_layer(
         _ => {
             // Create new session
             let id = Uuid::new_v4().to_string();
-            let client_ip = request.headers()
+            let client_ip = request
+                .headers()
                 .get("x-forwarded-for")
                 .or_else(|| request.headers().get("x-real-ip"))
                 .and_then(|v| v.to_str().ok())
@@ -41,27 +44,33 @@ pub async fn identity_layer(
                 .to_string();
 
             let created_at = chrono::Utc::now();
-            state.sessions.insert(id.clone(), SessionInfo {
-                session_id: id.clone(),
-                agent_name: agent_name.clone(),
-                provider: String::new(),
-                model: String::new(),
-                created_at,
-                request_count: 0,
-                total_tokens: 0,
-                client_ip: client_ip.clone(),
-            });
+            state.sessions.insert(
+                id.clone(),
+                SessionInfo {
+                    session_id: id.clone(),
+                    agent_name: agent_name.clone(),
+                    provider: String::new(),
+                    model: String::new(),
+                    created_at,
+                    request_count: 0,
+                    total_tokens: 0,
+                    client_ip: client_ip.clone(),
+                },
+            );
             // Persist the session (best-effort, default tenant) so it survives restart.
-            state.store.upsert_session(qw_store::DEFAULT_TENANT, &qw_store::SessionRow {
-                session_id: id.clone(),
-                agent_name: agent_name.clone(),
-                provider: String::new(),
-                model: String::new(),
-                created_at,
-                request_count: 0,
-                total_tokens: 0,
-                client_ip,
-            });
+            state.store.upsert_session(
+                qw_store::DEFAULT_TENANT,
+                &qw_store::SessionRow {
+                    session_id: id.clone(),
+                    agent_name: agent_name.clone(),
+                    provider: String::new(),
+                    model: String::new(),
+                    created_at,
+                    request_count: 0,
+                    total_tokens: 0,
+                    client_ip,
+                },
+            );
             tracing::debug!(session_id = %id, agent = %agent_name, "New session created");
             id
         }

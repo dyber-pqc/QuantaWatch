@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreatAssessment {
@@ -21,7 +21,8 @@ impl ThreatAssessment {
             return Self::clean();
         }
 
-        let severity = threats.iter()
+        let severity = threats
+            .iter()
             .map(|t| &t.severity)
             .max()
             .cloned()
@@ -29,7 +30,11 @@ impl ThreatAssessment {
 
         let should_block = severity >= *blocking_threshold;
 
-        Self { threats, severity, should_block }
+        Self {
+            threats,
+            severity,
+            should_block,
+        }
     }
 }
 

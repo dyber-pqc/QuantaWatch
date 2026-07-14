@@ -1,15 +1,15 @@
-pub mod signing;
-pub mod kem;
-pub mod hashing;
-pub mod merkle;
-pub mod identity;
-pub mod password;
 pub mod error;
+pub mod hashing;
+pub mod identity;
+pub mod kem;
+pub mod merkle;
+pub mod password;
+pub mod signing;
 
 pub use error::CryptoError;
-pub use password::{hash_password, verify_password, random_token};
-pub use identity::{GatewayIdentity, SessionIdentity};
-pub use signing::{SigningKeyPair, sign, verify};
-pub use kem::KemKeyPair;
 pub use hashing::{sha3_256, sha3_256_hex};
+pub use identity::{GatewayIdentity, SessionIdentity};
+pub use kem::KemKeyPair;
 pub use merkle::MerkleTree;
+pub use password::{hash_password, random_token, verify_password};
+pub use signing::{sign, verify, SigningKeyPair};

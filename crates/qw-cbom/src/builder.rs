@@ -232,8 +232,7 @@ mod tests {
         let bom = builder.build("test-fingerprint-abc123");
 
         let json = CbomBuilder::export_json(&bom).expect("JSON serialization failed");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&json).expect("JSON parsing failed");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("JSON parsing failed");
 
         assert_eq!(parsed["bomFormat"], "CycloneDX");
         assert_eq!(parsed["specVersion"], "1.6");

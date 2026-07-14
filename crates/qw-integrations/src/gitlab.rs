@@ -1,7 +1,7 @@
-use async_trait::async_trait;
-use qw_scanner::{ScanTarget, Finding, TargetType};
-use crate::types::*;
 use crate::registry::{Integration, IntegrationError};
+use crate::types::*;
+use async_trait::async_trait;
+use qw_scanner::{Finding, ScanTarget, TargetType};
 
 pub struct GitLabIntegration {
     id: String,
@@ -17,7 +17,10 @@ impl GitLabIntegration {
         Some(Self {
             id: config.id.clone(),
             token,
-            base_url: config.base_url.clone().unwrap_or_else(|| "https://gitlab.com/api/v4".to_string()),
+            base_url: config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://gitlab.com/api/v4".to_string()),
             group: config.settings.get("group").cloned(),
             client: reqwest::Client::new(),
         })
@@ -26,22 +29,30 @@ impl GitLabIntegration {
 
 #[async_trait]
 impl Integration for GitLabIntegration {
-    fn id(&self) -> &str { &self.id }
-    fn display_name(&self) -> &str { "GitLab" }
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn display_name(&self) -> &str {
+        "GitLab"
+    }
 
     fn capabilities(&self) -> Vec<IntegrationCapability> {
         vec![IntegrationCapability::DiscoverTargets]
     }
 
     async fn test_connection(&self) -> Result<ConnectionStatus, IntegrationError> {
-        let resp = self.client.get(format!("{}/user", self.base_url))
+        let resp = self
+            .client
+            .get(format!("{}/user", self.base_url))
             .header("PRIVATE-TOKEN", &self.token)
             .header("User-Agent", "QuantaWatch")
             .send()
             .await?;
 
         if resp.status().is_success() {
-            let user: serde_json::Value = resp.json().await
+            let user: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
             Ok(ConnectionStatus {
                 connected: true,
@@ -61,27 +72,42 @@ impl Integration for GitLabIntegration {
 
     async fn discover_targets(&self) -> Result<Vec<ScanTarget>, IntegrationError> {
         let mut targets = Vec::new();
-        let dep_files = ["Cargo.toml", "package.json", "requirements.txt", "go.mod", "Gemfile"];
+        let dep_files = [
+            "Cargo.toml",
+            "package.json",
+            "requirements.txt",
+            "go.mod",
+            "Gemfile",
+        ];
 
         let projects_url = if let Some(ref group) = self.group {
-            format!("{}/groups/{}/projects?per_page=100", self.base_url, urlencoded(group))
+            format!(
+                "{}/groups/{}/projects?per_page=100",
+                self.base_url,
+                urlencoded(group)
+            )
         } else {
             format!("{}/projects?membership=true&per_page=100", self.base_url)
         };
 
-        let resp = self.client.get(&projects_url)
+        let resp = self
+            .client
+            .get(&projects_url)
             .header("PRIVATE-TOKEN", &self.token)
             .header("User-Agent", "QuantaWatch")
             .send()
             .await?;
 
         if !resp.status().is_success() {
-            return Err(IntegrationError::ApiError(
-                format!("Failed to list projects: HTTP {}", resp.status()),
-            ));
+            return Err(IntegrationError::ApiError(format!(
+                "Failed to list projects: HTTP {}",
+                resp.status()
+            )));
         }
 
-        let projects: Vec<serde_json::Value> = resp.json().await
+        let projects: Vec<serde_json::Value> = resp
+            .json()
+            .await
             .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
 
         for project in &projects {
@@ -92,10 +118,15 @@ impl Integration for GitLabIntegration {
             for dep_file in &dep_files {
                 let file_url = format!(
                     "{}/projects/{}/repository/files/{}?ref={}",
-                    self.base_url, id, urlencoded(dep_file), default_branch
+                    self.base_url,
+                    id,
+                    urlencoded(dep_file),
+                    default_branch
                 );
 
-                let check = self.client.head(&file_url)
+                let check = self
+                    .client
+                    .head(&file_url)
                     .header("PRIVATE-TOKEN", &self.token)
                     .header("User-Agent", "QuantaWatch")
                     .send()
@@ -129,7 +160,8 @@ impl Integration for GitLabIntegration {
         _opts: &RemediationOpts,
     ) -> Result<RemediationTicket, IntegrationError> {
         Err(IntegrationError::NotSupported(
-            "GitLab integration does not support remediation tickets. Use Jira or Linear.".to_string(),
+            "GitLab integration does not support remediation tickets. Use Jira or Linear."
+                .to_string(),
         ))
     }
 
@@ -137,7 +169,11 @@ impl Integration for GitLabIntegration {
         let project_id = target.metadata.get("project_id").ok_or_else(|| {
             IntegrationError::NotConfigured("target missing project_id metadata".to_string())
         })?;
-        let branch = target.metadata.get("branch").map(String::as_str).unwrap_or("main");
+        let branch = target
+            .metadata
+            .get("branch")
+            .map(String::as_str)
+            .unwrap_or("main");
         let filename = target.address.rsplit('/').next().unwrap_or(&target.address);
 
         let url = format!(
@@ -148,7 +184,9 @@ impl Integration for GitLabIntegration {
             branch,
         );
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("PRIVATE-TOKEN", &self.token)
             .header("User-Agent", "QuantaWatch")
             .send()
@@ -158,12 +196,15 @@ impl Integration for GitLabIntegration {
             return Ok(None);
         }
         if !resp.status().is_success() {
-            return Err(IntegrationError::ApiError(
-                format!("Failed to fetch content: HTTP {}", resp.status()),
-            ));
+            return Err(IntegrationError::ApiError(format!(
+                "Failed to fetch content: HTTP {}",
+                resp.status()
+            )));
         }
 
-        let body = resp.text().await
+        let body = resp
+            .text()
+            .await
             .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
         Ok(Some(body))
     }

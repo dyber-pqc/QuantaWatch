@@ -77,7 +77,9 @@ fn data_class_for(tools: &[String], offline: bool) -> (&'static str, f64) {
         ("Broad / Privileged Access", 1.0)
     } else if has(&["payment", "billing", "card", "finance", "invoice"]) {
         ("Financial Data", 1.0)
-    } else if has(&["crm", "customer", "email", "pii", "contact", "user_", "profile"]) {
+    } else if has(&[
+        "crm", "customer", "email", "pii", "contact", "user_", "profile",
+    ]) {
         ("Customer PII", 0.95)
     } else if has(&["db", "database", "sql", "file", "fs", "storage", "read"]) {
         ("Internal Data", 0.7)
@@ -108,21 +110,52 @@ fn providers_for_models(models: &[String]) -> BTreeSet<String> {
     let mut set = BTreeSet::new();
     for m in models {
         let ml = m.to_lowercase();
-        if ml.contains("claude") { set.insert("anthropic".to_string()); }
-        if ml.contains("gpt") || ml.starts_with("o1") || ml.starts_with("o3") || ml.contains("openai") { set.insert("openai".to_string()); }
-        if ml.contains("ollama") { set.insert("ollama".to_string()); }
-        if ml.contains("deepseek") { set.insert("deepseek".to_string()); }
-        if ml.contains("gemini") || ml.contains("google") { set.insert("google".to_string()); }
+        if ml.contains("claude") {
+            set.insert("anthropic".to_string());
+        }
+        if ml.contains("gpt")
+            || ml.starts_with("o1")
+            || ml.starts_with("o3")
+            || ml.contains("openai")
+        {
+            set.insert("openai".to_string());
+        }
+        if ml.contains("ollama") {
+            set.insert("ollama".to_string());
+        }
+        if ml.contains("deepseek") {
+            set.insert("deepseek".to_string());
+        }
+        if ml.contains("gemini") || ml.contains("google") {
+            set.insert("google".to_string());
+        }
     }
     set
 }
 
 fn severity_for(score: f64) -> &'static str {
-    if score >= 70.0 { "critical" } else if score >= 50.0 { "high" } else if score >= 30.0 { "medium" } else { "low" }
+    if score >= 70.0 {
+        "critical"
+    } else if score >= 50.0 {
+        "high"
+    } else if score >= 30.0 {
+        "medium"
+    } else {
+        "low"
+    }
 }
 
 fn host_of(addr: &str) -> String {
-    addr.split("://").last().unwrap_or(addr).split('/').next().unwrap_or(addr).split(':').next().unwrap_or(addr).to_string()
+    addr.split("://")
+        .last()
+        .unwrap_or(addr)
+        .split('/')
+        .next()
+        .unwrap_or(addr)
+        .split(':')
+        .next()
+        .unwrap_or(addr)
+        .to_string()
 }
 
 fn parse_status(s: &str) -> PqcStatus {
@@ -137,7 +170,11 @@ fn parse_status(s: &str) -> PqcStatus {
 
 /// Build the full attack-path graph. `overrides` forces a provider's pqc_status
 /// (used by remediation simulation).
-pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, PqcStatus>) -> Graph {
+pub fn build_graph(
+    state: &AppState,
+    tenant: &str,
+    overrides: &HashMap<String, PqcStatus>,
+) -> Graph {
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
     let mut paths: Vec<AttackPath> = Vec::new();
@@ -145,7 +182,9 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
     let mut blast: BTreeMap<String, f64> = BTreeMap::new();
 
     let push = |nodes: &mut Vec<Node>, seen: &mut BTreeSet<String>, n: Node| {
-        if seen.insert(n.id.clone()) { nodes.push(n); }
+        if seen.insert(n.id.clone()) {
+            nodes.push(n);
+        }
     };
 
     // Provider live crypto (with simulation overrides applied).
@@ -154,8 +193,14 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
         .iter()
         .map(|e| {
             let v = e.value();
-            let status = overrides.get(e.key()).cloned().unwrap_or_else(|| v.pqc_status.clone());
-            (e.key().clone(), (status, v.tls_version.clone(), v.endpoint.clone()))
+            let status = overrides
+                .get(e.key())
+                .cloned()
+                .unwrap_or_else(|| v.pqc_status.clone());
+            (
+                e.key().clone(),
+                (status, v.tls_version.clone(), v.endpoint.clone()),
+            )
         })
         .collect();
 
@@ -163,7 +208,12 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
     let flows = state.store.list_flows(tenant);
     let flow_map: HashMap<(String, String), (u64, u64)> = flows
         .iter()
-        .map(|f| ((f.agent.clone(), f.provider.clone()), (f.requests, f.sensitive)))
+        .map(|f| {
+            (
+                (f.agent.clone(), f.provider.clone()),
+                (f.requests, f.sensitive),
+            )
+        })
         .collect();
     let observed_providers: BTreeSet<String> = flows.iter().map(|f| f.provider.clone()).collect();
 
@@ -175,32 +225,56 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
         if matches!(f.asset_type, CryptoAssetType::Certificate) {
             let host = host_of(&f.location);
             let e = cert_by_host.entry(host).or_insert(PqcStatus::PqcReady);
-            if channel_weight(&f.pqc_status) > channel_weight(e) { *e = f.pqc_status.clone(); }
+            if channel_weight(&f.pqc_status) > channel_weight(e) {
+                *e = f.pqc_status.clone();
+            }
         }
     }
 
     // Provider + certificate nodes.
     for (name, (status, tls, endpoint)) in &providers {
         let overridden = overrides.contains_key(name);
-        push(&mut nodes, &mut seen, Node {
-            id: format!("provider:{name}"),
-            kind: "provider".into(),
-            label: name.clone(),
-            sublabel: if overridden { format!("TLS {tls} (simulated)") } else { format!("TLS {tls}") },
-            pqc_status: status.to_string(),
-            risk: channel_weight(status) * 100.0,
-            blast_radius: 0.0,
-            observed: observed_providers.contains(name),
-        });
+        push(
+            &mut nodes,
+            &mut seen,
+            Node {
+                id: format!("provider:{name}"),
+                kind: "provider".into(),
+                label: name.clone(),
+                sublabel: if overridden {
+                    format!("TLS {tls} (simulated)")
+                } else {
+                    format!("TLS {tls}")
+                },
+                pqc_status: status.to_string(),
+                risk: channel_weight(status) * 100.0,
+                blast_radius: 0.0,
+                observed: observed_providers.contains(name),
+            },
+        );
         let host = host_of(endpoint);
         if let Some(cs) = cert_by_host.get(&host) {
             let cid = format!("cert:{host}");
-            push(&mut nodes, &mut seen, Node {
-                id: cid.clone(), kind: "certificate".into(), label: format!("{host} cert"),
-                sublabel: "X.509 chain".into(), pqc_status: cs.to_string(),
-                risk: channel_weight(cs) * 100.0, blast_radius: 0.0, observed: false,
+            push(
+                &mut nodes,
+                &mut seen,
+                Node {
+                    id: cid.clone(),
+                    kind: "certificate".into(),
+                    label: format!("{host} cert"),
+                    sublabel: "X.509 chain".into(),
+                    pqc_status: cs.to_string(),
+                    risk: channel_weight(cs) * 100.0,
+                    blast_radius: 0.0,
+                    observed: false,
+                },
+            );
+            edges.push(Edge {
+                source: format!("provider:{name}"),
+                target: cid,
+                kind: "secured-by".into(),
+                observed: false,
             });
-            edges.push(Edge { source: format!("provider:{name}"), target: cid, kind: "secured-by".into(), observed: false });
         }
     }
 
@@ -219,36 +293,80 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
     for (ident, role) in &identities {
         let iid = format!("identity:{ident}");
         let privileged = role == "admin" || role == "operator";
-        push(&mut nodes, &mut seen, Node {
-            id: iid, kind: "identity".into(), label: ident.clone(),
-            sublabel: role.clone(), pqc_status: "n/a".into(),
-            risk: if privileged { 55.0 } else { 20.0 }, blast_radius: 0.0, observed: false,
-        });
+        push(
+            &mut nodes,
+            &mut seen,
+            Node {
+                id: iid,
+                kind: "identity".into(),
+                label: ident.clone(),
+                sublabel: role.clone(),
+                pqc_status: "n/a".into(),
+                risk: if privileged { 55.0 } else { 20.0 },
+                blast_radius: 0.0,
+                observed: false,
+            },
+        );
     }
 
     // Agents + data + policy/observed toxic paths.
     for (name, agent) in &state.config.agents {
         let agent_id = format!("agent:{name}");
-        push(&mut nodes, &mut seen, Node {
-            id: agent_id.clone(), kind: "agent".into(), label: name.clone(),
-            sublabel: if agent.offline { "isolated".into() } else { "networked".into() },
-            pqc_status: "n/a".into(), risk: 0.0, blast_radius: 0.0, observed: false,
-        });
+        push(
+            &mut nodes,
+            &mut seen,
+            Node {
+                id: agent_id.clone(),
+                kind: "agent".into(),
+                label: name.clone(),
+                sublabel: if agent.offline {
+                    "isolated".into()
+                } else {
+                    "networked".into()
+                },
+                pqc_status: "n/a".into(),
+                risk: 0.0,
+                blast_radius: 0.0,
+                observed: false,
+            },
+        );
 
         let (data_label, data_weight) = data_class_for(&agent.allowed_tools, agent.offline);
         let data_id = format!("data:{name}:{}", data_label.replace(' ', "_"));
-        push(&mut nodes, &mut seen, Node {
-            id: data_id.clone(), kind: "data".into(), label: data_label.into(),
-            sublabel: format!("sensitivity {:.0}%", data_weight * 100.0),
-            pqc_status: "n/a".into(), risk: data_weight * 100.0, blast_radius: 0.0, observed: false,
+        push(
+            &mut nodes,
+            &mut seen,
+            Node {
+                id: data_id.clone(),
+                kind: "data".into(),
+                label: data_label.into(),
+                sublabel: format!("sensitivity {:.0}%", data_weight * 100.0),
+                pqc_status: "n/a".into(),
+                risk: data_weight * 100.0,
+                blast_radius: 0.0,
+                observed: false,
+            },
+        );
+        edges.push(Edge {
+            source: data_id.clone(),
+            target: agent_id.clone(),
+            kind: "handles".into(),
+            observed: false,
         });
-        edges.push(Edge { source: data_id.clone(), target: agent_id.clone(), kind: "handles".into(), observed: false });
 
         // Identity → agent edges (who can drive this agent).
         for (ident, role) in &identities {
-            edges.push(Edge { source: format!("identity:{ident}"), target: agent_id.clone(), kind: "can-access".into(), observed: false });
+            edges.push(Edge {
+                source: format!("identity:{ident}"),
+                target: agent_id.clone(),
+                kind: "can-access".into(),
+                observed: false,
+            });
             // Access-risk: an over-privileged non-human identity reaching a sensitive agent.
-            if ident.starts_with("apikey:") && (role == "admin" || role == "operator") && data_weight >= 0.65 {
+            if ident.starts_with("apikey:")
+                && (role == "admin" || role == "operator")
+                && data_weight >= 0.65
+            {
                 let score = (data_weight * 60.0 * 10.0).round() / 10.0;
                 paths.push(AttackPath {
                     id: format!("access:{ident}->{name}"),
@@ -264,35 +382,75 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
 
         // Union of policy-allowed and observed providers.
         let mut agent_providers = providers_for_models(&agent.allowed_models);
-        for f in &flows { if f.agent == *name { agent_providers.insert(f.provider.clone()); } }
+        for f in &flows {
+            if f.agent == *name {
+                agent_providers.insert(f.provider.clone());
+            }
+        }
 
         for p in &agent_providers {
             let provider_id = format!("provider:{p}");
             if !seen.contains(&provider_id) {
                 let st = overrides.get(p).cloned().unwrap_or(PqcStatus::Unknown);
-                push(&mut nodes, &mut seen, Node {
-                    id: provider_id.clone(), kind: "provider".into(), label: p.clone(),
-                    sublabel: "not yet scanned".into(), pqc_status: st.to_string(),
-                    risk: channel_weight(&st) * 100.0, blast_radius: 0.0, observed: observed_providers.contains(p),
-                });
+                push(
+                    &mut nodes,
+                    &mut seen,
+                    Node {
+                        id: provider_id.clone(),
+                        kind: "provider".into(),
+                        label: p.clone(),
+                        sublabel: "not yet scanned".into(),
+                        pqc_status: st.to_string(),
+                        risk: channel_weight(&st) * 100.0,
+                        blast_radius: 0.0,
+                        observed: observed_providers.contains(p),
+                    },
+                );
             }
-            let (reqs, sens) = flow_map.get(&(name.clone(), p.clone())).copied().unwrap_or((0, 0));
+            let (reqs, sens) = flow_map
+                .get(&(name.clone(), p.clone()))
+                .copied()
+                .unwrap_or((0, 0));
             let observed = reqs > 0;
-            edges.push(Edge { source: agent_id.clone(), target: provider_id.clone(), kind: "routes-to".into(), observed });
+            edges.push(Edge {
+                source: agent_id.clone(),
+                target: provider_id.clone(),
+                kind: "routes-to".into(),
+                observed,
+            });
 
-            let channel_status = providers.get(p).map(|i| i.0.clone()).unwrap_or(PqcStatus::Unknown);
+            let channel_status = providers
+                .get(p)
+                .map(|i| i.0.clone())
+                .unwrap_or(PqcStatus::Unknown);
             let cw = channel_weight(&channel_status);
-            if cw <= 0.0 { continue; }
+            if cw <= 0.0 {
+                continue;
+            }
             let exposure = if agent.offline { 0.35 } else { 1.0 };
             // Observed sensitive traffic amplifies the score (real, not just possible, exposure).
-            let observed_boost = if sens > 0 { 1.2 } else if observed { 1.08 } else { 1.0 };
-            let score = ((data_weight * cw * exposure * observed_boost).min(1.0) * 100.0 * 10.0).round() / 10.0;
-            if score < 15.0 { continue; }
+            let observed_boost = if sens > 0 {
+                1.2
+            } else if observed {
+                1.08
+            } else {
+                1.0
+            };
+            let score = ((data_weight * cw * exposure * observed_boost).min(1.0) * 100.0 * 10.0)
+                .round()
+                / 10.0;
+            if score < 15.0 {
+                continue;
+            }
 
             // Accumulate blast radius on the provider (and its cert).
-            *blast.entry(provider_id.clone()).or_insert(0.0) += data_weight * if observed { 1.3 } else { 1.0 };
+            *blast.entry(provider_id.clone()).or_insert(0.0) +=
+                data_weight * if observed { 1.3 } else { 1.0 };
 
-            let hndl = matches!(channel_status, PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak);
+            let hndl = matches!(
+                channel_status,
+                PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak
+            );
             paths.push(AttackPath {
                 id: format!("flow:{name}->{p}"),
                 title: format!("{data_label} reaches {p} over a quantum-vulnerable channel"),
@@ -315,27 +473,52 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
     let mut dep_seen: BTreeSet<String> = BTreeSet::new();
     for f in &findings {
         if matches!(f.asset_type, CryptoAssetType::CryptoLibrary)
-            && matches!(f.pqc_status, PqcStatus::ClassicalWeak | PqcStatus::ClassicalSecure)
+            && matches!(
+                f.pqc_status,
+                PqcStatus::ClassicalWeak | PqcStatus::ClassicalSecure
+            )
         {
             let lib = f.title.replace("Crypto dependency: ", "");
-            if !dep_seen.insert(lib.clone()) { continue; }
+            if !dep_seen.insert(lib.clone()) {
+                continue;
+            }
             let did = format!("dependency:{lib}");
             let cw = channel_weight(&f.pqc_status);
-            push(&mut nodes, &mut seen, Node {
-                id: did.clone(), kind: "dependency".into(), label: lib.clone(),
-                sublabel: f.location.clone(), pqc_status: f.pqc_status.to_string(),
-                risk: cw * 100.0, blast_radius: 0.0, observed: false,
-            });
+            push(
+                &mut nodes,
+                &mut seen,
+                Node {
+                    id: did.clone(),
+                    kind: "dependency".into(),
+                    label: lib.clone(),
+                    sublabel: f.location.clone(),
+                    pqc_status: f.pqc_status.to_string(),
+                    risk: cw * 100.0,
+                    blast_radius: 0.0,
+                    observed: false,
+                },
+            );
             if matches!(f.pqc_status, PqcStatus::ClassicalWeak) {
                 let score = (cw * 45.0 * 10.0).round() / 10.0;
                 paths.push(AttackPath {
                     id: format!("asset:{lib}"),
                     title: format!("Weak cryptographic dependency: {lib}"),
-                    severity: severity_for(score).into(), score, hndl: false, observed: false, request_count: 0,
-                    kind: "external-asset".into(), data_class: "Codebase".into(), agent: "—".into(),
-                    provider: "—".into(), tls_version: None, channel_pqc: f.pqc_status.clone(),
+                    severity: severity_for(score).into(),
+                    score,
+                    hndl: false,
+                    observed: false,
+                    request_count: 0,
+                    kind: "external-asset".into(),
+                    data_class: "Codebase".into(),
+                    agent: "—".into(),
+                    provider: "—".into(),
+                    tls_version: None,
+                    channel_pqc: f.pqc_status.clone(),
                     node_ids: vec![did],
-                    recommendation: format!("Replace {lib} with a maintained, PQC-capable library ({}).", f.location),
+                    recommendation: format!(
+                        "Replace {lib} with a maintained, PQC-capable library ({}).",
+                        f.location
+                    ),
                 });
             }
         }
@@ -346,25 +529,61 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
         let status = parse_status(&a.pqc_status);
         let cw = channel_weight(&status);
         let aid = format!("asset:{}", a.id);
-        push(&mut nodes, &mut seen, Node {
-            id: aid.clone(), kind: "asset".into(), label: a.id.clone(),
-            sublabel: format!("{} · {}", a.kind, a.environment),
-            pqc_status: a.pqc_status.clone(), risk: cw * 100.0, blast_radius: 0.0, observed: false,
-        });
+        push(
+            &mut nodes,
+            &mut seen,
+            Node {
+                id: aid.clone(),
+                kind: "asset".into(),
+                label: a.id.clone(),
+                sublabel: format!("{} · {}", a.kind, a.environment),
+                pqc_status: a.pqc_status.clone(),
+                risk: cw * 100.0,
+                blast_radius: 0.0,
+                observed: false,
+            },
+        );
         if cw > 0.0 {
-            let env_weight = if a.environment.to_lowercase().contains("prod") || a.tags.iter().any(|t| t.contains("external") || t.contains("customer")) { 0.95 } else { 0.6 };
+            let env_weight = if a.environment.to_lowercase().contains("prod")
+                || a.tags
+                    .iter()
+                    .any(|t| t.contains("external") || t.contains("customer"))
+            {
+                0.95
+            } else {
+                0.6
+            };
             let score = (cw * env_weight * 100.0 * 10.0).round() / 10.0;
             if score >= 15.0 {
-                let hndl = matches!(status, PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak);
+                let hndl = matches!(
+                    status,
+                    PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak
+                );
                 paths.push(AttackPath {
                     id: format!("asset:{}", a.id),
                     title: format!("{} ({}) exposes a quantum-vulnerable channel", a.id, a.kind),
-                    severity: severity_for(score).into(), score, hndl, observed: false, request_count: 0,
-                    kind: "external-asset".into(), data_class: a.environment.clone(), agent: "—".into(),
-                    provider: a.address.clone(), tls_version: a.tls_version.clone(), channel_pqc: status,
+                    severity: severity_for(score).into(),
+                    score,
+                    hndl,
+                    observed: false,
+                    request_count: 0,
+                    kind: "external-asset".into(),
+                    data_class: a.environment.clone(),
+                    agent: "—".into(),
+                    provider: a.address.clone(),
+                    tls_version: a.tls_version.clone(),
+                    channel_pqc: status,
                     node_ids: vec![aid],
-                    recommendation: format!("Enable hybrid ML-KEM on {} ({}). {}", a.address, a.environment,
-                        if hndl { "Quantum-vulnerable and harvestable today." } else { "Characterize and treat as vulnerable until proven PQC." }),
+                    recommendation: format!(
+                        "Enable hybrid ML-KEM on {} ({}). {}",
+                        a.address,
+                        a.environment,
+                        if hndl {
+                            "Quantum-vulnerable and harvestable today."
+                        } else {
+                            "Characterize and treat as vulnerable until proven PQC."
+                        }
+                    ),
                 });
             }
         }
@@ -377,8 +596,16 @@ pub fn build_graph(state: &AppState, tenant: &str, overrides: &HashMap<String, P
         }
     }
 
-    paths.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
-    Graph { nodes, edges, paths }
+    paths.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Graph {
+        nodes,
+        edges,
+        paths,
+    }
 }
 
 fn summarize(paths: &[AttackPath]) -> serde_json::Value {
@@ -397,7 +624,9 @@ pub async fn get_attack_paths(
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
     let g = build_graph(&state, &tenant, &HashMap::new());
-    Json(json!({ "nodes": g.nodes, "edges": g.edges, "paths": g.paths, "summary": summarize(&g.paths) }))
+    Json(
+        json!({ "nodes": g.nodes, "edges": g.edges, "paths": g.paths, "summary": summarize(&g.paths) }),
+    )
 }
 
 #[derive(Deserialize)]
@@ -420,18 +649,29 @@ pub async fn simulate(
     Json(body): Json<SimulateRequest>,
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
-    let overrides: HashMap<String, PqcStatus> =
-        body.overrides.into_iter().map(|o| (o.provider, o.pqc_status)).collect();
+    let overrides: HashMap<String, PqcStatus> = body
+        .overrides
+        .into_iter()
+        .map(|o| (o.provider, o.pqc_status))
+        .collect();
 
     let base = build_graph(&state, &tenant, &HashMap::new());
     let sim = build_graph(&state, &tenant, &overrides);
 
     let base_risk: f64 = base.paths.iter().map(|p| p.score).sum();
     let sim_risk: f64 = sim.paths.iter().map(|p| p.score).sum();
-    let reduction = if base_risk > 0.0 { ((base_risk - sim_risk) / base_risk * 100.0 * 10.0).round() / 10.0 } else { 0.0 };
+    let reduction = if base_risk > 0.0 {
+        ((base_risk - sim_risk) / base_risk * 100.0 * 10.0).round() / 10.0
+    } else {
+        0.0
+    };
 
     let sim_ids: BTreeSet<&str> = sim.paths.iter().map(|p| p.id.as_str()).collect();
-    let mitigated: Vec<&AttackPath> = base.paths.iter().filter(|p| !sim_ids.contains(p.id.as_str())).collect();
+    let mitigated: Vec<&AttackPath> = base
+        .paths
+        .iter()
+        .filter(|p| !sim_ids.contains(p.id.as_str()))
+        .collect();
 
     Json(json!({
         "before": summarize(&base.paths),
@@ -476,11 +716,23 @@ pub async fn remediate_path(
     let g = build_graph(&state, &tenant, &HashMap::new());
     let ap = match g.paths.iter().find(|p| p.id == path_id) {
         Some(p) => p.clone(),
-        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "attack path not found" }))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "attack path not found" })),
+            )
+                .into_response()
+        }
     };
     let integration = match state.integration_registry.get(&body.integration_id) {
         Some(i) => i,
-        None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "integration not found" }))).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": "integration not found" })),
+            )
+                .into_response()
+        }
     };
 
     // Synthesize a Finding describing the attack path so we can reuse the
@@ -496,33 +748,61 @@ pub async fn remediate_path(
         category: qw_scanner::FindingCategory::MissingPqc,
         severity: sev,
         title: format!("[Attack Path] {}", ap.title),
-        description: format!("{}\n\nExposure score: {}. {}", ap.recommendation, ap.score,
-            if ap.observed { format!("Observed in {} live request(s).", ap.request_count) } else { "Policy-derived exposure.".to_string() }),
+        description: format!(
+            "{}\n\nExposure score: {}. {}",
+            ap.recommendation,
+            ap.score,
+            if ap.observed {
+                format!("Observed in {} live request(s).", ap.request_count)
+            } else {
+                "Policy-derived exposure.".to_string()
+            }
+        ),
         asset: qw_scanner::CryptoAsset {
             id: ap.id.clone(),
             asset_type: qw_scanner::CryptoAssetType::TlsConnection,
             name: ap.provider.clone(),
-            algorithm: None, key_length: None, protocol_version: ap.tls_version.clone(),
-            location: qw_scanner::AssetLocation { source_type: "attack-path".into(), path: ap.provider.clone(), line: None },
-            discovered_by: "attack-path-engine".into(), discovered_at: chrono::Utc::now(),
+            algorithm: None,
+            key_length: None,
+            protocol_version: ap.tls_version.clone(),
+            location: qw_scanner::AssetLocation {
+                source_type: "attack-path".into(),
+                path: ap.provider.clone(),
+                line: None,
+            },
+            discovered_by: "attack-path-engine".into(),
+            discovered_at: chrono::Utc::now(),
         },
         remediation: Some(ap.recommendation.clone()),
         pqc_status: ap.channel_pqc.clone(),
         metadata: std::collections::HashMap::new(),
     };
-    let opts = qw_integrations::RemediationOpts { project: body.project.clone(), ..Default::default() };
+    let opts = qw_integrations::RemediationOpts {
+        project: body.project.clone(),
+        ..Default::default()
+    };
 
     match integration.create_remediation(&finding, &opts).await {
         Ok(ticket) => {
             state.store.record_remediation(&tenant, &ticket);
-            let _ = state.audit_logger.log("system", qw_audit::AuditEvent::IntegrationSync {
-                integration_id: body.integration_id.clone(),
-                action: "remediate_attack_path".to_string(),
-                detail: ticket.external_id.clone(),
-            }).await;
+            let _ = state
+                .audit_logger
+                .log(
+                    "system",
+                    qw_audit::AuditEvent::IntegrationSync {
+                        integration_id: body.integration_id.clone(),
+                        action: "remediate_attack_path".to_string(),
+                        detail: ticket.external_id.clone(),
+                    },
+                )
+                .await;
             Json(ticket).into_response()
         }
-        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e.to_string() }))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -536,22 +816,31 @@ pub async fn snapshot_and_alert(state: &AppState, tenant: &str) {
     let new_paths: Vec<&AttackPath> = match &previous {
         Some(prev) => {
             let seen: BTreeSet<&str> = prev.path_ids.iter().map(|s| s.as_str()).collect();
-            g.paths.iter().filter(|p| !seen.contains(p.id.as_str())).collect()
+            g.paths
+                .iter()
+                .filter(|p| !seen.contains(p.id.as_str()))
+                .collect()
         }
         None => Vec::new(), // first snapshot: don't alert on the whole baseline
     };
 
     let c = |s: &str| g.paths.iter().filter(|p| p.severity == s).count() as u32;
-    state.store.record_graph_snapshot(tenant, &GraphSnapshot {
-        timestamp: chrono::Utc::now(),
-        total: g.paths.len() as u32,
-        critical: c("critical"),
-        high: c("high"),
-        hndl: g.paths.iter().filter(|p| p.hndl).count() as u32,
-        path_ids,
-    });
+    state.store.record_graph_snapshot(
+        tenant,
+        &GraphSnapshot {
+            timestamp: chrono::Utc::now(),
+            total: g.paths.len() as u32,
+            critical: c("critical"),
+            high: c("high"),
+            hndl: g.paths.iter().filter(|p| p.hndl).count() as u32,
+            path_ids,
+        },
+    );
 
-    for np in new_paths.iter().filter(|p| p.severity == "critical" || p.severity == "high") {
+    for np in new_paths
+        .iter()
+        .filter(|p| p.severity == "critical" || p.severity == "high")
+    {
         let mut event = crate::alerts::AlertEvent::new(
             "new_attack_path",
             crate::alerts::AlertSeverity::Critical,

@@ -44,7 +44,11 @@ impl MerkleTree {
         while current_level.len() > 1 {
             // Determine sibling
             let sibling_idx = if idx.is_multiple_of(2) {
-                if idx + 1 < current_level.len() { idx + 1 } else { idx }
+                if idx + 1 < current_level.len() {
+                    idx + 1
+                } else {
+                    idx
+                }
             } else {
                 idx - 1
             };
@@ -137,7 +141,9 @@ mod tests {
 
     #[test]
     fn test_four_leaves() {
-        let leaves: Vec<[u8; 32]> = (0..4).map(|i| sha3_256(format!("leaf{i}").as_bytes())).collect();
+        let leaves: Vec<[u8; 32]> = (0..4)
+            .map(|i| sha3_256(format!("leaf{i}").as_bytes()))
+            .collect();
         let root = MerkleTree::compute_root(&leaves);
         // Should be deterministic
         let root2 = MerkleTree::compute_root(&leaves);
@@ -146,32 +152,46 @@ mod tests {
 
     #[test]
     fn test_odd_leaves() {
-        let leaves: Vec<[u8; 32]> = (0..5).map(|i| sha3_256(format!("leaf{i}").as_bytes())).collect();
+        let leaves: Vec<[u8; 32]> = (0..5)
+            .map(|i| sha3_256(format!("leaf{i}").as_bytes()))
+            .collect();
         let root = MerkleTree::compute_root(&leaves);
         assert_ne!(root, [0u8; 32]);
     }
 
     #[test]
     fn test_proof_valid() {
-        let leaves: Vec<[u8; 32]> = (0..8).map(|i| sha3_256(format!("leaf{i}").as_bytes())).collect();
+        let leaves: Vec<[u8; 32]> = (0..8)
+            .map(|i| sha3_256(format!("leaf{i}").as_bytes()))
+            .collect();
         for i in 0..8 {
             let proof = MerkleTree::compute_proof(&leaves, i);
-            assert!(MerkleTree::verify_proof(&proof), "proof failed for leaf {i}");
+            assert!(
+                MerkleTree::verify_proof(&proof),
+                "proof failed for leaf {i}"
+            );
         }
     }
 
     #[test]
     fn test_proof_odd_leaves() {
-        let leaves: Vec<[u8; 32]> = (0..5).map(|i| sha3_256(format!("leaf{i}").as_bytes())).collect();
+        let leaves: Vec<[u8; 32]> = (0..5)
+            .map(|i| sha3_256(format!("leaf{i}").as_bytes()))
+            .collect();
         for i in 0..5 {
             let proof = MerkleTree::compute_proof(&leaves, i);
-            assert!(MerkleTree::verify_proof(&proof), "proof failed for leaf {i}");
+            assert!(
+                MerkleTree::verify_proof(&proof),
+                "proof failed for leaf {i}"
+            );
         }
     }
 
     #[test]
     fn test_tampered_proof_fails() {
-        let leaves: Vec<[u8; 32]> = (0..4).map(|i| sha3_256(format!("leaf{i}").as_bytes())).collect();
+        let leaves: Vec<[u8; 32]> = (0..4)
+            .map(|i| sha3_256(format!("leaf{i}").as_bytes()))
+            .collect();
         let mut proof = MerkleTree::compute_proof(&leaves, 0);
         proof.leaf = sha3_256(b"tampered");
         assert!(!MerkleTree::verify_proof(&proof));

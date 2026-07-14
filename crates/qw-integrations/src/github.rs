@@ -1,8 +1,8 @@
+use crate::registry::{Integration, IntegrationError};
+use crate::types::*;
 use async_trait::async_trait;
 use base64::Engine;
-use qw_scanner::{ScanTarget, Finding, TargetType};
-use crate::types::*;
-use crate::registry::{Integration, IntegrationError};
+use qw_scanner::{Finding, ScanTarget, TargetType};
 
 pub struct GitHubIntegration {
     id: String,
@@ -20,7 +20,10 @@ impl GitHubIntegration {
         Some(Self {
             id: config.id.clone(),
             token,
-            base_url: config.base_url.clone().unwrap_or_else(|| "https://api.github.com".to_string()),
+            base_url: config
+                .base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.github.com".to_string()),
             org: config.settings.get("org").cloned(),
             repo: config.settings.get("repo").cloned(),
             client: reqwest::Client::new(),
@@ -28,7 +31,8 @@ impl GitHubIntegration {
     }
 
     fn gh(&self, method: reqwest::Method, url: &str) -> reqwest::RequestBuilder {
-        self.client.request(method, url)
+        self.client
+            .request(method, url)
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "QuantaWatch")
@@ -37,8 +41,12 @@ impl GitHubIntegration {
 
 #[async_trait]
 impl Integration for GitHubIntegration {
-    fn id(&self) -> &str { &self.id }
-    fn display_name(&self) -> &str { "GitHub" }
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn display_name(&self) -> &str {
+        "GitHub"
+    }
 
     fn capabilities(&self) -> Vec<IntegrationCapability> {
         let mut caps = vec![IntegrationCapability::DiscoverTargets];
@@ -50,7 +58,9 @@ impl Integration for GitHubIntegration {
     }
 
     async fn test_connection(&self) -> Result<ConnectionStatus, IntegrationError> {
-        let resp = self.client.get(format!("{}/user", self.base_url))
+        let resp = self
+            .client
+            .get(format!("{}/user", self.base_url))
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "QuantaWatch")
@@ -58,7 +68,9 @@ impl Integration for GitHubIntegration {
             .await?;
 
         if resp.status().is_success() {
-            let user: serde_json::Value = resp.json().await
+            let user: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
             Ok(ConnectionStatus {
                 connected: true,
@@ -78,7 +90,13 @@ impl Integration for GitHubIntegration {
 
     async fn discover_targets(&self) -> Result<Vec<ScanTarget>, IntegrationError> {
         let mut targets = Vec::new();
-        let dep_files = ["Cargo.toml", "package.json", "requirements.txt", "go.mod", "Gemfile"];
+        let dep_files = [
+            "Cargo.toml",
+            "package.json",
+            "requirements.txt",
+            "go.mod",
+            "Gemfile",
+        ];
 
         let repos_url = if let Some(ref org) = self.org {
             format!("{}/orgs/{}/repos?per_page=100", self.base_url, org)
@@ -86,7 +104,9 @@ impl Integration for GitHubIntegration {
             format!("{}/user/repos?per_page=100", self.base_url)
         };
 
-        let resp = self.client.get(&repos_url)
+        let resp = self
+            .client
+            .get(&repos_url)
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "QuantaWatch")
@@ -94,12 +114,15 @@ impl Integration for GitHubIntegration {
             .await?;
 
         if !resp.status().is_success() {
-            return Err(IntegrationError::ApiError(
-                format!("Failed to list repos: HTTP {}", resp.status()),
-            ));
+            return Err(IntegrationError::ApiError(format!(
+                "Failed to list repos: HTTP {}",
+                resp.status()
+            )));
         }
 
-        let repos: Vec<serde_json::Value> = resp.json().await
+        let repos: Vec<serde_json::Value> = resp
+            .json()
+            .await
             .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
 
         for repo in &repos {
@@ -112,7 +135,9 @@ impl Integration for GitHubIntegration {
                     self.base_url, full_name, dep_file, default_branch
                 );
 
-                let check = self.client.head(&contents_url)
+                let check = self
+                    .client
+                    .head(&contents_url)
                     .header("Authorization", format!("Bearer {}", self.token))
                     .header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "QuantaWatch")
@@ -149,29 +174,66 @@ impl Integration for GitHubIntegration {
         finding: &Finding,
         opts: &RemediationOpts,
     ) -> Result<RemediationTicket, IntegrationError> {
-        let repo = opts.project.clone().or_else(|| self.repo.clone()).ok_or_else(|| {
-            IntegrationError::NotConfigured("GitHub remediation requires a 'repo' setting (owner/repo)".to_string())
-        })?;
+        let repo = opts
+            .project
+            .clone()
+            .or_else(|| self.repo.clone())
+            .ok_or_else(|| {
+                IntegrationError::NotConfigured(
+                    "GitHub remediation requires a 'repo' setting (owner/repo)".to_string(),
+                )
+            })?;
 
         // 1. Default branch + its head SHA.
-        let repo_info: serde_json::Value = self.gh(reqwest::Method::GET, &format!("{}/repos/{}", self.base_url, repo))
-            .send().await?.json().await.map_err(|e| IntegrationError::ApiError(e.to_string()))?;
-        let base = repo_info["default_branch"].as_str().unwrap_or("main").to_string();
+        let repo_info: serde_json::Value = self
+            .gh(
+                reqwest::Method::GET,
+                &format!("{}/repos/{}", self.base_url, repo),
+            )
+            .send()
+            .await?
+            .json()
+            .await
+            .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
+        let base = repo_info["default_branch"]
+            .as_str()
+            .unwrap_or("main")
+            .to_string();
 
-        let ref_info: serde_json::Value = self.gh(reqwest::Method::GET, &format!("{}/repos/{}/git/ref/heads/{}", self.base_url, repo, base))
-            .send().await?.json().await.map_err(|e| IntegrationError::ApiError(e.to_string()))?;
-        let sha = ref_info["object"]["sha"].as_str()
-            .ok_or_else(|| IntegrationError::ApiError("could not resolve base branch SHA".to_string()))?
+        let ref_info: serde_json::Value = self
+            .gh(
+                reqwest::Method::GET,
+                &format!("{}/repos/{}/git/ref/heads/{}", self.base_url, repo, base),
+            )
+            .send()
+            .await?
+            .json()
+            .await
+            .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
+        let sha = ref_info["object"]["sha"]
+            .as_str()
+            .ok_or_else(|| {
+                IntegrationError::ApiError("could not resolve base branch SHA".to_string())
+            })?
             .to_string();
 
         // 2. Create a remediation branch.
-        let short = &finding.id.replace(|c: char| !c.is_alphanumeric(), "-")[..finding.id.len().min(12)];
+        let short =
+            &finding.id.replace(|c: char| !c.is_alphanumeric(), "-")[..finding.id.len().min(12)];
         let branch = format!("quantawatch/pqc-{short}");
-        let br = self.gh(reqwest::Method::POST, &format!("{}/repos/{}/git/refs", self.base_url, repo))
+        let br = self
+            .gh(
+                reqwest::Method::POST,
+                &format!("{}/repos/{}/git/refs", self.base_url, repo),
+            )
             .json(&serde_json::json!({ "ref": format!("refs/heads/{branch}"), "sha": sha }))
-            .send().await?;
+            .send()
+            .await?;
         if !br.status().is_success() && br.status() != reqwest::StatusCode::UNPROCESSABLE_ENTITY {
-            return Err(IntegrationError::ApiError(format!("branch create failed: HTTP {}", br.status())));
+            return Err(IntegrationError::ApiError(format!(
+                "branch create failed: HTTP {}",
+                br.status()
+            )));
         }
 
         // 3. Commit the remediation playbook file.
@@ -181,30 +243,49 @@ impl Integration for GitHubIntegration {
             finding.remediation.clone().unwrap_or_else(|| "Adopt hybrid ML-KEM key establishment.".to_string()),
         );
         let path = format!(".quantawatch/remediation-{short}.md");
-        let put = self.gh(reqwest::Method::PUT, &format!("{}/repos/{}/contents/{}", self.base_url, repo, path))
+        let put = self
+            .gh(
+                reqwest::Method::PUT,
+                &format!("{}/repos/{}/contents/{}", self.base_url, repo, path),
+            )
             .json(&serde_json::json!({
                 "message": format!("QuantaWatch: PQC remediation for {}", finding.title),
                 "content": base64::engine::general_purpose::STANDARD.encode(body_md.as_bytes()),
                 "branch": branch,
             }))
-            .send().await?;
+            .send()
+            .await?;
         if !put.status().is_success() {
-            return Err(IntegrationError::ApiError(format!("file commit failed: HTTP {}", put.status())));
+            return Err(IntegrationError::ApiError(format!(
+                "file commit failed: HTTP {}",
+                put.status()
+            )));
         }
 
         // 4. Open the pull request.
-        let pr = self.gh(reqwest::Method::POST, &format!("{}/repos/{}/pulls", self.base_url, repo))
+        let pr = self
+            .gh(
+                reqwest::Method::POST,
+                &format!("{}/repos/{}/pulls", self.base_url, repo),
+            )
             .json(&serde_json::json!({
                 "title": format!("[QuantaWatch] PQC remediation: {}", finding.title),
                 "head": branch,
                 "base": base,
                 "body": body_md,
             }))
-            .send().await?;
+            .send()
+            .await?;
         if !pr.status().is_success() {
-            return Err(IntegrationError::ApiError(format!("PR create failed: HTTP {}", pr.status())));
+            return Err(IntegrationError::ApiError(format!(
+                "PR create failed: HTTP {}",
+                pr.status()
+            )));
         }
-        let pr_json: serde_json::Value = pr.json().await.map_err(|e| IntegrationError::ApiError(e.to_string()))?;
+        let pr_json: serde_json::Value = pr
+            .json()
+            .await
+            .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
 
         Ok(RemediationTicket {
             id: uuid::Uuid::new_v4().to_string(),
@@ -219,9 +300,15 @@ impl Integration for GitHubIntegration {
     }
 
     /// Create a repo webhook that pushes pull_request events to `callback_url`.
-    async fn register_webhook(&self, callback_url: &str, secret: &str) -> Result<String, IntegrationError> {
+    async fn register_webhook(
+        &self,
+        callback_url: &str,
+        secret: &str,
+    ) -> Result<String, IntegrationError> {
         let repo = self.repo.clone().ok_or_else(|| {
-            IntegrationError::NotConfigured("GitHub webhook registration requires a 'repo' setting".to_string())
+            IntegrationError::NotConfigured(
+                "GitHub webhook registration requires a 'repo' setting".to_string(),
+            )
         })?;
         let resp = self.gh(reqwest::Method::POST, &format!("{}/repos/{}/hooks", self.base_url, repo))
             .json(&serde_json::json!({
@@ -232,22 +319,42 @@ impl Integration for GitHubIntegration {
             }))
             .send().await?;
         if resp.status().is_success() {
-            let v: serde_json::Value = resp.json().await.map_err(|e| IntegrationError::ApiError(e.to_string()))?;
-            Ok(format!("Registered GitHub hook #{} on {repo}", v["id"].as_u64().unwrap_or(0)))
+            let v: serde_json::Value = resp
+                .json()
+                .await
+                .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
+            Ok(format!(
+                "Registered GitHub hook #{} on {repo}",
+                v["id"].as_u64().unwrap_or(0)
+            ))
         } else {
-            Err(IntegrationError::ApiError(format!("hook registration failed: HTTP {}", resp.status())))
+            Err(IntegrationError::ApiError(format!(
+                "hook registration failed: HTTP {}",
+                resp.status()
+            )))
         }
     }
 
     /// Reconcile a PR's status: open → Open, merged → Resolved, closed → Closed.
-    async fn remediation_status(&self, external_id: &str) -> Result<TicketStatus, IntegrationError> {
+    async fn remediation_status(
+        &self,
+        external_id: &str,
+    ) -> Result<TicketStatus, IntegrationError> {
         let repo = match &self.repo {
             Some(r) => r.clone(),
             None => return Ok(TicketStatus::Unknown),
         };
         let num = external_id.trim_start_matches('#');
-        let pr: serde_json::Value = self.gh(reqwest::Method::GET, &format!("{}/repos/{}/pulls/{}", self.base_url, repo, num))
-            .send().await?.json().await.map_err(|e| IntegrationError::ApiError(e.to_string()))?;
+        let pr: serde_json::Value = self
+            .gh(
+                reqwest::Method::GET,
+                &format!("{}/repos/{}/pulls/{}", self.base_url, repo, num),
+            )
+            .send()
+            .await?
+            .json()
+            .await
+            .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
         Ok(match (pr["state"].as_str(), pr["merged"].as_bool()) {
             (_, Some(true)) => TicketStatus::Resolved,
             (Some("closed"), _) => TicketStatus::Closed,
@@ -259,7 +366,9 @@ impl Integration for GitHubIntegration {
     async fn fetch_content(&self, target: &ScanTarget) -> Result<Option<String>, IntegrationError> {
         // Prefer the stored contents API URL; otherwise reconstruct it from
         // repo + branch + filename.
-        let url = if let Some(api_url) = target.metadata.get("api_url")
+        let url = if let Some(api_url) = target
+            .metadata
+            .get("api_url")
             .or_else(|| target.metadata.get("download_url"))
         {
             api_url.clone()
@@ -267,7 +376,11 @@ impl Integration for GitHubIntegration {
             let repo = target.metadata.get("repo").ok_or_else(|| {
                 IntegrationError::NotConfigured("target missing repo metadata".to_string())
             })?;
-            let branch = target.metadata.get("branch").map(String::as_str).unwrap_or("main");
+            let branch = target
+                .metadata
+                .get("branch")
+                .map(String::as_str)
+                .unwrap_or("main");
             let filename = target.address.rsplit('/').next().unwrap_or(&target.address);
             format!(
                 "{}/repos/{}/contents/{}?ref={}",
@@ -275,7 +388,9 @@ impl Integration for GitHubIntegration {
             )
         };
 
-        let resp = self.client.get(&url)
+        let resp = self
+            .client
+            .get(&url)
             .header("Authorization", format!("Bearer {}", self.token))
             .header("Accept", "application/vnd.github+json")
             .header("User-Agent", "QuantaWatch")
@@ -286,12 +401,15 @@ impl Integration for GitHubIntegration {
             return Ok(None);
         }
         if !resp.status().is_success() {
-            return Err(IntegrationError::ApiError(
-                format!("Failed to fetch content: HTTP {}", resp.status()),
-            ));
+            return Err(IntegrationError::ApiError(format!(
+                "Failed to fetch content: HTTP {}",
+                resp.status()
+            )));
         }
 
-        let body: serde_json::Value = resp.json().await
+        let body: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
 
         let encoded = match body["content"].as_str() {

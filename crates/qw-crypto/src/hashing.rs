@@ -1,4 +1,4 @@
-use sha3::{Sha3_256, Digest};
+use sha3::{Digest, Sha3_256};
 
 /// Compute SHA3-256 hash of data.
 pub fn sha3_256(data: &[u8]) -> [u8; 32] {
@@ -43,6 +43,9 @@ mod tests {
     fn test_sha3_known_vector() {
         // SHA3-256("") = a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a
         let h = sha3_256_hex(b"");
-        assert_eq!(h, "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a");
+        assert_eq!(
+            h,
+            "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+        );
     }
 }

@@ -1,5 +1,5 @@
-use async_trait::async_trait;
 use crate::types::*;
+use async_trait::async_trait;
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
@@ -37,7 +37,9 @@ impl Default for ScannerRegistry {
 
 impl ScannerRegistry {
     pub fn new() -> Self {
-        Self { scanners: HashMap::new() }
+        Self {
+            scanners: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, scanner: Box<dyn Scanner>) {
@@ -80,16 +82,24 @@ impl ScannerRegistry {
 pub fn build_scanner_registry(config: &ScannerConfig) -> ScannerRegistry {
     let mut registry = ScannerRegistry::new();
     if config.tls.enabled {
-        registry.register(Box::new(crate::scanners::tls::TlsScanner::new(config.tls.clone())));
+        registry.register(Box::new(crate::scanners::tls::TlsScanner::new(
+            config.tls.clone(),
+        )));
     }
     if config.dependencies.enabled {
-        registry.register(Box::new(crate::scanners::dependency::DependencyScanner::new()));
+        registry.register(Box::new(
+            crate::scanners::dependency::DependencyScanner::new(),
+        ));
     }
     if config.certificates.enabled {
-        registry.register(Box::new(crate::scanners::certificate::CertificateScanner::new(config.certificates.clone())));
+        registry.register(Box::new(
+            crate::scanners::certificate::CertificateScanner::new(config.certificates.clone()),
+        ));
     }
     if config.code.enabled {
-        registry.register(Box::new(crate::scanners::code::CodeScanner::new(config.code.clone())));
+        registry.register(Box::new(crate::scanners::code::CodeScanner::new(
+            config.code.clone(),
+        )));
     }
     registry
 }

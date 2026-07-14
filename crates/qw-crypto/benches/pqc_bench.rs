@@ -1,5 +1,5 @@
-use criterion::{criterion_group, criterion_main, Criterion, black_box};
-use qw_crypto::{SigningKeyPair, KemKeyPair, sha3_256, MerkleTree};
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use qw_crypto::{sha3_256, KemKeyPair, MerkleTree, SigningKeyPair};
 
 // ---------------------------------------------------------------------------
 // ML-DSA-65 benchmarks

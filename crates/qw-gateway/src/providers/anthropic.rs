@@ -1,5 +1,5 @@
-use bytes::Bytes;
 use super::traits::*;
+use bytes::Bytes;
 
 pub struct AnthropicProvider {
     upstream: String,
@@ -13,52 +13,71 @@ impl AnthropicProvider {
 }
 
 impl LlmProvider for AnthropicProvider {
-    fn name(&self) -> &str { "anthropic" }
+    fn name(&self) -> &str {
+        "anthropic"
+    }
 
-    fn upstream_url(&self) -> &str { &self.upstream }
+    fn upstream_url(&self) -> &str {
+        &self.upstream
+    }
 
     fn parse_request(&self, body: &Bytes) -> Option<NormalizedRequest> {
         let json: serde_json::Value = serde_json::from_slice(body).ok()?;
 
         let model = json.get("model")?.as_str()?.to_string();
-        let system_prompt = json.get("system").and_then(|s| s.as_str()).map(String::from);
-        let max_tokens = json.get("max_tokens").and_then(|t| t.as_u64()).map(|t| t as u32);
-        let stream = json.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+        let system_prompt = json
+            .get("system")
+            .and_then(|s| s.as_str())
+            .map(String::from);
+        let max_tokens = json
+            .get("max_tokens")
+            .and_then(|t| t.as_u64())
+            .map(|t| t as u32);
+        let stream = json
+            .get("stream")
+            .and_then(|s| s.as_bool())
+            .unwrap_or(false);
 
-        let messages = json.get("messages")
+        let messages = json
+            .get("messages")
             .and_then(|m| m.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|msg| {
-                    let role = msg.get("role")?.as_str()?.to_string();
-                    let content = if let Some(s) = msg.get("content").and_then(|c| c.as_str()) {
-                        s.to_string()
-                    } else if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
-                        // Handle array content blocks
-                        arr.iter()
-                            .filter_map(|block| {
-                                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                    block.get("text").and_then(|t| t.as_str()).map(String::from)
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    } else {
-                        return None;
-                    };
-                    Some(NormalizedMessage { role, content })
-                }).collect()
+                arr.iter()
+                    .filter_map(|msg| {
+                        let role = msg.get("role")?.as_str()?.to_string();
+                        let content = if let Some(s) = msg.get("content").and_then(|c| c.as_str()) {
+                            s.to_string()
+                        } else if let Some(arr) = msg.get("content").and_then(|c| c.as_array()) {
+                            // Handle array content blocks
+                            arr.iter()
+                                .filter_map(|block| {
+                                    if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                        block.get("text").and_then(|t| t.as_str()).map(String::from)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        } else {
+                            return None;
+                        };
+                        Some(NormalizedMessage { role, content })
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
-        let tools = json.get("tools")
+        let tools = json
+            .get("tools")
             .and_then(|t| t.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|tool| {
-                    let name = tool.get("name")?.as_str()?.to_string();
-                    Some(ToolDefinition { name })
-                }).collect()
+                arr.iter()
+                    .filter_map(|tool| {
+                        let name = tool.get("name")?.as_str()?.to_string();
+                        Some(ToolDefinition { name })
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
@@ -75,7 +94,8 @@ impl LlmProvider for AnthropicProvider {
     fn extract_response_text(&self, body: &Bytes) -> Option<String> {
         let json: serde_json::Value = serde_json::from_slice(body).ok()?;
         let content = json.get("content")?.as_array()?;
-        let texts: Vec<String> = content.iter()
+        let texts: Vec<String> = content
+            .iter()
             .filter_map(|block| {
                 if block.get("type").and_then(|t| t.as_str()) == Some("text") {
                     block.get("text").and_then(|t| t.as_str()).map(String::from)
@@ -84,7 +104,11 @@ impl LlmProvider for AnthropicProvider {
                 }
             })
             .collect();
-        if texts.is_empty() { None } else { Some(texts.join("\n")) }
+        if texts.is_empty() {
+            None
+        } else {
+            Some(texts.join("\n"))
+        }
     }
 
     fn extract_tool_calls(&self, body: &Bytes) -> Vec<String> {

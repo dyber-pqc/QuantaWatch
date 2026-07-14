@@ -1,16 +1,15 @@
 use axum::{
-    extract::{State, Path},
-    response::IntoResponse,
-    Extension,
-    Json,
+    extract::{Path, State},
     http::StatusCode,
+    response::IntoResponse,
+    Extension, Json,
 };
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 
-use qw_scanner::{Finding, FindingRecord, CryptoAsset, AssetLocation};
 use qw_integrations::RemediationOpts;
+use qw_scanner::{AssetLocation, CryptoAsset, Finding, FindingRecord};
 
 use crate::auth::{tenant_of, AuthContext};
 use crate::state::AppState;
@@ -65,18 +64,26 @@ pub async fn remediate(
     let record = match state.store.get_finding(&tenant, &finding_id) {
         Some(r) => r,
         None => {
-            return (StatusCode::NOT_FOUND, Json(json!({
-                "error": format!("Finding '{}' not found", finding_id),
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": format!("Finding '{}' not found", finding_id),
+                })),
+            )
+                .into_response();
         }
     };
 
     let integration = match state.integration_registry.get(&body.integration_id) {
         Some(i) => i,
         None => {
-            return (StatusCode::NOT_FOUND, Json(json!({
-                "error": format!("Integration '{}' not found", body.integration_id),
-            }))).into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({
+                    "error": format!("Integration '{}' not found", body.integration_id),
+                })),
+            )
+                .into_response();
         }
     };
 
@@ -92,21 +99,26 @@ pub async fn remediate(
     match integration.create_remediation(&finding, &opts).await {
         Ok(ticket) => {
             state.store.record_remediation(&tenant, &ticket);
-            let _ = state.audit_logger.log(
-                "system",
-                qw_audit::AuditEvent::IntegrationSync {
-                    integration_id: body.integration_id.clone(),
-                    action: "create_remediation".to_string(),
-                    detail: ticket.external_id.clone(),
-                },
-            ).await;
+            let _ = state
+                .audit_logger
+                .log(
+                    "system",
+                    qw_audit::AuditEvent::IntegrationSync {
+                        integration_id: body.integration_id.clone(),
+                        action: "create_remediation".to_string(),
+                        detail: ticket.external_id.clone(),
+                    },
+                )
+                .await;
             Json(ticket).into_response()
         }
-        Err(e) => {
-            (StatusCode::BAD_GATEWAY, Json(json!({
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({
                 "error": e.to_string(),
-            }))).into_response()
-        }
+            })),
+        )
+            .into_response(),
     }
 }
 
@@ -115,10 +127,15 @@ pub async fn remediate(
 pub async fn sync_ticket_status(state: &AppState, tenant: &str) -> usize {
     let mut changed = 0;
     for mut ticket in state.store.list_remediations(tenant) {
-        if matches!(ticket.status, qw_integrations::TicketStatus::Resolved | qw_integrations::TicketStatus::Closed) {
+        if matches!(
+            ticket.status,
+            qw_integrations::TicketStatus::Resolved | qw_integrations::TicketStatus::Closed
+        ) {
             continue; // terminal
         }
-        let Some(integration) = state.integration_registry.get(&ticket.integration_id) else { continue };
+        let Some(integration) = state.integration_registry.get(&ticket.integration_id) else {
+            continue;
+        };
         if let Ok(new_status) = integration.remediation_status(&ticket.external_id).await {
             if new_status != ticket.status && new_status != qw_integrations::TicketStatus::Unknown {
                 let was = ticket.status.clone();
@@ -131,9 +148,13 @@ pub async fn sync_ticket_status(state: &AppState, tenant: &str) -> usize {
                         "remediation_resolved",
                         crate::alerts::AlertSeverity::Info,
                         "Remediation resolved",
-                        format!("Ticket {} was resolved/merged (was {:?}).", ticket.external_id, was),
+                        format!(
+                            "Ticket {} was resolved/merged (was {:?}).",
+                            ticket.external_id, was
+                        ),
                     );
-                    ev.metadata.insert("ticket".into(), ticket.external_id.clone());
+                    ev.metadata
+                        .insert("ticket".into(), ticket.external_id.clone());
                     state.alert_manager.fire(tenant, ev).await;
                 }
             }

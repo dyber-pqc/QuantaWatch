@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 /// Normalized representation of an LLM request for policy/monitor inspection.
 #[derive(Debug, Clone, Serialize, Deserialize)]

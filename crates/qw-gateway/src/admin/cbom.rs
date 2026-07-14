@@ -1,12 +1,12 @@
 use axum::{
     extract::State,
-    response::IntoResponse,
     http::{header, StatusCode},
+    response::IntoResponse,
     Json,
 };
-use serde_json::json;
 use qw_cbom::{Attestation, CbomBuilder, CryptoBom, Measurement, PostureEngine};
 use qw_crypto::sha3_256_hex;
+use serde_json::json;
 
 use crate::state::AppState;
 
@@ -14,7 +14,9 @@ use crate::state::AppState;
 /// then sign an attestation quote over it with the gateway's ML-DSA-65 identity.
 pub fn build_cbom(state: &AppState) -> CryptoBom {
     let mut builder = CbomBuilder::new();
-    let providers: Vec<_> = state.provider_crypto.iter()
+    let providers: Vec<_> = state
+        .provider_crypto
+        .iter()
         .map(|e| e.value().clone())
         .collect();
     builder.ingest_provider_info(&providers);
@@ -40,9 +42,18 @@ fn attest(state: &AppState, bom: &CryptoBom) -> Attestation {
 
     let pubkey = identity.public_key_bytes();
     let measurements = vec![
-        Measurement { name: "gateway-identity".into(), value: identity.fingerprint.clone() },
-        Measurement { name: "platform-key".into(), value: sha3_256_hex(&pubkey) },
-        Measurement { name: "tool".into(), value: format!("quantawatch-{}", env!("CARGO_PKG_VERSION")) },
+        Measurement {
+            name: "gateway-identity".into(),
+            value: identity.fingerprint.clone(),
+        },
+        Measurement {
+            name: "platform-key".into(),
+            value: sha3_256_hex(&pubkey),
+        },
+        Measurement {
+            name: "tool".into(),
+            value: format!("quantawatch-{}", env!("CARGO_PKG_VERSION")),
+        },
     ];
 
     // Quote payload = digest | nonce | name=value;... (deterministic ordering)
@@ -67,7 +78,8 @@ fn attest(state: &AppState, bom: &CryptoBom) -> Attestation {
         signature,
         public_key: hex::encode(&pubkey),
         signed_at: chrono::Utc::now(),
-        note: "Software-emulated attestation over the live CBOM; QuantaTPM hardware quote pending.".into(),
+        note: "Software-emulated attestation over the live CBOM; QuantaTPM hardware quote pending."
+            .into(),
     }
 }
 

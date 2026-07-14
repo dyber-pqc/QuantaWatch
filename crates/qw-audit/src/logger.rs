@@ -1,12 +1,12 @@
 use std::path::PathBuf;
-use tokio::sync::mpsc;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 use tracing;
 
-use qw_crypto::{GatewayIdentity, sha3_256_hex};
-use crate::entry::{AuditEntry, AuditEvent};
 use crate::chain::AuditChain;
+use crate::entry::{AuditEntry, AuditEvent};
 use crate::AuditError;
+use qw_crypto::{sha3_256_hex, GatewayIdentity};
 
 /// Async audit logger. Sends events through a channel to a background writer.
 #[derive(Clone)]
@@ -35,27 +35,41 @@ impl AuditLogger {
 
         let (tx, rx) = mpsc::channel(1024);
 
-        tokio::spawn(Self::writer_task(rx, audit_dir, identity, merkle_batch_size));
+        tokio::spawn(Self::writer_task(
+            rx,
+            audit_dir,
+            identity,
+            merkle_batch_size,
+        ));
 
         Ok(Self { tx })
     }
 
     /// Log an audit event (non-blocking).
     pub async fn log(&self, session_id: &str, event: AuditEvent) -> Result<(), AuditError> {
-        self.tx.send(LogCommand::Log {
-            session_id: session_id.to_string(),
-            event,
-        }).await.map_err(|_| AuditError::ChannelClosed)
+        self.tx
+            .send(LogCommand::Log {
+                session_id: session_id.to_string(),
+                event,
+            })
+            .await
+            .map_err(|_| AuditError::ChannelClosed)
     }
 
     /// Flush pending writes.
     pub async fn flush(&self) -> Result<(), AuditError> {
-        self.tx.send(LogCommand::Flush).await.map_err(|_| AuditError::ChannelClosed)
+        self.tx
+            .send(LogCommand::Flush)
+            .await
+            .map_err(|_| AuditError::ChannelClosed)
     }
 
     /// Shutdown the logger gracefully.
     pub async fn shutdown(&self) -> Result<(), AuditError> {
-        self.tx.send(LogCommand::Shutdown).await.map_err(|_| AuditError::ChannelClosed)
+        self.tx
+            .send(LogCommand::Shutdown)
+            .await
+            .map_err(|_| AuditError::ChannelClosed)
     }
 
     async fn writer_task(

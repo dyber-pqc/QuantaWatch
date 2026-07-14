@@ -1,20 +1,12 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde_json::json;
 
 use crate::state::AppState;
 
 pub async fn get_stats(State(state): State<AppState>) -> impl IntoResponse {
     let sessions = state.sessions.len();
-    let total_requests: u64 = state.sessions.iter()
-        .map(|e| e.value().request_count)
-        .sum();
-    let total_tokens: u64 = state.sessions.iter()
-        .map(|e| e.value().total_tokens)
-        .sum();
+    let total_requests: u64 = state.sessions.iter().map(|e| e.value().request_count).sum();
+    let total_tokens: u64 = state.sessions.iter().map(|e| e.value().total_tokens).sum();
 
     Json(json!({
         "active_sessions": sessions,

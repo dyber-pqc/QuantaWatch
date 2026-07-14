@@ -2,8 +2,8 @@
 
 use axum::{
     extract::State,
-    response::{Html, IntoResponse},
     http::header,
+    response::{Html, IntoResponse},
     Json,
 };
 use serde_json::json;
@@ -39,9 +39,13 @@ pub async fn get_report(
         let cache = state.posture_cache.read().await;
         cache.as_ref().map(|p| p.overall_score)
     };
-    let providers: Vec<_> = state.provider_crypto.iter().map(|e| e.value().clone()).collect();
-    let posture = posture_score
-        .unwrap_or_else(|| PostureEngine::summarize(&[], &providers).overall_score);
+    let providers: Vec<_> = state
+        .provider_crypto
+        .iter()
+        .map(|e| e.value().clone())
+        .collect();
+    let posture =
+        posture_score.unwrap_or_else(|| PostureEngine::summarize(&[], &providers).overall_score);
 
     let html = render_report_html(&report, posture, &state.gateway_identity.fingerprint);
     (
@@ -51,7 +55,9 @@ pub async fn get_report(
 }
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn priority_color(p: &str) -> &'static str {
@@ -114,7 +120,8 @@ fn render_report_html(report: &ComplianceReport, posture: f64, fingerprint: &str
         .collect();
 
     let migration_section = if report.migration_items.is_empty() {
-        "<p class='empty'>No migration actions required — all assessed assets are quantum-safe.</p>".to_string()
+        "<p class='empty'>No migration actions required — all assessed assets are quantum-safe.</p>"
+            .to_string()
     } else {
         format!(
             "<table><thead><tr><th>Priority</th><th>Action</th><th>Assets</th><th>Deadline</th><th>Frameworks</th></tr></thead><tbody>{migration_rows}</tbody></table>"

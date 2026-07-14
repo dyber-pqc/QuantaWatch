@@ -20,7 +20,11 @@ pub struct AlertManager {
 
 impl AlertManager {
     pub fn new(config: AlertConfig, http: reqwest::Client, store: Arc<Store>) -> Self {
-        Self { config, http, store }
+        Self {
+            config,
+            http,
+            store,
+        }
     }
 
     pub fn enabled(&self) -> bool {
@@ -49,7 +53,11 @@ impl AlertManager {
         if self.config.enabled {
             let mut delivered = 0u32;
             for ch in &self.config.channels {
-                let floor = ch.min_severity.as_deref().map(AlertSeverity::from_label).unwrap_or(AlertSeverity::Info);
+                let floor = ch
+                    .min_severity
+                    .as_deref()
+                    .map(AlertSeverity::from_label)
+                    .unwrap_or(AlertSeverity::Info);
                 if event.severity >= floor && self.deliver(ch, &event).await {
                     delivered += 1;
                 }

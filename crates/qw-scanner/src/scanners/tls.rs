@@ -1,11 +1,11 @@
+use crate::registry::{Scanner, ScannerError};
+use crate::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
+use rustls::ClientConfig;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_rustls::TlsConnector;
-use rustls::ClientConfig;
-use crate::types::*;
-use crate::registry::{Scanner, ScannerError};
 
 /// Install the ring CryptoProvider as the process default exactly once.
 fn ensure_crypto_provider() {
@@ -28,16 +28,25 @@ impl TlsScanner {
     fn classify_cipher_suite(name: &str) -> PqcStatus {
         let name_upper = name.to_uppercase();
         // Check hybrid first: hybrid names contain PQC algorithm names (e.g. X25519_KYBER contains KYBER)
-        if name_upper.contains("X25519_KYBER") || name_upper.contains("X25519MLKEM") || name_upper.contains("X25519_ML_KEM") {
+        if name_upper.contains("X25519_KYBER")
+            || name_upper.contains("X25519MLKEM")
+            || name_upper.contains("X25519_ML_KEM")
+        {
             PqcStatus::Hybrid
-        } else if name_upper.contains("KYBER") || name_upper.contains("ML_KEM") || name_upper.contains("MLKEM") {
+        } else if name_upper.contains("KYBER")
+            || name_upper.contains("ML_KEM")
+            || name_upper.contains("MLKEM")
+        {
             PqcStatus::PqcReady
         } else if name_upper.contains("AES_256")
             || name_upper.contains("CHACHA20")
             || name_upper.contains("AES_128")
         {
             PqcStatus::ClassicalSecure
-        } else if name_upper.contains("3DES") || name_upper.contains("RC4") || name_upper.contains("NULL") {
+        } else if name_upper.contains("3DES")
+            || name_upper.contains("RC4")
+            || name_upper.contains("NULL")
+        {
             PqcStatus::ClassicalWeak
         } else {
             PqcStatus::Unknown
@@ -56,8 +65,12 @@ impl TlsScanner {
 
 #[async_trait]
 impl Scanner for TlsScanner {
-    fn id(&self) -> &str { "tls" }
-    fn display_name(&self) -> &str { "TLS Endpoint Scanner" }
+    fn id(&self) -> &str {
+        "tls"
+    }
+    fn display_name(&self) -> &str {
+        "TLS Endpoint Scanner"
+    }
 
     fn categories(&self) -> Vec<FindingCategory> {
         vec![
@@ -86,9 +99,8 @@ impl Scanner for TlsScanner {
         let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
             .map_err(|e| ScannerError::ConnectionFailed(format!("Invalid hostname: {e}")))?;
 
-        let root_store = rustls::RootCertStore::from_iter(
-            webpki_roots::TLS_SERVER_ROOTS.iter().cloned()
-        );
+        let root_store =
+            rustls::RootCertStore::from_iter(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
         // rustls 0.23 requires a process CryptoProvider. Install the ring provider
         // once; ignore the error if another part of the process already installed one.
@@ -113,7 +125,8 @@ impl Scanner for TlsScanner {
 
         let (_, conn) = tls_stream.get_ref();
 
-        let protocol_version = conn.protocol_version()
+        let protocol_version = conn
+            .protocol_version()
             .map(|v| format!("{v:?}"))
             .unwrap_or_else(|| "unknown".to_string());
 
@@ -125,7 +138,8 @@ impl Scanner for TlsScanner {
             other => other,
         };
 
-        let cipher_suite = conn.negotiated_cipher_suite()
+        let cipher_suite = conn
+            .negotiated_cipher_suite()
             .map(|cs| format!("{cs:?}"))
             .unwrap_or_else(|| "unknown".to_string());
 
@@ -134,7 +148,9 @@ impl Scanner for TlsScanner {
 
         // Determine overall PQC status (worst of TLS version and cipher)
         let overall_pqc = match (&tls_pqc, &cipher_pqc) {
-            (PqcStatus::ClassicalWeak, _) | (_, PqcStatus::ClassicalWeak) => PqcStatus::ClassicalWeak,
+            (PqcStatus::ClassicalWeak, _) | (_, PqcStatus::ClassicalWeak) => {
+                PqcStatus::ClassicalWeak
+            }
             (PqcStatus::PqcReady, PqcStatus::PqcReady) => PqcStatus::PqcReady,
             (PqcStatus::Hybrid, _) | (_, PqcStatus::Hybrid) => PqcStatus::Hybrid,
             (PqcStatus::PqcReady, _) | (_, PqcStatus::PqcReady) => PqcStatus::Hybrid,
@@ -142,13 +158,14 @@ impl Scanner for TlsScanner {
         };
 
         // TLS protocol finding
-        let (tls_severity, tls_category) = if tls_version_display.contains("1.0") || tls_version_display.contains("1.1") {
-            (FindingSeverity::High, FindingCategory::DeprecatedProtocol)
-        } else if tls_version_display.contains("1.2") {
-            (FindingSeverity::Medium, FindingCategory::ClassicalCrypto)
-        } else {
-            (FindingSeverity::Info, FindingCategory::ClassicalCrypto)
-        };
+        let (tls_severity, tls_category) =
+            if tls_version_display.contains("1.0") || tls_version_display.contains("1.1") {
+                (FindingSeverity::High, FindingCategory::DeprecatedProtocol)
+            } else if tls_version_display.contains("1.2") {
+                (FindingSeverity::Medium, FindingCategory::ClassicalCrypto)
+            } else {
+                (FindingSeverity::Info, FindingCategory::ClassicalCrypto)
+            };
 
         findings.push(Finding {
             id: uuid::Uuid::new_v4().to_string(),
@@ -210,7 +227,8 @@ impl Scanner for TlsScanner {
                     let not_after_chrono = chrono::DateTime::<Utc>::from_timestamp(
                         not_after.unix_timestamp(),
                         not_after.nanosecond(),
-                    ).unwrap_or_else(Utc::now);
+                    )
+                    .unwrap_or_else(Utc::now);
                     let now_utc = Utc::now();
                     let cert_severity = if not_after_chrono < now_utc {
                         FindingSeverity::Critical
@@ -281,37 +299,85 @@ mod tests {
 
     #[test]
     fn test_classify_cipher_suite_pqc_ready() {
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_AES_256_GCM_SHA384_MLKEM768"), PqcStatus::PqcReady);
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_KYBER768"), PqcStatus::PqcReady);
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_ML_KEM_768"), PqcStatus::PqcReady);
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_AES_256_GCM_SHA384_MLKEM768"),
+            PqcStatus::PqcReady
+        );
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_KYBER768"),
+            PqcStatus::PqcReady
+        );
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_ML_KEM_768"),
+            PqcStatus::PqcReady
+        );
     }
 
     #[test]
     fn test_classify_cipher_suite_hybrid() {
-        assert_eq!(TlsScanner::classify_cipher_suite("X25519_KYBER768"), PqcStatus::Hybrid);
-        assert_eq!(TlsScanner::classify_cipher_suite("X25519MLKEM768"), PqcStatus::Hybrid);
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("X25519_KYBER768"),
+            PqcStatus::Hybrid
+        );
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("X25519MLKEM768"),
+            PqcStatus::Hybrid
+        );
     }
 
     #[test]
     fn test_classify_cipher_suite_classical_secure() {
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_AES_256_GCM_SHA384"), PqcStatus::ClassicalSecure);
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_CHACHA20_POLY1305_SHA256"), PqcStatus::ClassicalSecure);
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_AES_128_GCM_SHA256"), PqcStatus::ClassicalSecure);
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_AES_256_GCM_SHA384"),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_CHACHA20_POLY1305_SHA256"),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_AES_128_GCM_SHA256"),
+            PqcStatus::ClassicalSecure
+        );
     }
 
     #[test]
     fn test_classify_cipher_suite_classical_weak() {
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_RSA_WITH_3DES_EDE_CBC_SHA"), PqcStatus::ClassicalWeak);
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_RSA_WITH_RC4_128_SHA"), PqcStatus::ClassicalWeak);
-        assert_eq!(TlsScanner::classify_cipher_suite("TLS_NULL_WITH_NULL_NULL"), PqcStatus::ClassicalWeak);
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_RSA_WITH_3DES_EDE_CBC_SHA"),
+            PqcStatus::ClassicalWeak
+        );
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_RSA_WITH_RC4_128_SHA"),
+            PqcStatus::ClassicalWeak
+        );
+        assert_eq!(
+            TlsScanner::classify_cipher_suite("TLS_NULL_WITH_NULL_NULL"),
+            PqcStatus::ClassicalWeak
+        );
     }
 
     #[test]
     fn test_classify_tls_version() {
-        assert_eq!(TlsScanner::classify_tls_version("TLS 1.3"), PqcStatus::ClassicalSecure);
-        assert_eq!(TlsScanner::classify_tls_version("TLS 1.2"), PqcStatus::ClassicalSecure);
-        assert_eq!(TlsScanner::classify_tls_version("TLS 1.1"), PqcStatus::ClassicalWeak);
-        assert_eq!(TlsScanner::classify_tls_version("TLS 1.0"), PqcStatus::ClassicalWeak);
-        assert_eq!(TlsScanner::classify_tls_version("SSL 3.0"), PqcStatus::Unknown);
+        assert_eq!(
+            TlsScanner::classify_tls_version("TLS 1.3"),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            TlsScanner::classify_tls_version("TLS 1.2"),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            TlsScanner::classify_tls_version("TLS 1.1"),
+            PqcStatus::ClassicalWeak
+        );
+        assert_eq!(
+            TlsScanner::classify_tls_version("TLS 1.0"),
+            PqcStatus::ClassicalWeak
+        );
+        assert_eq!(
+            TlsScanner::classify_tls_version("SSL 3.0"),
+            PqcStatus::Unknown
+        );
     }
 }

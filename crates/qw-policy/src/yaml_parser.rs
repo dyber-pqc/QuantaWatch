@@ -1,6 +1,6 @@
-use std::path::Path;
 use crate::types::PolicyConfig;
 use crate::PolicyError;
+use std::path::Path;
 
 /// Load a policy configuration from a YAML file.
 pub fn load_policy(path: &Path) -> Result<PolicyConfig, PolicyError> {
@@ -27,9 +27,9 @@ fn validate_policy(config: &PolicyConfig) -> Result<(), PolicyError> {
         // Validate no overlap between allowed and blocked tools
         for tool in &agent.allowed_tools {
             if agent.blocked_tools.contains(tool) && tool != "*" {
-                return Err(PolicyError::InvalidPolicy(
-                    format!("agent '{name}': tool '{tool}' is both allowed and blocked")
-                ));
+                return Err(PolicyError::InvalidPolicy(format!(
+                    "agent '{name}': tool '{tool}' is both allowed and blocked"
+                )));
             }
         }
     }

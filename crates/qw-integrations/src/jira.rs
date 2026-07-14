@@ -1,8 +1,8 @@
+use crate::registry::{Integration, IntegrationError};
+use crate::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
-use qw_scanner::{ScanTarget, Finding, FindingSeverity};
-use crate::types::*;
-use crate::registry::{Integration, IntegrationError};
+use qw_scanner::{Finding, FindingSeverity, ScanTarget};
 
 pub struct JiraIntegration {
     id: String,
@@ -40,22 +40,33 @@ impl JiraIntegration {
 
 #[async_trait]
 impl Integration for JiraIntegration {
-    fn id(&self) -> &str { &self.id }
-    fn display_name(&self) -> &str { "Jira" }
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn display_name(&self) -> &str {
+        "Jira"
+    }
 
     fn capabilities(&self) -> Vec<IntegrationCapability> {
-        vec![IntegrationCapability::CreateRemediation, IntegrationCapability::SyncStatus]
+        vec![
+            IntegrationCapability::CreateRemediation,
+            IntegrationCapability::SyncStatus,
+        ]
     }
 
     async fn test_connection(&self) -> Result<ConnectionStatus, IntegrationError> {
-        let resp = self.client.get(format!("{}/rest/api/3/myself", self.base_url))
+        let resp = self
+            .client
+            .get(format!("{}/rest/api/3/myself", self.base_url))
             .basic_auth(&self.email, Some(&self.token))
             .header("Accept", "application/json")
             .send()
             .await?;
 
         if resp.status().is_success() {
-            let user: serde_json::Value = resp.json().await
+            let user: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
             Ok(ConnectionStatus {
                 connected: true,
@@ -79,20 +90,34 @@ impl Integration for JiraIntegration {
         ))
     }
 
-    async fn remediation_status(&self, external_id: &str) -> Result<TicketStatus, IntegrationError> {
+    async fn remediation_status(
+        &self,
+        external_id: &str,
+    ) -> Result<TicketStatus, IntegrationError> {
         use base64::Engine;
-        let auth = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", self.email, self.token));
-        let v: serde_json::Value = self.client
-            .get(format!("{}/rest/api/3/issue/{}?fields=status", self.base_url, external_id))
+        let auth = base64::engine::general_purpose::STANDARD
+            .encode(format!("{}:{}", self.email, self.token));
+        let v: serde_json::Value = self
+            .client
+            .get(format!(
+                "{}/rest/api/3/issue/{}?fields=status",
+                self.base_url, external_id
+            ))
             .header("Authorization", format!("Basic {auth}"))
             .header("Accept", "application/json")
-            .send().await?.json().await.map_err(|e| IntegrationError::ApiError(e.to_string()))?;
-        Ok(match v["fields"]["status"]["statusCategory"]["key"].as_str() {
-            Some("done") => TicketStatus::Resolved,
-            Some("indeterminate") => TicketStatus::InProgress,
-            Some("new") => TicketStatus::Open,
-            _ => TicketStatus::Unknown,
-        })
+            .send()
+            .await?
+            .json()
+            .await
+            .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
+        Ok(
+            match v["fields"]["status"]["statusCategory"]["key"].as_str() {
+                Some("done") => TicketStatus::Resolved,
+                Some("indeterminate") => TicketStatus::InProgress,
+                Some("new") => TicketStatus::Open,
+                _ => TicketStatus::Unknown,
+            },
+        )
     }
 
     async fn create_remediation(
@@ -100,14 +125,18 @@ impl Integration for JiraIntegration {
         finding: &Finding,
         opts: &RemediationOpts,
     ) -> Result<RemediationTicket, IntegrationError> {
-        let project = opts.project.as_deref()
+        let project = opts
+            .project
+            .as_deref()
             .or(self.default_project.as_deref())
-            .ok_or_else(|| IntegrationError::NotConfigured(
-                "No Jira project specified".to_string(),
-            ))?;
+            .ok_or_else(|| {
+                IntegrationError::NotConfigured("No Jira project specified".to_string())
+            })?;
 
         let priority = Self::severity_to_priority(&finding.severity);
-        let remediation_text = finding.remediation.as_deref()
+        let remediation_text = finding
+            .remediation
+            .as_deref()
             .unwrap_or("Review and remediate the cryptographic finding.");
 
         let description = format!(
@@ -153,7 +182,9 @@ impl Integration for JiraIntegration {
             }
         });
 
-        let resp = self.client.post(format!("{}/rest/api/3/issue", self.base_url))
+        let resp = self
+            .client
+            .post(format!("{}/rest/api/3/issue", self.base_url))
             .basic_auth(&self.email, Some(&self.token))
             .header("Content-Type", "application/json")
             .json(&issue_body)
@@ -162,12 +193,14 @@ impl Integration for JiraIntegration {
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(IntegrationError::ApiError(
-                format!("Failed to create issue: {body}"),
-            ));
+            return Err(IntegrationError::ApiError(format!(
+                "Failed to create issue: {body}"
+            )));
         }
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
 
         let issue_key = result["key"].as_str().unwrap_or_default().to_string();
@@ -191,10 +224,25 @@ mod tests {
 
     #[test]
     fn test_severity_to_priority() {
-        assert_eq!(JiraIntegration::severity_to_priority(&FindingSeverity::Critical), "Highest");
-        assert_eq!(JiraIntegration::severity_to_priority(&FindingSeverity::High), "High");
-        assert_eq!(JiraIntegration::severity_to_priority(&FindingSeverity::Medium), "Medium");
-        assert_eq!(JiraIntegration::severity_to_priority(&FindingSeverity::Low), "Low");
-        assert_eq!(JiraIntegration::severity_to_priority(&FindingSeverity::Info), "Lowest");
+        assert_eq!(
+            JiraIntegration::severity_to_priority(&FindingSeverity::Critical),
+            "Highest"
+        );
+        assert_eq!(
+            JiraIntegration::severity_to_priority(&FindingSeverity::High),
+            "High"
+        );
+        assert_eq!(
+            JiraIntegration::severity_to_priority(&FindingSeverity::Medium),
+            "Medium"
+        );
+        assert_eq!(
+            JiraIntegration::severity_to_priority(&FindingSeverity::Low),
+            "Low"
+        );
+        assert_eq!(
+            JiraIntegration::severity_to_priority(&FindingSeverity::Info),
+            "Lowest"
+        );
     }
 }

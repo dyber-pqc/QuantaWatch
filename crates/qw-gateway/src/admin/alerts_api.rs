@@ -1,6 +1,10 @@
 //! Alerts admin API.
 
-use axum::{extract::{State, Query}, response::IntoResponse, Extension, Json};
+use axum::{
+    extract::{Query, State},
+    response::IntoResponse,
+    Extension, Json,
+};
 use serde::Deserialize;
 use serde_json::json;
 

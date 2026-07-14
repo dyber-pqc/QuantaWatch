@@ -1,13 +1,12 @@
 use axum::{
-    extract::{State, Path, Query},
-    response::IntoResponse,
-    Extension,
-    Json,
+    extract::{Path, Query, State},
     http::StatusCode,
+    response::IntoResponse,
+    Extension, Json,
 };
+use qw_scanner::ScanTarget;
 use serde::Deserialize;
 use serde_json::json;
-use qw_scanner::ScanTarget;
 
 use crate::auth::{tenant_of, AuthContext};
 use crate::state::AppState;
@@ -68,23 +67,27 @@ pub async fn trigger_scan(
             state.store.record_scan(&tenant, result, &target);
 
             // Audit log
-            let _ = state.audit_logger.log(
-                "system",
-                qw_audit::AuditEvent::ScanCompleted {
-                    scan_id: result.target_id.clone(),
-                    scanner_id: result.scanner_id.clone(),
-                    target: target.address.clone(),
-                    finding_count: result.findings.len() as u32,
-                    status: format!("{:?}", result.status),
-                },
-            ).await;
+            let _ = state
+                .audit_logger
+                .log(
+                    "system",
+                    qw_audit::AuditEvent::ScanCompleted {
+                        scan_id: result.target_id.clone(),
+                        scanner_id: result.scanner_id.clone(),
+                        target: target.address.clone(),
+                        finding_count: result.findings.len() as u32,
+                        status: format!("{:?}", result.status),
+                    },
+                )
+                .await;
         }
 
         all_results.extend(results);
     }
 
     // Recompute posture and append a history snapshot.
-    let summary = crate::background::recompute_and_snapshot(&state, &tenant, &all_results, "manual").await;
+    let summary =
+        crate::background::recompute_and_snapshot(&state, &tenant, &all_results, "manual").await;
     crate::background::evaluate_findings_alerts(&state, &tenant, &all_results).await;
 
     Json(json!({
@@ -107,9 +110,14 @@ pub async fn get_scan(
             Json(json!({
                 "scan": scan,
                 "findings": findings,
-            })).into_response()
+            }))
+            .into_response()
         }
-        None => (StatusCode::NOT_FOUND, Json(json!({"error": "Scan not found"}))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Scan not found"})),
+        )
+            .into_response(),
     }
 }
 

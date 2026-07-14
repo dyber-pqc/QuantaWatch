@@ -73,8 +73,10 @@ pub async fn sync_assets(state: &AppState, tenant: &str) -> (usize, usize) {
 
     for mut asset in assets {
         // Scan anything with a host:port TLS surface.
-        if matches!(asset.kind.as_str(), "tls_endpoint" | "k8s_ingress" | "load_balancer" | "certificate")
-            && asset.address.contains(':')
+        if matches!(
+            asset.kind.as_str(),
+            "tls_endpoint" | "k8s_ingress" | "load_balancer" | "certificate"
+        ) && asset.address.contains(':')
         {
             let target = ScanTarget::tls(&asset.address);
             let results = state.scanner_registry.scan_all(&target).await;
@@ -82,7 +84,11 @@ pub async fn sync_assets(state: &AppState, tenant: &str) -> (usize, usize) {
                 // Persist the findings under this tenant too (feeds compliance/graph).
                 state.store.record_scan(tenant, r, &target);
                 // Derive the asset's channel status from the TLS connection finding.
-                if let Some(f) = r.findings.iter().find(|f| f.metadata.contains_key("tls_version")) {
+                if let Some(f) = r
+                    .findings
+                    .iter()
+                    .find(|f| f.metadata.contains_key("tls_version"))
+                {
                     asset.pqc_status = f.pqc_status.to_string();
                     asset.tls_version = f.metadata.get("tls_version").cloned();
                 }

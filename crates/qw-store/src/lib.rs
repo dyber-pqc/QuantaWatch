@@ -62,7 +62,12 @@ pub struct AlertEvent {
 }
 
 impl AlertEvent {
-    pub fn new(kind: &str, severity: AlertSeverity, title: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(
+        kind: &str,
+        severity: AlertSeverity,
+        title: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             timestamp: Utc::now(),
@@ -207,13 +212,17 @@ impl Store {
             CREATE INDEX IF NOT EXISTS idx_remediations_tenant ON remediations(tenant);
             "#,
         )?;
-        Ok(Self { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Self {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     /// In-memory store for tests.
     pub fn open_in_memory() -> anyhow::Result<Self> {
         let conn = Connection::open_in_memory()?;
-        let store = Self { conn: Arc::new(Mutex::new(conn)) };
+        let store = Self {
+            conn: Arc::new(Mutex::new(conn)),
+        };
         store.conn.lock().unwrap().execute_batch(
             r#"
             CREATE TABLE scans (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, completed_at TEXT, data TEXT NOT NULL);
@@ -231,7 +240,12 @@ impl Store {
         Ok(store)
     }
 
-    fn list_json<T: for<'de> Deserialize<'de>>(&self, sql: &str, tenant: &str, limit: usize) -> Vec<T> {
+    fn list_json<T: for<'de> Deserialize<'de>>(
+        &self,
+        sql: &str,
+        tenant: &str,
+        limit: usize,
+    ) -> Vec<T> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
@@ -267,7 +281,12 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute(
             "INSERT OR REPLACE INTO scans (id, tenant, completed_at, data) VALUES (?1, ?2, ?3, ?4)",
-            params![record.id, tenant, record.completed_at.to_rfc3339(), serde_json::to_string(&record).unwrap_or_default()],
+            params![
+                record.id,
+                tenant,
+                record.completed_at.to_rfc3339(),
+                serde_json::to_string(&record).unwrap_or_default()
+            ],
         );
         for finding in &result.findings {
             let fr = FindingRecord {
@@ -292,7 +311,11 @@ impl Store {
     }
 
     pub fn list_scans(&self, tenant: &str, limit: usize) -> Vec<ScanRecord> {
-        self.list_json("SELECT data FROM scans WHERE tenant = ?1 ORDER BY completed_at DESC LIMIT ?2", tenant, limit)
+        self.list_json(
+            "SELECT data FROM scans WHERE tenant = ?1 ORDER BY completed_at DESC LIMIT ?2",
+            tenant,
+            limit,
+        )
     }
 
     pub fn get_scan(&self, tenant: &str, id: &str) -> Option<ScanRecord> {
@@ -308,19 +331,28 @@ impl Store {
 
     pub fn findings_for_scan(&self, tenant: &str, scan_id: &str) -> Vec<FindingRecord> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = match conn.prepare("SELECT data FROM findings WHERE tenant = ?1 AND scan_id = ?2 ORDER BY seq") {
+        let mut stmt = match conn
+            .prepare("SELECT data FROM findings WHERE tenant = ?1 AND scan_id = ?2 ORDER BY seq")
+        {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
         let rows = stmt.query_map(params![tenant, scan_id], |row| row.get::<_, String>(0));
         match rows {
-            Ok(rows) => rows.filter_map(|r| r.ok()).filter_map(|j| serde_json::from_str(&j).ok()).collect(),
+            Ok(rows) => rows
+                .filter_map(|r| r.ok())
+                .filter_map(|j| serde_json::from_str(&j).ok())
+                .collect(),
             Err(_) => Vec::new(),
         }
     }
 
     pub fn all_findings(&self, tenant: &str) -> Vec<FindingRecord> {
-        self.list_json("SELECT data FROM findings WHERE tenant = ?1 ORDER BY seq LIMIT ?2", tenant, 1_000_000)
+        self.list_json(
+            "SELECT data FROM findings WHERE tenant = ?1 ORDER BY seq LIMIT ?2",
+            tenant,
+            1_000_000,
+        )
     }
 
     pub fn get_finding(&self, tenant: &str, id: &str) -> Option<FindingRecord> {
@@ -340,10 +372,16 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         // Skip if identical to the most recent snapshot for this tenant.
         let last: Option<String> = conn
-            .query_row("SELECT data FROM posture WHERE tenant = ?1 ORDER BY seq DESC LIMIT 1", params![tenant], |r| r.get(0))
+            .query_row(
+                "SELECT data FROM posture WHERE tenant = ?1 ORDER BY seq DESC LIMIT 1",
+                params![tenant],
+                |r| r.get(0),
+            )
             .ok();
         if let Some(prev) = last.and_then(|j| serde_json::from_str::<PostureSnapshot>(&j).ok()) {
-            if (prev.overall_score - snap.overall_score).abs() < f64::EPSILON && prev.total_assets == snap.total_assets {
+            if (prev.overall_score - snap.overall_score).abs() < f64::EPSILON
+                && prev.total_assets == snap.total_assets
+            {
                 return;
             }
         }
@@ -354,17 +392,24 @@ impl Store {
     }
 
     pub fn posture_history(&self, tenant: &str, limit: usize) -> Vec<PostureSnapshot> {
-        let mut v: Vec<PostureSnapshot> =
-            self.list_json("SELECT data FROM posture WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2", tenant, limit);
+        let mut v: Vec<PostureSnapshot> = self.list_json(
+            "SELECT data FROM posture WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2",
+            tenant,
+            limit,
+        );
         v.reverse(); // chronological
         v
     }
 
     pub fn latest_posture(&self, tenant: &str) -> Option<PostureSnapshot> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT data FROM posture WHERE tenant = ?1 ORDER BY seq DESC LIMIT 1", params![tenant], |r| r.get::<_, String>(0))
-            .ok()
-            .and_then(|j| serde_json::from_str(&j).ok())
+        conn.query_row(
+            "SELECT data FROM posture WHERE tenant = ?1 ORDER BY seq DESC LIMIT 1",
+            params![tenant],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|j| serde_json::from_str(&j).ok())
     }
 
     // ---- Remediations ----
@@ -378,7 +423,11 @@ impl Store {
     }
 
     pub fn list_remediations(&self, tenant: &str) -> Vec<RemediationTicket> {
-        self.list_json("SELECT data FROM remediations WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2", tenant, 1000)
+        self.list_json(
+            "SELECT data FROM remediations WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2",
+            tenant,
+            1000,
+        )
     }
 
     // ---- Alerts ----
@@ -392,7 +441,11 @@ impl Store {
     }
 
     pub fn recent_alerts(&self, tenant: &str, limit: usize) -> Vec<AlertEvent> {
-        self.list_json("SELECT data FROM alerts WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2", tenant, limit)
+        self.list_json(
+            "SELECT data FROM alerts WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2",
+            tenant,
+            limit,
+        )
     }
 
     // ---- Sessions ----
@@ -401,17 +454,32 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute(
             "INSERT OR REPLACE INTO sessions (session_id, tenant, data) VALUES (?1, ?2, ?3)",
-            params![s.session_id, tenant, serde_json::to_string(s).unwrap_or_default()],
+            params![
+                s.session_id,
+                tenant,
+                serde_json::to_string(s).unwrap_or_default()
+            ],
         );
     }
 
     pub fn list_sessions(&self, tenant: &str, limit: usize) -> Vec<SessionRow> {
-        self.list_json("SELECT data FROM sessions WHERE tenant = ?1 ORDER BY rowid DESC LIMIT ?2", tenant, limit)
+        self.list_json(
+            "SELECT data FROM sessions WHERE tenant = ?1 ORDER BY rowid DESC LIMIT ?2",
+            tenant,
+            limit,
+        )
     }
 
     // ---- Observed flows (blast radius) ----
 
-    pub fn record_flow(&self, tenant: &str, agent: &str, provider: &str, sensitive: bool, threat: bool) {
+    pub fn record_flow(
+        &self,
+        tenant: &str,
+        agent: &str,
+        provider: &str,
+        sensitive: bool,
+        threat: bool,
+    ) {
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute(
             "INSERT INTO flows (tenant, agent, provider, requests, sensitive, threats, last_seen)
@@ -421,7 +489,14 @@ impl Store {
                sensitive = sensitive + ?4,
                threats = threats + ?5,
                last_seen = ?6",
-            params![tenant, agent, provider, sensitive as i64, threat as i64, Utc::now().to_rfc3339()],
+            params![
+                tenant,
+                agent,
+                provider,
+                sensitive as i64,
+                threat as i64,
+                Utc::now().to_rfc3339()
+            ],
         );
     }
 
@@ -441,7 +516,9 @@ impl Store {
                 requests: row.get::<_, i64>(2)? as u64,
                 sensitive: row.get::<_, i64>(3)? as u64,
                 threats: row.get::<_, i64>(4)? as u64,
-                last_seen: chrono::DateTime::parse_from_rfc3339(&last).map(|d| d.with_timezone(&Utc)).unwrap_or_else(|_| Utc::now()),
+                last_seen: chrono::DateTime::parse_from_rfc3339(&last)
+                    .map(|d| d.with_timezone(&Utc))
+                    .unwrap_or_else(|_| Utc::now()),
             })
         });
         match rows {
@@ -461,8 +538,11 @@ impl Store {
     }
 
     pub fn slo_history(&self, tenant: &str, limit: usize) -> Vec<SloSnapshot> {
-        let mut v: Vec<SloSnapshot> =
-            self.list_json("SELECT data FROM slo_snapshots WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2", tenant, limit);
+        let mut v: Vec<SloSnapshot> = self.list_json(
+            "SELECT data FROM slo_snapshots WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2",
+            tenant,
+            limit,
+        );
         v.reverse();
         v
     }
@@ -473,12 +553,20 @@ impl Store {
         let conn = self.conn.lock().unwrap();
         let _ = conn.execute(
             "INSERT OR REPLACE INTO assets (id, tenant, data) VALUES (?1, ?2, ?3)",
-            params![asset.id, tenant, serde_json::to_string(asset).unwrap_or_default()],
+            params![
+                asset.id,
+                tenant,
+                serde_json::to_string(asset).unwrap_or_default()
+            ],
         );
     }
 
     pub fn list_assets(&self, tenant: &str) -> Vec<AssetRow> {
-        self.list_json("SELECT data FROM assets WHERE tenant = ?1 ORDER BY id LIMIT ?2", tenant, 100_000)
+        self.list_json(
+            "SELECT data FROM assets WHERE tenant = ?1 ORDER BY id LIMIT ?2",
+            tenant,
+            100_000,
+        )
     }
 
     // ---- Graph snapshots (drift/timeline) ----
@@ -492,17 +580,24 @@ impl Store {
     }
 
     pub fn graph_timeline(&self, tenant: &str, limit: usize) -> Vec<GraphSnapshot> {
-        let mut v: Vec<GraphSnapshot> =
-            self.list_json("SELECT data FROM graph_snapshots WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2", tenant, limit);
+        let mut v: Vec<GraphSnapshot> = self.list_json(
+            "SELECT data FROM graph_snapshots WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2",
+            tenant,
+            limit,
+        );
         v.reverse();
         v
     }
 
     pub fn latest_graph_snapshot(&self, tenant: &str) -> Option<GraphSnapshot> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT data FROM graph_snapshots WHERE tenant = ?1 ORDER BY seq DESC LIMIT 1", params![tenant], |r| r.get::<_, String>(0))
-            .ok()
-            .and_then(|j| serde_json::from_str(&j).ok())
+        conn.query_row(
+            "SELECT data FROM graph_snapshots WHERE tenant = ?1 ORDER BY seq DESC LIMIT 1",
+            params![tenant],
+            |r| r.get::<_, String>(0),
+        )
+        .ok()
+        .and_then(|j| serde_json::from_str(&j).ok())
     }
 
     /// Distinct tenants that have any data (for admin/cross-tenant views).
@@ -564,10 +659,16 @@ mod tests {
     #[test]
     fn alerts_roundtrip_and_isolate() {
         let s = Store::open_in_memory().unwrap();
-        s.record_alert("a", &AlertEvent::new("test", AlertSeverity::Critical, "t", "m"));
+        s.record_alert(
+            "a",
+            &AlertEvent::new("test", AlertSeverity::Critical, "t", "m"),
+        );
         s.record_alert("b", &AlertEvent::new("test", AlertSeverity::Info, "t", "m"));
         assert_eq!(s.recent_alerts("a", 10).len(), 1);
-        assert_eq!(s.recent_alerts("a", 10)[0].severity, AlertSeverity::Critical);
+        assert_eq!(
+            s.recent_alerts("a", 10)[0].severity,
+            AlertSeverity::Critical
+        );
         assert_eq!(s.recent_alerts("b", 10).len(), 1);
         assert_eq!(s.tenants().len(), 0); // alerts not counted in tenants()
     }

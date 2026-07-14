@@ -1,9 +1,9 @@
-﻿use async_trait::async_trait;
+use crate::registry::{Scanner, ScannerError};
+use crate::types::*;
+use async_trait::async_trait;
 use chrono::Utc;
 use regex::Regex;
 use std::collections::HashMap;
-use crate::types::*;
-use crate::registry::{Scanner, ScannerError};
 
 /// Known crypto libraries and their PQC readiness status
 struct CryptoLib {
@@ -14,44 +14,178 @@ struct CryptoLib {
 
 const CRYPTO_LIBS: &[CryptoLib] = &[
     // PQC-ready libraries
-    CryptoLib { name: "ml-dsa", pqc_status: PqcStatus::PqcReady, description: "NIST ML-DSA post-quantum signature scheme" },
-    CryptoLib { name: "ml-kem", pqc_status: PqcStatus::PqcReady, description: "NIST ML-KEM post-quantum key encapsulation" },
-    CryptoLib { name: "pqcrypto", pqc_status: PqcStatus::PqcReady, description: "Post-quantum cryptography library" },
-    CryptoLib { name: "oqs", pqc_status: PqcStatus::PqcReady, description: "Open Quantum Safe library" },
-    CryptoLib { name: "liboqs", pqc_status: PqcStatus::PqcReady, description: "Open Quantum Safe C library" },
-    CryptoLib { name: "pqc", pqc_status: PqcStatus::PqcReady, description: "Post-quantum cryptography" },
-    CryptoLib { name: "crystals-kyber", pqc_status: PqcStatus::PqcReady, description: "CRYSTALS-Kyber KEM" },
-    CryptoLib { name: "crystals-dilithium", pqc_status: PqcStatus::PqcReady, description: "CRYSTALS-Dilithium signature" },
-
+    CryptoLib {
+        name: "ml-dsa",
+        pqc_status: PqcStatus::PqcReady,
+        description: "NIST ML-DSA post-quantum signature scheme",
+    },
+    CryptoLib {
+        name: "ml-kem",
+        pqc_status: PqcStatus::PqcReady,
+        description: "NIST ML-KEM post-quantum key encapsulation",
+    },
+    CryptoLib {
+        name: "pqcrypto",
+        pqc_status: PqcStatus::PqcReady,
+        description: "Post-quantum cryptography library",
+    },
+    CryptoLib {
+        name: "oqs",
+        pqc_status: PqcStatus::PqcReady,
+        description: "Open Quantum Safe library",
+    },
+    CryptoLib {
+        name: "liboqs",
+        pqc_status: PqcStatus::PqcReady,
+        description: "Open Quantum Safe C library",
+    },
+    CryptoLib {
+        name: "pqc",
+        pqc_status: PqcStatus::PqcReady,
+        description: "Post-quantum cryptography",
+    },
+    CryptoLib {
+        name: "crystals-kyber",
+        pqc_status: PqcStatus::PqcReady,
+        description: "CRYSTALS-Kyber KEM",
+    },
+    CryptoLib {
+        name: "crystals-dilithium",
+        pqc_status: PqcStatus::PqcReady,
+        description: "CRYSTALS-Dilithium signature",
+    },
     // Classical secure libraries
-    CryptoLib { name: "openssl", pqc_status: PqcStatus::ClassicalSecure, description: "OpenSSL cryptographic library" },
-    CryptoLib { name: "ring", pqc_status: PqcStatus::ClassicalSecure, description: "Safe, fast crypto using Rust" },
-    CryptoLib { name: "rustls", pqc_status: PqcStatus::ClassicalSecure, description: "Modern TLS library in Rust" },
-    CryptoLib { name: "boring", pqc_status: PqcStatus::ClassicalSecure, description: "BoringSSL bindings" },
-    CryptoLib { name: "boringssl", pqc_status: PqcStatus::ClassicalSecure, description: "BoringSSL" },
-    CryptoLib { name: "mbedtls", pqc_status: PqcStatus::ClassicalSecure, description: "Mbed TLS library" },
-    CryptoLib { name: "libsodium", pqc_status: PqcStatus::ClassicalSecure, description: "Modern crypto library" },
-    CryptoLib { name: "nacl", pqc_status: PqcStatus::ClassicalSecure, description: "Networking and Cryptography library" },
-    CryptoLib { name: "tweetnacl", pqc_status: PqcStatus::ClassicalSecure, description: "Compact NaCl implementation" },
-    CryptoLib { name: "bcrypt", pqc_status: PqcStatus::ClassicalSecure, description: "Bcrypt password hashing" },
-    CryptoLib { name: "argon2", pqc_status: PqcStatus::ClassicalSecure, description: "Argon2 password hashing" },
-    CryptoLib { name: "scrypt", pqc_status: PqcStatus::ClassicalSecure, description: "Scrypt key derivation" },
-    CryptoLib { name: "aes-gcm", pqc_status: PqcStatus::ClassicalSecure, description: "AES-GCM authenticated encryption" },
-    CryptoLib { name: "chacha20poly1305", pqc_status: PqcStatus::ClassicalSecure, description: "ChaCha20-Poly1305 AEAD" },
-    CryptoLib { name: "ed25519-dalek", pqc_status: PqcStatus::ClassicalSecure, description: "Ed25519 signatures" },
-    CryptoLib { name: "x25519-dalek", pqc_status: PqcStatus::ClassicalSecure, description: "X25519 key exchange" },
-    CryptoLib { name: "p256", pqc_status: PqcStatus::ClassicalSecure, description: "NIST P-256 elliptic curve" },
-    CryptoLib { name: "p384", pqc_status: PqcStatus::ClassicalSecure, description: "NIST P-384 elliptic curve" },
-    CryptoLib { name: "cryptography", pqc_status: PqcStatus::ClassicalSecure, description: "Python cryptography package" },
-    CryptoLib { name: "crypto-js", pqc_status: PqcStatus::ClassicalSecure, description: "JavaScript crypto library" },
-    CryptoLib { name: "node-forge", pqc_status: PqcStatus::ClassicalSecure, description: "JavaScript TLS/crypto library" },
-    CryptoLib { name: "jose", pqc_status: PqcStatus::ClassicalSecure, description: "JavaScript JOSE library" },
-
+    CryptoLib {
+        name: "openssl",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "OpenSSL cryptographic library",
+    },
+    CryptoLib {
+        name: "ring",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Safe, fast crypto using Rust",
+    },
+    CryptoLib {
+        name: "rustls",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Modern TLS library in Rust",
+    },
+    CryptoLib {
+        name: "boring",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "BoringSSL bindings",
+    },
+    CryptoLib {
+        name: "boringssl",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "BoringSSL",
+    },
+    CryptoLib {
+        name: "mbedtls",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Mbed TLS library",
+    },
+    CryptoLib {
+        name: "libsodium",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Modern crypto library",
+    },
+    CryptoLib {
+        name: "nacl",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Networking and Cryptography library",
+    },
+    CryptoLib {
+        name: "tweetnacl",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Compact NaCl implementation",
+    },
+    CryptoLib {
+        name: "bcrypt",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Bcrypt password hashing",
+    },
+    CryptoLib {
+        name: "argon2",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Argon2 password hashing",
+    },
+    CryptoLib {
+        name: "scrypt",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Scrypt key derivation",
+    },
+    CryptoLib {
+        name: "aes-gcm",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "AES-GCM authenticated encryption",
+    },
+    CryptoLib {
+        name: "chacha20poly1305",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "ChaCha20-Poly1305 AEAD",
+    },
+    CryptoLib {
+        name: "ed25519-dalek",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Ed25519 signatures",
+    },
+    CryptoLib {
+        name: "x25519-dalek",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "X25519 key exchange",
+    },
+    CryptoLib {
+        name: "p256",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "NIST P-256 elliptic curve",
+    },
+    CryptoLib {
+        name: "p384",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "NIST P-384 elliptic curve",
+    },
+    CryptoLib {
+        name: "cryptography",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "Python cryptography package",
+    },
+    CryptoLib {
+        name: "crypto-js",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "JavaScript crypto library",
+    },
+    CryptoLib {
+        name: "node-forge",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "JavaScript TLS/crypto library",
+    },
+    CryptoLib {
+        name: "jose",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "JavaScript JOSE library",
+    },
     // Classical weak / deprecated
-    CryptoLib { name: "pycrypto", pqc_status: PqcStatus::ClassicalWeak, description: "Unmaintained Python crypto (use pycryptodome)" },
-    CryptoLib { name: "pydes", pqc_status: PqcStatus::ClassicalWeak, description: "DES encryption (weak)" },
-    CryptoLib { name: "des", pqc_status: PqcStatus::ClassicalWeak, description: "DES encryption (weak, 56-bit)" },
-    CryptoLib { name: "rc4", pqc_status: PqcStatus::ClassicalWeak, description: "RC4 stream cipher (broken)" },
+    CryptoLib {
+        name: "pycrypto",
+        pqc_status: PqcStatus::ClassicalWeak,
+        description: "Unmaintained Python crypto (use pycryptodome)",
+    },
+    CryptoLib {
+        name: "pydes",
+        pqc_status: PqcStatus::ClassicalWeak,
+        description: "DES encryption (weak)",
+    },
+    CryptoLib {
+        name: "des",
+        pqc_status: PqcStatus::ClassicalWeak,
+        description: "DES encryption (weak, 56-bit)",
+    },
+    CryptoLib {
+        name: "rc4",
+        pqc_status: PqcStatus::ClassicalWeak,
+        description: "RC4 stream cipher (broken)",
+    },
 ];
 
 pub struct DependencyScanner;
@@ -98,9 +232,15 @@ impl DependencyScanner {
                     let normalized = dep_name.to_lowercase().replace('_', "-");
                     if let Some(crypto_lib) = CRYPTO_LIBS.iter().find(|cl| cl.name == normalized) {
                         let (severity, category) = match &crypto_lib.pqc_status {
-                            PqcStatus::PqcReady => (FindingSeverity::Info, FindingCategory::PqcReady),
-                            PqcStatus::ClassicalSecure => (FindingSeverity::Medium, FindingCategory::ClassicalCrypto),
-                            PqcStatus::ClassicalWeak => (FindingSeverity::High, FindingCategory::WeakAlgorithm),
+                            PqcStatus::PqcReady => {
+                                (FindingSeverity::Info, FindingCategory::PqcReady)
+                            }
+                            PqcStatus::ClassicalSecure => {
+                                (FindingSeverity::Medium, FindingCategory::ClassicalCrypto)
+                            }
+                            PqcStatus::ClassicalWeak => {
+                                (FindingSeverity::High, FindingCategory::WeakAlgorithm)
+                            }
                             _ => (FindingSeverity::Low, FindingCategory::ClassicalCrypto),
                         };
 
@@ -156,9 +296,15 @@ impl DependencyScanner {
                     let normalized = dep_name.to_lowercase().replace('_', "-");
                     if let Some(crypto_lib) = CRYPTO_LIBS.iter().find(|cl| cl.name == normalized) {
                         let (severity, category) = match &crypto_lib.pqc_status {
-                            PqcStatus::PqcReady => (FindingSeverity::Info, FindingCategory::PqcReady),
-                            PqcStatus::ClassicalSecure => (FindingSeverity::Medium, FindingCategory::ClassicalCrypto),
-                            PqcStatus::ClassicalWeak => (FindingSeverity::High, FindingCategory::WeakAlgorithm),
+                            PqcStatus::PqcReady => {
+                                (FindingSeverity::Info, FindingCategory::PqcReady)
+                            }
+                            PqcStatus::ClassicalSecure => {
+                                (FindingSeverity::Medium, FindingCategory::ClassicalCrypto)
+                            }
+                            PqcStatus::ClassicalWeak => {
+                                (FindingSeverity::High, FindingCategory::WeakAlgorithm)
+                            }
                             _ => (FindingSeverity::Low, FindingCategory::ClassicalCrypto),
                         };
 
@@ -225,9 +371,15 @@ impl DependencyScanner {
                     let normalized = dep_name.to_lowercase();
                     if let Some(crypto_lib) = CRYPTO_LIBS.iter().find(|cl| cl.name == normalized) {
                         let (severity, category) = match &crypto_lib.pqc_status {
-                            PqcStatus::PqcReady => (FindingSeverity::Info, FindingCategory::PqcReady),
-                            PqcStatus::ClassicalSecure => (FindingSeverity::Medium, FindingCategory::ClassicalCrypto),
-                            PqcStatus::ClassicalWeak => (FindingSeverity::High, FindingCategory::WeakAlgorithm),
+                            PqcStatus::PqcReady => {
+                                (FindingSeverity::Info, FindingCategory::PqcReady)
+                            }
+                            PqcStatus::ClassicalSecure => {
+                                (FindingSeverity::Medium, FindingCategory::ClassicalCrypto)
+                            }
+                            PqcStatus::ClassicalWeak => {
+                                (FindingSeverity::High, FindingCategory::WeakAlgorithm)
+                            }
                             _ => (FindingSeverity::Low, FindingCategory::ClassicalCrypto),
                         };
 
@@ -298,8 +450,12 @@ impl DependencyScanner {
                 if let Some(crypto_lib) = CRYPTO_LIBS.iter().find(|cl| cl.name == normalized) {
                     let (severity, category) = match &crypto_lib.pqc_status {
                         PqcStatus::PqcReady => (FindingSeverity::Info, FindingCategory::PqcReady),
-                        PqcStatus::ClassicalSecure => (FindingSeverity::Medium, FindingCategory::ClassicalCrypto),
-                        PqcStatus::ClassicalWeak => (FindingSeverity::High, FindingCategory::WeakAlgorithm),
+                        PqcStatus::ClassicalSecure => {
+                            (FindingSeverity::Medium, FindingCategory::ClassicalCrypto)
+                        }
+                        PqcStatus::ClassicalWeak => {
+                            (FindingSeverity::High, FindingCategory::WeakAlgorithm)
+                        }
                         _ => (FindingSeverity::Low, FindingCategory::ClassicalCrypto),
                     };
 
@@ -352,8 +508,12 @@ impl DependencyScanner {
 
 #[async_trait]
 impl Scanner for DependencyScanner {
-    fn id(&self) -> &str { "dependency" }
-    fn display_name(&self) -> &str { "Dependency Scanner" }
+    fn id(&self) -> &str {
+        "dependency"
+    }
+    fn display_name(&self) -> &str {
+        "Dependency Scanner"
+    }
 
     fn categories(&self) -> Vec<FindingCategory> {
         vec![
@@ -371,10 +531,9 @@ impl Scanner for DependencyScanner {
     async fn scan(&self, target: &ScanTarget) -> Result<ScanResult, ScannerError> {
         let started_at = Utc::now();
 
-        let file_type = Self::detect_file_type(&target.address)
-            .ok_or_else(|| ScannerError::Other(format!(
-                "Unsupported dependency file: {}", target.address
-            )))?;
+        let file_type = Self::detect_file_type(&target.address).ok_or_else(|| {
+            ScannerError::Other(format!("Unsupported dependency file: {}", target.address))
+        })?;
 
         let content = if let Some(c) = target.metadata.get("content") {
             c.clone()
@@ -409,10 +568,22 @@ mod tests {
 
     #[test]
     fn test_detect_file_type() {
-        assert_eq!(DependencyScanner::detect_file_type("Cargo.toml"), Some("cargo"));
-        assert_eq!(DependencyScanner::detect_file_type("/path/to/Cargo.toml"), Some("cargo"));
-        assert_eq!(DependencyScanner::detect_file_type("package.json"), Some("npm"));
-        assert_eq!(DependencyScanner::detect_file_type("requirements.txt"), Some("pip"));
+        assert_eq!(
+            DependencyScanner::detect_file_type("Cargo.toml"),
+            Some("cargo")
+        );
+        assert_eq!(
+            DependencyScanner::detect_file_type("/path/to/Cargo.toml"),
+            Some("cargo")
+        );
+        assert_eq!(
+            DependencyScanner::detect_file_type("package.json"),
+            Some("npm")
+        );
+        assert_eq!(
+            DependencyScanner::detect_file_type("requirements.txt"),
+            Some("pip")
+        );
         assert_eq!(DependencyScanner::detect_file_type("go.mod"), Some("go"));
         assert_eq!(DependencyScanner::detect_file_type("random.txt"), None);
     }
@@ -430,25 +601,35 @@ mod tests {
         assert_eq!(ring_finding.pqc_status, PqcStatus::ClassicalSecure);
         assert_eq!(ring_finding.severity, FindingSeverity::Medium);
 
-        let ml_dsa_finding = findings.iter().find(|f| f.title.contains("ml-dsa")).unwrap();
+        let ml_dsa_finding = findings
+            .iter()
+            .find(|f| f.title.contains("ml-dsa"))
+            .unwrap();
         assert_eq!(ml_dsa_finding.pqc_status, PqcStatus::PqcReady);
         assert_eq!(ml_dsa_finding.severity, FindingSeverity::Info);
 
-        let pycrypto_finding = findings.iter().find(|f| f.title.contains("pycrypto")).unwrap();
+        let pycrypto_finding = findings
+            .iter()
+            .find(|f| f.title.contains("pycrypto"))
+            .unwrap();
         assert_eq!(pycrypto_finding.pqc_status, PqcStatus::ClassicalWeak);
         assert_eq!(pycrypto_finding.severity, FindingSeverity::High);
     }
 
     #[test]
     fn test_parse_cargo_toml_workspace_deps() {
-        let toml_content = "[workspace.dependencies]\nml-kem = \"0.3\"\nsha3 = \"0.10\"\nring = \"0.17\"\n";
+        let toml_content =
+            "[workspace.dependencies]\nml-kem = \"0.3\"\nsha3 = \"0.10\"\nring = \"0.17\"\n";
 
         let findings = DependencyScanner::parse_cargo_toml(toml_content, "Cargo.toml");
 
         // Should find ml-kem (pqc ready) and ring (classical secure)
         assert_eq!(findings.len(), 2);
 
-        let ml_kem = findings.iter().find(|f| f.title.contains("ml-kem")).unwrap();
+        let ml_kem = findings
+            .iter()
+            .find(|f| f.title.contains("ml-kem"))
+            .unwrap();
         assert_eq!(ml_kem.pqc_status, PqcStatus::PqcReady);
     }
 
@@ -461,10 +642,16 @@ mod tests {
         // Should find crypto-js, node-forge, bcrypt
         assert_eq!(findings.len(), 3);
 
-        let crypto_js = findings.iter().find(|f| f.title.contains("crypto-js")).unwrap();
+        let crypto_js = findings
+            .iter()
+            .find(|f| f.title.contains("crypto-js"))
+            .unwrap();
         assert_eq!(crypto_js.pqc_status, PqcStatus::ClassicalSecure);
 
-        let bcrypt = findings.iter().find(|f| f.title.contains("bcrypt")).unwrap();
+        let bcrypt = findings
+            .iter()
+            .find(|f| f.title.contains("bcrypt"))
+            .unwrap();
         assert_eq!(bcrypt.pqc_status, PqcStatus::ClassicalSecure);
     }
 
@@ -477,10 +664,16 @@ mod tests {
         // Should find cryptography (classical secure) and pycrypto (classical weak)
         assert_eq!(findings.len(), 2);
 
-        let crypto = findings.iter().find(|f| f.title.contains("cryptography")).unwrap();
+        let crypto = findings
+            .iter()
+            .find(|f| f.title.contains("cryptography"))
+            .unwrap();
         assert_eq!(crypto.pqc_status, PqcStatus::ClassicalSecure);
 
-        let pycrypto = findings.iter().find(|f| f.title.contains("pycrypto")).unwrap();
+        let pycrypto = findings
+            .iter()
+            .find(|f| f.title.contains("pycrypto"))
+            .unwrap();
         assert_eq!(pycrypto.pqc_status, PqcStatus::ClassicalWeak);
         assert!(pycrypto.remediation.is_some());
     }

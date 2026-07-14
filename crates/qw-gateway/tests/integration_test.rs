@@ -127,7 +127,10 @@ async fn admin_sessions_returns_json_array() {
     let json: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
 
     // The response wraps sessions in an object: { "sessions": [...], "total": N }
-    assert!(json["sessions"].is_array(), "sessions field should be a JSON array");
+    assert!(
+        json["sessions"].is_array(),
+        "sessions field should be a JSON array"
+    );
     assert!(json["total"].is_number(), "total field should be a number");
 }
 
@@ -166,10 +169,7 @@ async fn admin_stats_returns_expected_fields() {
         json["total_tokens"].is_number(),
         "total_tokens should be a number"
     );
-    assert!(
-        json["providers"].is_array(),
-        "providers should be an array"
-    );
+    assert!(json["providers"].is_array(), "providers should be an array");
     assert!(
         json["gateway_fingerprint"].is_string(),
         "gateway_fingerprint should be a string (SHA3-256 hex)"

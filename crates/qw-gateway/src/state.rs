@@ -1,15 +1,15 @@
-use std::sync::Arc;
-use dashmap::DashMap;
 use anyhow::Result;
+use dashmap::DashMap;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use qw_crypto::GatewayIdentity;
-use qw_policy::PolicyEngine;
-use qw_monitor::SecurityMonitor;
 use qw_audit::AuditLogger;
-use qw_scanner::ScannerRegistry;
 use qw_cbom::{PostureSummary, ProviderCryptoInfo};
+use qw_crypto::GatewayIdentity;
 use qw_integrations::IntegrationRegistry;
+use qw_monitor::SecurityMonitor;
+use qw_policy::PolicyEngine;
+use qw_scanner::ScannerRegistry;
 use qw_store::Store;
 
 use crate::config::GatewayConfig;
@@ -55,11 +55,10 @@ impl AppState {
 
         // Initialize policy engine from config
         let policy_yaml = build_policy_yaml(&config);
-        let policy_engine = PolicyEngine::from_yaml(&policy_yaml)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "Failed to load policies, using empty policy");
-                PolicyEngine::from_yaml("agents: {}").unwrap()
-            });
+        let policy_engine = PolicyEngine::from_yaml(&policy_yaml).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to load policies, using empty policy");
+            PolicyEngine::from_yaml("agents: {}").unwrap()
+        });
 
         // Initialize security monitor
         let blocking_threshold = match config.monitor.blocking_threshold.as_str() {
@@ -91,7 +90,9 @@ impl AppState {
         let scanner_registry = Arc::new(qw_scanner::build_scanner_registry(&config.scanner));
 
         // Initialize integration registry
-        let integration_registry = Arc::new(qw_integrations::build_integration_registry(&config.integrations));
+        let integration_registry = Arc::new(qw_integrations::build_integration_registry(
+            &config.integrations,
+        ));
 
         // Initialize the SQLite-backed, tenant-scoped store.
         let scan_dir = std::path::PathBuf::from(&config.scanner.store_path);

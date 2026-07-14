@@ -19,11 +19,27 @@ type HmacSha256 = Hmac<Sha256>;
 /// algorithms are quantum-vulnerable; symmetric/PQC ones are safe.
 pub fn key_spec_to_pqc(spec: &str) -> PqcStatus {
     let s = spec.to_uppercase();
-    if s.contains("ML_KEM") || s.contains("ML_DSA") || s.contains("MLKEM") || s.contains("MLDSA") || s.contains("KYBER") || s.contains("DILITHIUM") {
+    if s.contains("ML_KEM")
+        || s.contains("ML_DSA")
+        || s.contains("MLKEM")
+        || s.contains("MLDSA")
+        || s.contains("KYBER")
+        || s.contains("DILITHIUM")
+    {
         PqcStatus::PqcReady
-    } else if s.contains("RSA") || s.contains("ECC") || s.contains("EC_") || s.contains("ECDSA") || s.contains("SECP") || s.contains("NIST") {
+    } else if s.contains("RSA")
+        || s.contains("ECC")
+        || s.contains("EC_")
+        || s.contains("ECDSA")
+        || s.contains("SECP")
+        || s.contains("NIST")
+    {
         PqcStatus::ClassicalSecure
-    } else if s.contains("SYMMETRIC") || s.contains("AES") || s.contains("HMAC") || s.contains("OCT") {
+    } else if s.contains("SYMMETRIC")
+        || s.contains("AES")
+        || s.contains("HMAC")
+        || s.contains("OCT")
+    {
         // Symmetric keys are quantum-resistant at adequate sizes.
         PqcStatus::PqcReady
     } else {
@@ -61,9 +77,8 @@ pub fn sigv4_authorization(
         "content-type:application/x-amz-json-1.1\nhost:{host}\nx-amz-date:{amz_date}\nx-amz-target:{amz_target}\n"
     );
     let signed_headers = "content-type;host;x-amz-date;x-amz-target";
-    let canonical_request = format!(
-        "POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}"
-    );
+    let canonical_request =
+        format!("POST\n/\n\n{canonical_headers}\n{signed_headers}\n{payload_hash}");
 
     let scope = format!("{date}/{region}/{service}/aws4_request");
     let string_to_sign = format!(
@@ -104,19 +119,34 @@ async fn discover_gcp(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<Asse
     for key_ring in &c.endpoints {
         // endpoints[] are key-ring resource paths, e.g.
         // projects/<p>/locations/<l>/keyRings/<kr>
-        let url = format!("https://cloudkms.googleapis.com/v1/{}/cryptoKeys", key_ring.trim_matches('/'));
-        if let Ok(r) = client.get(&url).header("Authorization", format!("Bearer {token}")).send().await {
+        let url = format!(
+            "https://cloudkms.googleapis.com/v1/{}/cryptoKeys",
+            key_ring.trim_matches('/')
+        );
+        if let Ok(r) = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+            .await
+        {
             if let Ok(json) = r.json::<serde_json::Value>().await {
                 for k in json["cryptoKeys"].as_array().cloned().unwrap_or_default() {
                     let name = k["name"].as_str().unwrap_or_default().to_string();
-                    let algo = k["versionTemplate"]["algorithm"].as_str().unwrap_or("UNKNOWN").to_string();
+                    let algo = k["versionTemplate"]["algorithm"]
+                        .as_str()
+                        .unwrap_or("UNKNOWN")
+                        .to_string();
                     let short = name.rsplit('/').next().unwrap_or("key").to_string();
                     out.push(AssetRow {
                         id: format!("gcp-kms-{short}"),
                         kind: "kms_key".into(),
                         address: name,
                         environment: c.environment.clone(),
-                        tags: { let mut t = c.tags.clone(); t.push(format!("algo:{algo}")); t },
+                        tags: {
+                            let mut t = c.tags.clone();
+                            t.push(format!("algo:{algo}"));
+                            t
+                        },
                         pqc_status: key_spec_to_pqc(&algo).to_string(),
                         tls_version: None,
                         last_scanned: Some(chrono::Utc::now()),
@@ -133,41 +163,91 @@ async fn discover_gcp(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<Asse
 /// Signed AWS JSON POST to `service`.`target`; returns the parsed response.
 async fn aws_post(
     client: &reqwest::Client,
-    ak: &str, sk: &str, region: &str, service: &str, target: &str, body: &str,
+    ak: &str,
+    sk: &str,
+    region: &str,
+    service: &str,
+    target: &str,
+    body: &str,
 ) -> Option<serde_json::Value> {
     let host = format!("{service}.{region}.amazonaws.com");
     let amz_date = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
     let auth = sigv4_authorization(ak, sk, region, service, &host, target, &amz_date, body);
-    let resp = client.post(format!("https://{host}/"))
+    let resp = client
+        .post(format!("https://{host}/"))
         .header("Content-Type", "application/x-amz-json-1.1")
         .header("X-Amz-Target", target)
         .header("X-Amz-Date", &amz_date)
         .header("Authorization", auth)
         .body(body.to_string())
-        .send().await.ok()?;
+        .send()
+        .await
+        .ok()?;
     resp.json::<serde_json::Value>().await.ok()
 }
 
 /// AWS: enumerate KMS keys (enriched via DescribeKey key specs) and ACM
 /// certificates, classifying each by quantum exposure.
 async fn discover_aws(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<AssetRow> {
-    let (Ok(ak), Ok(sk)) = (std::env::var("AWS_ACCESS_KEY_ID"), std::env::var("AWS_SECRET_ACCESS_KEY")) else {
+    let (Ok(ak), Ok(sk)) = (
+        std::env::var("AWS_ACCESS_KEY_ID"),
+        std::env::var("AWS_SECRET_ACCESS_KEY"),
+    ) else {
         tracing::warn!(connector = %c.name, "AWS credentials not set (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY); skipping");
         return Vec::new();
     };
-    let region = c.tags.iter().find_map(|t| t.strip_prefix("region:")).unwrap_or("us-east-1").to_string();
+    let region = c
+        .tags
+        .iter()
+        .find_map(|t| t.strip_prefix("region:"))
+        .unwrap_or("us-east-1")
+        .to_string();
     let mut out = Vec::new();
 
     // --- KMS keys, enriched with DescribeKey key specs ---
-    if let Some(json) = aws_post(client, &ak, &sk, &region, "kms", "TrentService.ListKeys", "{}").await {
-        for k in json["Keys"].as_array().cloned().unwrap_or_default().into_iter().take(200) {
+    if let Some(json) = aws_post(
+        client,
+        &ak,
+        &sk,
+        &region,
+        "kms",
+        "TrentService.ListKeys",
+        "{}",
+    )
+    .await
+    {
+        for k in json["Keys"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .take(200)
+        {
             let id = k["KeyId"].as_str().unwrap_or_default().to_string();
-            if id.is_empty() { continue; }
-            let (spec, usage) = match aws_post(client, &ak, &sk, &region, "kms", "TrentService.DescribeKey", &format!("{{\"KeyId\":\"{id}\"}}")).await {
+            if id.is_empty() {
+                continue;
+            }
+            let (spec, usage) = match aws_post(
+                client,
+                &ak,
+                &sk,
+                &region,
+                "kms",
+                "TrentService.DescribeKey",
+                &format!("{{\"KeyId\":\"{id}\"}}"),
+            )
+            .await
+            {
                 Some(d) => {
                     let m = &d["KeyMetadata"];
-                    (m["KeySpec"].as_str().or(m["CustomerMasterKeySpec"].as_str()).unwrap_or("UNKNOWN").to_string(),
-                     m["KeyUsage"].as_str().unwrap_or("").to_string())
+                    (
+                        m["KeySpec"]
+                            .as_str()
+                            .or(m["CustomerMasterKeySpec"].as_str())
+                            .unwrap_or("UNKNOWN")
+                            .to_string(),
+                        m["KeyUsage"].as_str().unwrap_or("").to_string(),
+                    )
                 }
                 None => ("UNKNOWN".to_string(), String::new()),
             };
@@ -176,7 +256,14 @@ async fn discover_aws(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<Asse
                 kind: "kms_key".into(),
                 address: format!("arn:aws:kms:{region}::key/{id}"),
                 environment: c.environment.clone(),
-                tags: { let mut t = c.tags.clone(); t.push(format!("spec:{spec}")); if !usage.is_empty() { t.push(format!("usage:{usage}")); } t },
+                tags: {
+                    let mut t = c.tags.clone();
+                    t.push(format!("spec:{spec}"));
+                    if !usage.is_empty() {
+                        t.push(format!("usage:{usage}"));
+                    }
+                    t
+                },
                 pqc_status: key_spec_to_pqc(&spec).to_string(),
                 tls_version: None,
                 last_scanned: Some(chrono::Utc::now()),
@@ -186,21 +273,62 @@ async fn discover_aws(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<Asse
     }
 
     // --- ACM certificates, enriched with DescribeCertificate key algorithms ---
-    if let Some(json) = aws_post(client, &ak, &sk, &region, "acm", "CertificateManager.ListCertificates", "{}").await {
-        for cert in json["CertificateSummaryList"].as_array().cloned().unwrap_or_default().into_iter().take(200) {
-            let arn = cert["CertificateArn"].as_str().unwrap_or_default().to_string();
+    if let Some(json) = aws_post(
+        client,
+        &ak,
+        &sk,
+        &region,
+        "acm",
+        "CertificateManager.ListCertificates",
+        "{}",
+    )
+    .await
+    {
+        for cert in json["CertificateSummaryList"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .take(200)
+        {
+            let arn = cert["CertificateArn"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             let domain = cert["DomainName"].as_str().unwrap_or("cert").to_string();
-            if arn.is_empty() { continue; }
-            let algo = match aws_post(client, &ak, &sk, &region, "acm", "CertificateManager.DescribeCertificate", &format!("{{\"CertificateArn\":\"{arn}\"}}")).await {
-                Some(d) => d["Certificate"]["KeyAlgorithm"].as_str().unwrap_or("UNKNOWN").to_string(),
-                None => cert["KeyAlgorithm"].as_str().unwrap_or("UNKNOWN").to_string(),
+            if arn.is_empty() {
+                continue;
+            }
+            let algo = match aws_post(
+                client,
+                &ak,
+                &sk,
+                &region,
+                "acm",
+                "CertificateManager.DescribeCertificate",
+                &format!("{{\"CertificateArn\":\"{arn}\"}}"),
+            )
+            .await
+            {
+                Some(d) => d["Certificate"]["KeyAlgorithm"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN")
+                    .to_string(),
+                None => cert["KeyAlgorithm"]
+                    .as_str()
+                    .unwrap_or("UNKNOWN")
+                    .to_string(),
             };
             out.push(AssetRow {
                 id: format!("aws-acm-{domain}"),
                 kind: "certificate".into(),
                 address: arn,
                 environment: c.environment.clone(),
-                tags: { let mut t = c.tags.clone(); t.push(format!("algo:{algo}")); t },
+                tags: {
+                    let mut t = c.tags.clone();
+                    t.push(format!("algo:{algo}"));
+                    t
+                },
                 pqc_status: key_spec_to_pqc(&algo).to_string(),
                 tls_version: None,
                 last_scanned: Some(chrono::Utc::now()),
@@ -210,18 +338,44 @@ async fn discover_aws(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<Asse
     }
 
     // --- ACM Private CA (ACM-PCA): the CA key algorithms are high blast-radius ---
-    if let Some(json) = aws_post(client, &ak, &sk, &region, "acm-pca", "ACMPrivateCA.ListCertificateAuthorities", "{}").await {
-        for ca in json["CertificateAuthorities"].as_array().cloned().unwrap_or_default().into_iter().take(100) {
+    if let Some(json) = aws_post(
+        client,
+        &ak,
+        &sk,
+        &region,
+        "acm-pca",
+        "ACMPrivateCA.ListCertificateAuthorities",
+        "{}",
+    )
+    .await
+    {
+        for ca in json["CertificateAuthorities"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .take(100)
+        {
             let arn = ca["Arn"].as_str().unwrap_or_default().to_string();
-            if arn.is_empty() { continue; }
-            let algo = ca["CertificateAuthorityConfiguration"]["KeyAlgorithm"].as_str().unwrap_or("UNKNOWN").to_string();
+            if arn.is_empty() {
+                continue;
+            }
+            let algo = ca["CertificateAuthorityConfiguration"]["KeyAlgorithm"]
+                .as_str()
+                .unwrap_or("UNKNOWN")
+                .to_string();
             let name = arn.rsplit('/').next().unwrap_or("ca").to_string();
             out.push(AssetRow {
                 id: format!("aws-pca-{name}"),
                 kind: "private_ca".into(),
                 address: arn,
                 environment: c.environment.clone(),
-                tags: { let mut t = c.tags.clone(); t.push(format!("algo:{algo}")); t.push("ca".into()); t },
+                tags: {
+                    let mut t = c.tags.clone();
+                    t.push(format!("algo:{algo}"));
+                    t.push("ca".into());
+                    t
+                },
                 pqc_status: key_spec_to_pqc(&algo).to_string(),
                 tls_version: None,
                 last_scanned: Some(chrono::Utc::now()),
@@ -246,20 +400,31 @@ async fn discover_azure(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<As
     };
     let vault = match c.endpoints.first() {
         Some(v) => v.clone(),
-        None => { tracing::warn!(connector = %c.name, "Azure connector needs the vault URL in endpoints[0]"); return Vec::new(); }
+        None => {
+            tracing::warn!(connector = %c.name, "Azure connector needs the vault URL in endpoints[0]");
+            return Vec::new();
+        }
     };
 
     // OAuth2 client-credentials token for the Key Vault resource.
-    let token_resp = client.post(format!("https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"))
+    let token_resp = client
+        .post(format!(
+            "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+        ))
         .form(&[
             ("grant_type", "client_credentials"),
             ("client_id", &cid),
             ("client_secret", &secret),
             ("scope", "https://vault.azure.net/.default"),
         ])
-        .send().await;
+        .send()
+        .await;
     let token = match token_resp {
-        Ok(r) => r.json::<serde_json::Value>().await.ok().and_then(|j| j["access_token"].as_str().map(String::from)),
+        Ok(r) => r
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|j| j["access_token"].as_str().map(String::from)),
         Err(_) => None,
     };
     let Some(token) = token else {
@@ -268,9 +433,14 @@ async fn discover_azure(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<As
     };
 
     let mut out = Vec::new();
-    if let Ok(r) = client.get(format!("{}/keys?api-version=7.4", vault.trim_end_matches('/')))
+    if let Ok(r) = client
+        .get(format!(
+            "{}/keys?api-version=7.4",
+            vault.trim_end_matches('/')
+        ))
         .header("Authorization", format!("Bearer {token}"))
-        .send().await
+        .send()
+        .await
     {
         if let Ok(json) = r.json::<serde_json::Value>().await {
             for k in json["value"].as_array().cloned().unwrap_or_default() {

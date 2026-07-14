@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use qw_cbom::{PostureEngine, PostureSnapshot, ProviderCryptoInfo};
-use qw_scanner::{ScanTarget, PqcStatus};
+use qw_scanner::{PqcStatus, ScanTarget};
 
 use crate::state::AppState;
 
@@ -43,7 +43,10 @@ pub fn spawn(state: AppState) {
                 }
             }
         });
-        tracing::info!(interval_secs = interval, "Scheduled multi-tenant scanning enabled");
+        tracing::info!(
+            interval_secs = interval,
+            "Scheduled multi-tenant scanning enabled"
+        );
     }
 
     // Scheduled signed evidence-pack delivery to an external sink.
@@ -65,7 +68,9 @@ pub fn spawn(state: AppState) {
 
     // Per-tenant schedules: each org can run on its own cadence.
     for ts in state.config.tenant_schedules.clone() {
-        if ts.scan_interval_secs == 0 { continue; }
+        if ts.scan_interval_secs == 0 {
+            continue;
+        }
         let org = ts.org.clone();
         let interval_secs = ts.scan_interval_secs;
         let s = state.clone();
@@ -85,14 +90,23 @@ pub fn spawn(state: AppState) {
 /// Build and ship a signed evidence pack per tenant to the configured sink.
 async fn deliver_evidence(state: &AppState, ed: &crate::config::EvidenceDeliveryConfig) {
     let Ok(sink) = std::env::var(&ed.sink_url_env) else {
-        tracing::warn!("evidence sink URL env '{}' not set; skipping delivery", ed.sink_url_env);
+        tracing::warn!(
+            "evidence sink URL env '{}' not set; skipping delivery",
+            ed.sink_url_env
+        );
         return;
     };
-    let tenants = if ed.tenants.is_empty() { vec![qw_store::DEFAULT_TENANT.to_string()] } else { ed.tenants.clone() };
+    let tenants = if ed.tenants.is_empty() {
+        vec![qw_store::DEFAULT_TENANT.to_string()]
+    } else {
+        ed.tenants.clone()
+    };
     for tenant in tenants {
         let pack = crate::admin::evidence::build_pack(state, &tenant).await;
         match state.http_client.post(&sink).json(&pack).send().await {
-            Ok(r) => tracing::info!(tenant = %tenant, status = %r.status(), "evidence pack delivered"),
+            Ok(r) => {
+                tracing::info!(tenant = %tenant, status = %r.status(), "evidence pack delivered")
+            }
             Err(e) => tracing::warn!(tenant = %tenant, error = %e, "evidence delivery failed"),
         }
     }
@@ -103,9 +117,15 @@ pub fn all_tenants(state: &AppState) -> Vec<String> {
     use std::collections::BTreeSet;
     let mut set: BTreeSet<String> = BTreeSet::new();
     set.insert(qw_store::DEFAULT_TENANT.to_string());
-    for t in state.store.tenants() { set.insert(t); }
-    for u in &state.config.auth.users { set.insert(u.org.clone()); }
-    for k in &state.config.auth.api_keys { set.insert(k.org.clone()); }
+    for t in state.store.tenants() {
+        set.insert(t);
+    }
+    for u in &state.config.auth.users {
+        set.insert(u.org.clone());
+    }
+    for k in &state.config.auth.api_keys {
+        set.insert(k.org.clone());
+    }
     set.into_iter().collect()
 }
 
@@ -215,7 +235,9 @@ pub async fn recompute_and_snapshot(
         let mut cache = state.posture_cache.write().await;
         *cache = Some(summary.clone());
     }
-    state.store.record_posture(tenant, &PostureSnapshot::from_summary(&summary, trigger));
+    state
+        .store
+        .record_posture(tenant, &PostureSnapshot::from_summary(&summary, trigger));
 
     if let Some(prev) = previous_score {
         if (prev - summary.overall_score).abs() >= f64::EPSILON {
@@ -245,8 +267,12 @@ pub async fn recompute_and_snapshot(
                     drop, prev, summary.overall_score
                 ),
             );
-            event.metadata.insert("previous".into(), format!("{:.1}", prev));
-            event.metadata.insert("current".into(), format!("{:.1}", summary.overall_score));
+            event
+                .metadata
+                .insert("previous".into(), format!("{:.1}", prev));
+            event
+                .metadata
+                .insert("current".into(), format!("{:.1}", summary.overall_score));
             state.alert_manager.fire(tenant, event).await;
         }
     }
@@ -260,7 +286,11 @@ pub async fn recompute_and_snapshot(
 }
 
 /// Inspect fresh scan results and fire critical-finding / cert-expiry alerts.
-pub async fn evaluate_findings_alerts(state: &AppState, tenant: &str, results: &[qw_scanner::ScanResult]) {
+pub async fn evaluate_findings_alerts(
+    state: &AppState,
+    tenant: &str,
+    results: &[qw_scanner::ScanResult],
+) {
     use qw_scanner::{FindingCategory, FindingSeverity};
 
     let (_, alert_on_critical, _) = state.alert_manager.config_thresholds();
@@ -276,7 +306,10 @@ pub async fn evaluate_findings_alerts(state: &AppState, tenant: &str, results: &
                     sample = f.title.clone();
                 }
             }
-            if matches!(f.category, FindingCategory::ExpiringCertificate | FindingCategory::ExpiredCertificate) {
+            if matches!(
+                f.category,
+                FindingCategory::ExpiringCertificate | FindingCategory::ExpiredCertificate
+            ) {
                 expiring += 1;
             }
         }
@@ -372,9 +405,18 @@ mod tests {
 
     #[test]
     fn test_host_from_url() {
-        assert_eq!(host_from_url("https://api.anthropic.com/v1"), Some("api.anthropic.com".to_string()));
-        assert_eq!(host_from_url("https://api.openai.com:443/v1"), Some("api.openai.com".to_string()));
-        assert_eq!(host_from_url("http://localhost:11434"), Some("localhost".to_string()));
+        assert_eq!(
+            host_from_url("https://api.anthropic.com/v1"),
+            Some("api.anthropic.com".to_string())
+        );
+        assert_eq!(
+            host_from_url("https://api.openai.com:443/v1"),
+            Some("api.openai.com".to_string())
+        );
+        assert_eq!(
+            host_from_url("http://localhost:11434"),
+            Some("localhost".to_string())
+        );
         assert_eq!(host_from_url(""), None);
     }
 }

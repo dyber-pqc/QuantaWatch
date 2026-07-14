@@ -1,15 +1,15 @@
-pub mod patterns;
-pub mod injection;
+pub mod error;
 pub mod exfiltration;
+pub mod injection;
+pub mod patterns;
 pub mod pii;
 pub mod types;
-pub mod error;
 
-pub use types::{ThreatAssessment, DetectedThreat, ThreatCategory, Severity};
 pub use error::MonitorError;
+pub use types::{DetectedThreat, Severity, ThreatAssessment, ThreatCategory};
 
-use injection::InjectionDetector;
 use exfiltration::ExfiltrationDetector;
+use injection::InjectionDetector;
 use pii::PiiDetector;
 
 /// Combined security monitor that runs all detectors.
@@ -77,6 +77,9 @@ mod tests {
             None,
         );
         assert!(!assessment.threats.is_empty());
-        assert!(assessment.threats.iter().any(|t| t.category == ThreatCategory::PromptInjection));
+        assert!(assessment
+            .threats
+            .iter()
+            .any(|t| t.category == ThreatCategory::PromptInjection));
     }
 }

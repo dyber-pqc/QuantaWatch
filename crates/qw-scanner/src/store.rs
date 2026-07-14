@@ -1,8 +1,8 @@
-use std::path::PathBuf;
-use tokio::sync::mpsc;
-use tokio::io::AsyncWriteExt;
 use crate::types::*;
 use qw_crypto::sha3_256_hex;
+use std::path::PathBuf;
+use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 
 enum StoreCommand {
     RecordScan(ScanRecord),
@@ -35,10 +35,16 @@ impl ScanStore {
 
         tokio::spawn(async move {
             let mut scans_file = tokio::fs::OpenOptions::new()
-                .create(true).append(true).open(&scans_path).await
+                .create(true)
+                .append(true)
+                .open(&scans_path)
+                .await
                 .expect("Failed to open scans file");
             let mut findings_file = tokio::fs::OpenOptions::new()
-                .create(true).append(true).open(&findings_path).await
+                .create(true)
+                .append(true)
+                .open(&findings_path)
+                .await
                 .expect("Failed to open findings file");
 
             while let Some(cmd) = rx.recv().await {
@@ -52,7 +58,9 @@ impl ScanStore {
                     }
                     StoreCommand::RecordFinding(record) => {
                         if let Ok(json) = serde_json::to_string(&record) {
-                            let _ = findings_file.write_all(format!("{json}\n").as_bytes()).await;
+                            let _ = findings_file
+                                .write_all(format!("{json}\n").as_bytes())
+                                .await;
                             let _ = findings_file.flush().await;
                             findings_clone.write().await.push(record);
                         }
@@ -61,12 +69,17 @@ impl ScanStore {
             }
         });
 
-        Ok(Self { tx, scans, findings })
+        Ok(Self {
+            tx,
+            scans,
+            findings,
+        })
     }
 
     fn load_records<T: serde::de::DeserializeOwned>(path: &PathBuf) -> Vec<T> {
         match std::fs::read_to_string(path) {
-            Ok(content) => content.lines()
+            Ok(content) => content
+                .lines()
                 .filter_map(|line| serde_json::from_str(line).ok())
                 .collect(),
             Err(_) => Vec::new(),
@@ -120,7 +133,11 @@ impl ScanStore {
 
     pub async fn get_findings_for_scan(&self, scan_id: &str) -> Vec<FindingRecord> {
         let findings = self.findings.read().await;
-        findings.iter().filter(|f| f.scan_id == scan_id).cloned().collect()
+        findings
+            .iter()
+            .filter(|f| f.scan_id == scan_id)
+            .cloned()
+            .collect()
     }
 
     pub async fn get_all_findings(&self) -> Vec<FindingRecord> {

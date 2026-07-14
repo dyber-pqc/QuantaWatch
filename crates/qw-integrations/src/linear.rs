@@ -1,8 +1,8 @@
+use crate::registry::{Integration, IntegrationError};
+use crate::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
-use qw_scanner::{ScanTarget, Finding, FindingSeverity};
-use crate::types::*;
-use crate::registry::{Integration, IntegrationError};
+use qw_scanner::{Finding, FindingSeverity, ScanTarget};
 
 pub struct LinearIntegration {
     id: String,
@@ -35,11 +35,18 @@ impl LinearIntegration {
 
 #[async_trait]
 impl Integration for LinearIntegration {
-    fn id(&self) -> &str { &self.id }
-    fn display_name(&self) -> &str { "Linear" }
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn display_name(&self) -> &str {
+        "Linear"
+    }
 
     fn capabilities(&self) -> Vec<IntegrationCapability> {
-        vec![IntegrationCapability::CreateRemediation, IntegrationCapability::SyncStatus]
+        vec![
+            IntegrationCapability::CreateRemediation,
+            IntegrationCapability::SyncStatus,
+        ]
     }
 
     async fn test_connection(&self) -> Result<ConnectionStatus, IntegrationError> {
@@ -47,7 +54,9 @@ impl Integration for LinearIntegration {
             "query": "{ viewer { id name email } }"
         });
 
-        let resp = self.client.post("https://api.linear.app/graphql")
+        let resp = self
+            .client
+            .post("https://api.linear.app/graphql")
             .header("Authorization", &self.token)
             .header("Content-Type", "application/json")
             .json(&query)
@@ -55,7 +64,9 @@ impl Integration for LinearIntegration {
             .await?;
 
         if resp.status().is_success() {
-            let result: serde_json::Value = resp.json().await
+            let result: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
             let name = result["data"]["viewer"]["name"].as_str().map(String::from);
             Ok(ConnectionStatus {
@@ -74,16 +85,24 @@ impl Integration for LinearIntegration {
         }
     }
 
-    async fn remediation_status(&self, external_id: &str) -> Result<TicketStatus, IntegrationError> {
+    async fn remediation_status(
+        &self,
+        external_id: &str,
+    ) -> Result<TicketStatus, IntegrationError> {
         let query = serde_json::json!({
             "query": format!("query {{ issue(id: \"{external_id}\") {{ state {{ type }} }} }}")
         });
-        let v: serde_json::Value = self.client
+        let v: serde_json::Value = self
+            .client
             .post("https://api.linear.app/graphql")
             .header("Authorization", &self.token)
             .header("Content-Type", "application/json")
             .json(&query)
-            .send().await?.json().await.map_err(|e| IntegrationError::ApiError(e.to_string()))?;
+            .send()
+            .await?
+            .json()
+            .await
+            .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
         Ok(match v["data"]["issue"]["state"]["type"].as_str() {
             Some("completed") => TicketStatus::Resolved,
             Some("canceled") => TicketStatus::Closed,
@@ -104,13 +123,14 @@ impl Integration for LinearIntegration {
         finding: &Finding,
         _opts: &RemediationOpts,
     ) -> Result<RemediationTicket, IntegrationError> {
-        let team_id = self.team_id.as_deref()
-            .ok_or_else(|| IntegrationError::NotConfigured(
-                "No Linear team_id configured".to_string(),
-            ))?;
+        let team_id = self.team_id.as_deref().ok_or_else(|| {
+            IntegrationError::NotConfigured("No Linear team_id configured".to_string())
+        })?;
 
         let priority = Self::severity_to_priority(&finding.severity);
-        let remediation_text = finding.remediation.as_deref()
+        let remediation_text = finding
+            .remediation
+            .as_deref()
             .unwrap_or("Review and remediate the cryptographic finding.");
 
         let description = format!(
@@ -144,7 +164,9 @@ impl Integration for LinearIntegration {
 
         let query = serde_json::json!({ "query": mutation });
 
-        let resp = self.client.post("https://api.linear.app/graphql")
+        let resp = self
+            .client
+            .post("https://api.linear.app/graphql")
             .header("Authorization", &self.token)
             .header("Content-Type", "application/json")
             .json(&query)
@@ -153,12 +175,14 @@ impl Integration for LinearIntegration {
 
         if !resp.status().is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(IntegrationError::ApiError(
-                format!("Failed to create issue: {body}"),
-            ));
+            return Err(IntegrationError::ApiError(format!(
+                "Failed to create issue: {body}"
+            )));
         }
 
-        let result: serde_json::Value = resp.json().await
+        let result: serde_json::Value = resp
+            .json()
+            .await
             .map_err(|e| IntegrationError::ApiError(e.to_string()))?;
 
         let issue = &result["data"]["issueCreate"]["issue"];

@@ -32,22 +32,25 @@ impl PolicyEngine {
             None => {
                 return match self.config.default {
                     DefaultEffect::Allow => PolicyDecision::allow("no agent policy, default allow"),
-                    DefaultEffect::Deny => PolicyDecision::deny(
-                        format!("no policy defined for agent '{}'", ctx.agent_name)
-                    ),
+                    DefaultEffect::Deny => PolicyDecision::deny(format!(
+                        "no policy defined for agent '{}'",
+                        ctx.agent_name
+                    )),
                 };
             }
         };
 
         // Check model access
         if !agent_policy.allowed_models.is_empty() {
-            let model_allowed = agent_policy.allowed_models.iter().any(|pattern| {
-                matches_glob(pattern, &ctx.model)
-            });
+            let model_allowed = agent_policy
+                .allowed_models
+                .iter()
+                .any(|pattern| matches_glob(pattern, &ctx.model));
             if !model_allowed {
-                return PolicyDecision::deny(
-                    format!("model '{}' not allowed for agent '{}'", ctx.model, ctx.agent_name)
-                );
+                return PolicyDecision::deny(format!(
+                    "model '{}' not allowed for agent '{}'",
+                    ctx.model, ctx.agent_name
+                ));
             }
         }
 
@@ -57,14 +60,21 @@ impl PolicyEngine {
 
         for tool in &ctx.tools_requested {
             // Check blocked list first (deny overrides)
-            if agent_policy.blocked_tools.iter().any(|p| matches_glob(p, tool)) {
+            if agent_policy
+                .blocked_tools
+                .iter()
+                .any(|p| matches_glob(p, tool))
+            {
                 tools_denied.push(tool.clone());
                 continue;
             }
 
             // Check allowed list
             if agent_policy.allowed_tools.is_empty()
-                || agent_policy.allowed_tools.iter().any(|p| matches_glob(p, tool))
+                || agent_policy
+                    .allowed_tools
+                    .iter()
+                    .any(|p| matches_glob(p, tool))
             {
                 tools_allowed.push(tool.clone());
             } else {
@@ -83,16 +93,20 @@ impl PolicyEngine {
 
         // Check offline mode
         if agent_policy.offline && is_cloud_provider(&ctx.provider) {
-            return PolicyDecision::deny(
-                format!("agent '{}' is offline-only, cannot use cloud provider '{}'", ctx.agent_name, ctx.provider)
-            );
+            return PolicyDecision::deny(format!(
+                "agent '{}' is offline-only, cannot use cloud provider '{}'",
+                ctx.agent_name, ctx.provider
+            ));
         }
 
         // Partial allow (some tools denied)
         if !tools_denied.is_empty() {
             return PolicyDecision {
                 effect: Effect::Allow,
-                reason: format!("partial allow: some tools denied for agent '{}'", ctx.agent_name),
+                reason: format!(
+                    "partial allow: some tools denied for agent '{}'",
+                    ctx.agent_name
+                ),
                 tools_allowed,
                 tools_denied,
             };
@@ -138,7 +152,10 @@ fn matches_glob(pattern: &str, value: &str) -> bool {
 }
 
 fn is_cloud_provider(provider: &str) -> bool {
-    matches!(provider, "anthropic" | "openai" | "bedrock" | "gemini" | "deepseek-cloud")
+    matches!(
+        provider,
+        "anthropic" | "openai" | "bedrock" | "gemini" | "deepseek-cloud"
+    )
 }
 
 #[cfg(test)]
@@ -160,48 +177,65 @@ mod tests {
 
     #[test]
     fn test_allow_matching_model() {
-        let engine = PolicyEngine::from_yaml(r#"
+        let engine = PolicyEngine::from_yaml(
+            r#"
 agents:
   bot:
     allowed_models: ["claude-sonnet"]
     allowed_tools: ["*"]
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let ctx = make_ctx("bot", "claude-sonnet", "anthropic", vec![]);
         assert!(engine.evaluate(&ctx).is_allowed());
     }
 
     #[test]
     fn test_deny_wrong_model() {
-        let engine = PolicyEngine::from_yaml(r#"
+        let engine = PolicyEngine::from_yaml(
+            r#"
 agents:
   bot:
     allowed_models: ["claude-sonnet"]
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let ctx = make_ctx("bot", "gpt-4o", "openai", vec![]);
         assert!(!engine.evaluate(&ctx).is_allowed());
     }
 
     #[test]
     fn test_wildcard_model() {
-        let engine = PolicyEngine::from_yaml(r#"
+        let engine = PolicyEngine::from_yaml(
+            r#"
 agents:
   bot:
     allowed_models: ["claude-*"]
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let ctx = make_ctx("bot", "claude-sonnet-4-20250514", "anthropic", vec![]);
         assert!(engine.evaluate(&ctx).is_allowed());
     }
 
     #[test]
     fn test_blocked_tool() {
-        let engine = PolicyEngine::from_yaml(r#"
+        let engine = PolicyEngine::from_yaml(
+            r#"
 agents:
   bot:
     allowed_models: ["*"]
     allowed_tools: ["*"]
     blocked_tools: ["email_send"]
-"#).unwrap();
-        let ctx = make_ctx("bot", "claude-sonnet", "anthropic", vec!["web_search", "email_send"]);
+"#,
+        )
+        .unwrap();
+        let ctx = make_ctx(
+            "bot",
+            "claude-sonnet",
+            "anthropic",
+            vec!["web_search", "email_send"],
+        );
         let decision = engine.evaluate(&ctx);
         assert!(decision.is_allowed()); // partial allow
         assert_eq!(decision.tools_denied, vec!["email_send"]);
@@ -210,22 +244,28 @@ agents:
 
     #[test]
     fn test_default_deny_unknown_agent() {
-        let engine = PolicyEngine::from_yaml(r#"
+        let engine = PolicyEngine::from_yaml(
+            r#"
 default: deny
 agents: {}
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let ctx = make_ctx("unknown", "claude", "anthropic", vec![]);
         assert!(!engine.evaluate(&ctx).is_allowed());
     }
 
     #[test]
     fn test_offline_agent_blocks_cloud() {
-        let engine = PolicyEngine::from_yaml(r#"
+        let engine = PolicyEngine::from_yaml(
+            r#"
 agents:
   local-bot:
     allowed_models: ["*"]
     offline: true
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let ctx = make_ctx("local-bot", "claude", "anthropic", vec![]);
         assert!(!engine.evaluate(&ctx).is_allowed());
 

@@ -45,10 +45,12 @@ fn redact_match(s: &str) -> String {
         "****".to_string()
     } else {
         let visible = 2;
-        format!("{}{}{}",
+        format!(
+            "{}{}{}",
             &s[..visible],
             "*".repeat(s.len() - visible * 2),
-            &s[s.len()-visible..])
+            &s[s.len() - visible..]
+        )
     }
 }
 
@@ -62,7 +64,9 @@ mod tests {
         let detector = PiiDetector::new();
         let threats = detector.scan("My SSN is 123-45-6789");
         assert!(!threats.is_empty());
-        assert!(threats.iter().any(|t| t.category == ThreatCategory::PiiExposure));
+        assert!(threats
+            .iter()
+            .any(|t| t.category == ThreatCategory::PiiExposure));
     }
 
     #[test]

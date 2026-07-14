@@ -1,5 +1,5 @@
+use crate::types::{Severity, ThreatCategory};
 use regex::Regex;
-use crate::types::{ThreatCategory, Severity};
 
 pub struct PatternRule {
     pub name: &'static str,

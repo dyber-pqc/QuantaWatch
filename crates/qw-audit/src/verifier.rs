@@ -1,9 +1,9 @@
+use serde::{Deserialize, Serialize};
 use std::path::Path;
-use serde::{Serialize, Deserialize};
 
-use qw_crypto::{sha3_256_hex, verify as verify_signature};
 use crate::entry::AuditEntry;
 use crate::AuditError;
+use qw_crypto::{sha3_256_hex, verify as verify_signature};
 
 /// Result of audit chain verification.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +17,10 @@ pub struct VerificationResult {
 }
 
 /// Verify an entire audit log file.
-pub fn verify_audit_log(path: &Path, public_key_bytes: &[u8]) -> Result<VerificationResult, AuditError> {
+pub fn verify_audit_log(
+    path: &Path,
+    public_key_bytes: &[u8],
+) -> Result<VerificationResult, AuditError> {
     let content = std::fs::read_to_string(path)?;
     let mut result = VerificationResult {
         valid: true,
@@ -63,10 +66,14 @@ pub fn verify_audit_log(path: &Path, public_key_bytes: &[u8]) -> Result<Verifica
         }
 
         // Verify ML-DSA-65 signature
-        let sig_bytes = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &entry.signature,
-        ).map_err(|e| AuditError::ChainViolation(format!("entry {}: invalid base64 signature: {e}", entry.sequence)))?;
+        let sig_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &entry.signature)
+                .map_err(|e| {
+                    AuditError::ChainViolation(format!(
+                        "entry {}: invalid base64 signature: {e}",
+                        entry.sequence
+                    ))
+                })?;
 
         match verify_signature(public_key_bytes, entry.content_hash.as_bytes(), &sig_bytes) {
             Ok(true) => {
@@ -74,11 +81,16 @@ pub fn verify_audit_log(path: &Path, public_key_bytes: &[u8]) -> Result<Verifica
             }
             Ok(false) => {
                 result.valid = false;
-                result.errors.push(format!("entry {}: signature invalid", entry.sequence));
+                result
+                    .errors
+                    .push(format!("entry {}: signature invalid", entry.sequence));
             }
             Err(e) => {
                 result.valid = false;
-                result.errors.push(format!("entry {}: signature verification error: {e}", entry.sequence));
+                result.errors.push(format!(
+                    "entry {}: signature verification error: {e}",
+                    entry.sequence
+                ));
             }
         }
 

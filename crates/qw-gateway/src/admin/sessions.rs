@@ -1,15 +1,17 @@
 use axum::{
-    extract::{State, Path},
+    extract::{Path, State},
+    http::StatusCode,
     response::IntoResponse,
     Json,
-    http::StatusCode,
 };
 use serde_json::json;
 
 use crate::state::AppState;
 
 pub async fn list_sessions(State(state): State<AppState>) -> impl IntoResponse {
-    let sessions: Vec<_> = state.sessions.iter()
+    let sessions: Vec<_> = state
+        .sessions
+        .iter()
         .map(|entry| {
             let s = entry.value();
             json!({
@@ -47,10 +49,15 @@ pub async fn get_session(
                 "request_count": s.request_count,
                 "total_tokens": s.total_tokens,
                 "client_ip": s.client_ip,
-            })).into_response()
+            }))
+            .into_response()
         }
-        None => (StatusCode::NOT_FOUND, Json(json!({
-            "error": "session not found"
-        }))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": "session not found"
+            })),
+        )
+            .into_response(),
     }
 }

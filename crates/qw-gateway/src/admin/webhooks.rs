@@ -4,7 +4,12 @@
 //! reconcile remediation status instantly instead of polling. Unauthenticated
 //! (external callers) but the GitHub route verifies the HMAC signature.
 
-use axum::{extract::State, response::IntoResponse, http::{HeaderMap, StatusCode}, Json};
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Json,
+};
 use bytes::Bytes;
 use hmac::{Hmac, Mac};
 use serde_json::json;
@@ -27,9 +32,13 @@ async fn update_ticket(state: &AppState, external_id: &str, status: TicketStatus
                 state.store.record_remediation(&tenant, &t);
                 if matches!(status, TicketStatus::Resolved) {
                     let mut ev = crate::alerts::AlertEvent::new(
-                        "remediation_resolved", crate::alerts::AlertSeverity::Info,
+                        "remediation_resolved",
+                        crate::alerts::AlertSeverity::Info,
                         "Remediation resolved (webhook)",
-                        format!("{} moved {:?} → {:?} via webhook.", external_id, was, status),
+                        format!(
+                            "{} moved {:?} → {:?} via webhook.",
+                            external_id, was, status
+                        ),
                     );
                     ev.metadata.insert("ticket".into(), external_id.to_string());
                     state.alert_manager.fire(&tenant, ev).await;
@@ -43,7 +52,10 @@ async fn update_ticket(state: &AppState, external_id: &str, status: TicketStatus
 
 fn verify_github_sig(state: &AppState, headers: &HeaderMap, body: &[u8]) -> bool {
     // Candidate secrets: every integration's own secret plus the global one.
-    let mut secret_envs: Vec<String> = state.config.integrations.iter()
+    let mut secret_envs: Vec<String> = state
+        .config
+        .integrations
+        .iter()
         .filter_map(|c| c.webhook_secret_env.clone())
         .collect();
     if let Some(g) = &state.config.auth.webhook_secret_env {
@@ -52,30 +64,59 @@ fn verify_github_sig(state: &AppState, headers: &HeaderMap, body: &[u8]) -> bool
     if secret_envs.is_empty() {
         return true; // no secret configured anywhere — accept (dev)
     }
-    let Some(sig) = headers.get("x-hub-signature-256").and_then(|v| v.to_str().ok()) else { return false };
+    let Some(sig) = headers
+        .get("x-hub-signature-256")
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
     let expected = sig.strip_prefix("sha256=").unwrap_or(sig);
 
     // Verify against each configured secret; a match on any is sufficient.
-    secret_envs.iter().filter_map(|e| std::env::var(e).ok()).any(|secret| {
-        match HmacSha256::new_from_slice(secret.as_bytes()) {
-            Ok(mut mac) => { mac.update(body); hex::encode(mac.finalize().into_bytes()) == expected }
-            Err(_) => false,
-        }
-    })
+    secret_envs
+        .iter()
+        .filter_map(|e| std::env::var(e).ok())
+        .any(
+            |secret| match HmacSha256::new_from_slice(secret.as_bytes()) {
+                Ok(mut mac) => {
+                    mac.update(body);
+                    hex::encode(mac.finalize().into_bytes()) == expected
+                }
+                Err(_) => false,
+            },
+        )
 }
 
-pub async fn github(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
+pub async fn github(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
     if !verify_github_sig(&state, &headers, &body) {
-        return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "bad signature" }))).into_response();
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "bad signature" })),
+        )
+            .into_response();
     }
-    let event = headers.get("x-github-event").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let event = headers
+        .get("x-github-event")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
 
     let mut updated = false;
     if event == "pull_request" && payload["action"].as_str() == Some("closed") {
-        let number = payload["number"].as_u64().or_else(|| payload["pull_request"]["number"].as_u64()).unwrap_or(0);
+        let number = payload["number"]
+            .as_u64()
+            .or_else(|| payload["pull_request"]["number"].as_u64())
+            .unwrap_or(0);
         let merged = payload["pull_request"]["merged"].as_bool().unwrap_or(false);
-        let status = if merged { TicketStatus::Resolved } else { TicketStatus::Closed };
+        let status = if merged {
+            TicketStatus::Resolved
+        } else {
+            TicketStatus::Closed
+        };
         updated = update_ticket(&state, &format!("#{number}"), status).await;
     }
     Json(json!({ "ok": true, "updated": updated })).into_response()
@@ -83,18 +124,43 @@ pub async fn github(State(state): State<AppState>, headers: HeaderMap, body: Byt
 
 pub async fn jira(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    let key = payload["issue"]["key"].as_str().unwrap_or_default().to_string();
-    let cat = payload["issue"]["fields"]["status"]["statusCategory"]["key"].as_str().unwrap_or("");
-    let status = match cat { "done" => TicketStatus::Resolved, "indeterminate" => TicketStatus::InProgress, _ => TicketStatus::Open };
-    let updated = if key.is_empty() { false } else { update_ticket(&state, &key, status).await };
+    let key = payload["issue"]["key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let cat = payload["issue"]["fields"]["status"]["statusCategory"]["key"]
+        .as_str()
+        .unwrap_or("");
+    let status = match cat {
+        "done" => TicketStatus::Resolved,
+        "indeterminate" => TicketStatus::InProgress,
+        _ => TicketStatus::Open,
+    };
+    let updated = if key.is_empty() {
+        false
+    } else {
+        update_ticket(&state, &key, status).await
+    };
     Json(json!({ "ok": true, "updated": updated }))
 }
 
 pub async fn linear(State(state): State<AppState>, body: Bytes) -> impl IntoResponse {
     let payload: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-    let id = payload["data"]["id"].as_str().unwrap_or_default().to_string();
+    let id = payload["data"]["id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
     let ty = payload["data"]["state"]["type"].as_str().unwrap_or("");
-    let status = match ty { "completed" => TicketStatus::Resolved, "canceled" => TicketStatus::Closed, "started" => TicketStatus::InProgress, _ => TicketStatus::Open };
-    let updated = if id.is_empty() { false } else { update_ticket(&state, &id, status).await };
+    let status = match ty {
+        "completed" => TicketStatus::Resolved,
+        "canceled" => TicketStatus::Closed,
+        "started" => TicketStatus::InProgress,
+        _ => TicketStatus::Open,
+    };
+    let updated = if id.is_empty() {
+        false
+    } else {
+        update_ticket(&state, &id, status).await
+    };
     Json(json!({ "ok": true, "updated": updated }))
 }

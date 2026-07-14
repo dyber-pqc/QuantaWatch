@@ -5,8 +5,8 @@ use std::collections::HashMap;
 
 use axum::{
     extract::State,
-    response::{Html, IntoResponse},
     http::header,
+    response::{Html, IntoResponse},
     Extension,
 };
 
@@ -16,7 +16,9 @@ use crate::auth::{tenant_of, AuthContext};
 use crate::state::AppState;
 
 fn esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn sev_color(s: &str) -> &'static str {
@@ -35,15 +37,26 @@ pub async fn board_report(
     let tenant = tenant_of(&ctx);
 
     // Posture.
-    let providers: Vec<_> = state.provider_crypto.iter().map(|e| e.value().clone()).collect();
+    let providers: Vec<_> = state
+        .provider_crypto
+        .iter()
+        .map(|e| e.value().clone())
+        .collect();
     let posture = {
         let cache = state.posture_cache.read().await;
-        cache.as_ref().map(|p| p.overall_score).unwrap_or_else(|| PostureEngine::summarize(&[], &providers).overall_score)
+        cache
+            .as_ref()
+            .map(|p| p.overall_score)
+            .unwrap_or_else(|| PostureEngine::summarize(&[], &providers).overall_score)
     };
 
     // Attack paths.
     let graph = crate::admin::graph::build_graph(&state, &tenant, &HashMap::new());
-    let critical_paths = graph.paths.iter().filter(|p| p.severity == "critical").count();
+    let critical_paths = graph
+        .paths
+        .iter()
+        .filter(|p| p.severity == "critical")
+        .count();
     let hndl = graph.paths.iter().filter(|p| p.hndl).count();
 
     // Compliance.
@@ -56,8 +69,18 @@ pub async fn board_report(
 
     // Composite Quantum Risk Score: posture, compliance, and critical exposure.
     let exposure_penalty = (critical_paths as f64 * 8.0).min(40.0);
-    let quantum_risk = ((posture * 0.5 + compliance.overall_compliance_pct * 0.5) - exposure_penalty).clamp(0.0, 100.0);
-    let grade = if quantum_risk >= 80.0 { ("A", "#1a7f52") } else if quantum_risk >= 60.0 { ("B", "#b9770a") } else if quantum_risk >= 40.0 { ("C", "#c2671a") } else { ("D", "#c0353a") };
+    let quantum_risk = ((posture * 0.5 + compliance.overall_compliance_pct * 0.5)
+        - exposure_penalty)
+        .clamp(0.0, 100.0);
+    let grade = if quantum_risk >= 80.0 {
+        ("A", "#1a7f52")
+    } else if quantum_risk >= 60.0 {
+        ("B", "#b9770a")
+    } else if quantum_risk >= 40.0 {
+        ("C", "#c2671a")
+    } else {
+        ("D", "#c0353a")
+    };
 
     let path_rows: String = graph.paths.iter().take(8).map(|p| {
         format!("<tr><td><span class='pill' style='background:{}'>{}</span></td><td><strong>{}</strong>{}</td><td class='num'>{}</td><td>{}</td></tr>",
@@ -86,7 +109,8 @@ pub async fn board_report(
 
     let date = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
 
-    let html = format!(r#"<!doctype html>
+    let html = format!(
+        r#"<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>QuantaWatch — Quantum Risk Board Report</title>
 <style>
   @page {{ size: A4; margin: 16mm; }}
@@ -138,12 +162,32 @@ pub async fn board_report(
 
   <div class="foot">{att_block}<br/>Generated from live, continuously-attested inventory. {total} cryptographic findings assessed against CNSA 2.0, NIST IR 8547 and FIPS 203/204.</div>
 </body></html>"#,
-        tenant = esc(&tenant), date = date, grade = grade.0, grade_color = grade.1, quantum_risk = quantum_risk,
-        posture = posture, compliance = compliance.overall_compliance_pct, critical_paths = critical_paths, hndl = hndl,
-        path_rows = if path_rows.is_empty() { "<tr><td colspan=4 class='sub'>No attack paths detected.</td></tr>".into() } else { path_rows },
-        fw_rows = fw_rows, mig_rows = if mig_rows.is_empty() { "<tr><td colspan=4 class='sub'>No migration actions required.</td></tr>".into() } else { mig_rows },
-        att_block = att_block, total = compliance.total_findings,
+        tenant = esc(&tenant),
+        date = date,
+        grade = grade.0,
+        grade_color = grade.1,
+        quantum_risk = quantum_risk,
+        posture = posture,
+        compliance = compliance.overall_compliance_pct,
+        critical_paths = critical_paths,
+        hndl = hndl,
+        path_rows = if path_rows.is_empty() {
+            "<tr><td colspan=4 class='sub'>No attack paths detected.</td></tr>".into()
+        } else {
+            path_rows
+        },
+        fw_rows = fw_rows,
+        mig_rows = if mig_rows.is_empty() {
+            "<tr><td colspan=4 class='sub'>No migration actions required.</td></tr>".into()
+        } else {
+            mig_rows
+        },
+        att_block = att_block,
+        total = compliance.total_findings,
     );
 
-    ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], Html(html))
+    (
+        [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+        Html(html),
+    )
 }

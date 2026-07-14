@@ -2,8 +2,8 @@
 
 use axum::{
     extract::State,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
-    http::{StatusCode, HeaderMap},
     Json,
 };
 use serde::Deserialize;
@@ -47,7 +47,12 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.strip_prefix("Bearer "))
         .map(|s| s.to_string())
-        .or_else(|| headers.get("x-api-key").and_then(|v| v.to_str().ok()).map(|s| s.to_string()))
+        .or_else(|| {
+            headers
+                .get("x-api-key")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
 }
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
@@ -73,13 +78,22 @@ pub async fn list_tenants(
     ctx: Option<axum::Extension<AuthContext>>,
 ) -> impl IntoResponse {
     use std::collections::BTreeSet;
-    let is_admin = ctx.as_ref().map(|c| c.role == crate::auth::Role::Admin).unwrap_or(false);
+    let is_admin = ctx
+        .as_ref()
+        .map(|c| c.role == crate::auth::Role::Admin)
+        .unwrap_or(false);
     let mut set: BTreeSet<String> = BTreeSet::new();
     set.insert("default".to_string());
     if is_admin {
-        for t in state.store.tenants() { set.insert(t); }
-        for u in &state.config.auth.users { set.insert(u.org.clone()); }
-        for k in &state.config.auth.api_keys { set.insert(k.org.clone()); }
+        for t in state.store.tenants() {
+            set.insert(t);
+        }
+        for u in &state.config.auth.users {
+            set.insert(u.org.clone());
+        }
+        for k in &state.config.auth.api_keys {
+            set.insert(k.org.clone());
+        }
     } else if let Some(axum::Extension(c)) = &ctx {
         set.clear();
         set.insert(c.org.clone());
@@ -104,6 +118,10 @@ pub async fn me(
             "via": ctx.method,
         }))
         .into_response(),
-        None => (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthenticated" }))).into_response(),
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthenticated" })),
+        )
+            .into_response(),
     }
 }

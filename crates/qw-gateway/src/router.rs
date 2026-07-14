@@ -1,20 +1,20 @@
 use axum::{
-    Router,
-    routing::{get, post, any},
     extract::{Request, State},
-    response::{Response, IntoResponse},
     http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{any, get, post},
+    Router,
 };
 use bytes::Bytes;
 use std::time::Instant;
 
 use qw_crypto::sha3_256_hex;
 
-use crate::state::AppState;
 use crate::error::GatewayError;
-use crate::middleware::{identity, policy, monitor};
 use crate::middleware::identity::SessionContext;
 use crate::middleware::policy::PolicyResult;
+use crate::middleware::{identity, monitor, policy};
+use crate::state::AppState;
 
 /// Proxy routes (provider-facing). Generic over state until composed.
 fn proxy_routes(state: AppState) -> Router<AppState> {
@@ -30,13 +30,16 @@ fn proxy_routes(state: AppState) -> Router<AppState> {
         .route("/ollama/{*rest}", any(proxy_handler))
         // Middleware layers (applied in reverse order)
         .layer(axum::middleware::from_fn_with_state(
-            state.clone(), monitor::monitor_layer
+            state.clone(),
+            monitor::monitor_layer,
         ))
         .layer(axum::middleware::from_fn_with_state(
-            state.clone(), policy::policy_layer
+            state.clone(),
+            policy::policy_layer,
         ))
         .layer(axum::middleware::from_fn_with_state(
-            state.clone(), identity::identity_layer
+            state.clone(),
+            identity::identity_layer,
         ))
 }
 
@@ -125,40 +128,82 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/auth/oidc/callback", get(crate::oidc::callback))
         .route("/api/tenants", get(crate::admin::auth_api::list_tenants))
         .route("/api/sessions", get(crate::admin::sessions::list_sessions))
-        .route("/api/sessions/{id}", get(crate::admin::sessions::get_session))
+        .route(
+            "/api/sessions/{id}",
+            get(crate::admin::sessions::get_session),
+        )
         .route("/api/audit", get(crate::admin::audit_api::list_audit))
-        .route("/api/audit/verify", post(crate::admin::audit_api::verify_audit))
+        .route(
+            "/api/audit/verify",
+            post(crate::admin::audit_api::verify_audit),
+        )
         .route("/api/config", get(crate::admin::config_api::get_config))
         .route("/api/stats", get(crate::admin::stats::get_stats))
         // Agent-aware posture
         .route("/api/agents", get(crate::admin::agents::list_agents))
         // Quantum attack-path engine (crypto security graph)
-        .route("/api/attack-paths", get(crate::admin::graph::get_attack_paths))
-        .route("/api/attack-paths/simulate", post(crate::admin::graph::simulate))
-        .route("/api/attack-paths/timeline", get(crate::admin::graph::get_timeline))
-        .route("/api/attack-paths/{id}/remediate", post(crate::admin::graph::remediate_path))
+        .route(
+            "/api/attack-paths",
+            get(crate::admin::graph::get_attack_paths),
+        )
+        .route(
+            "/api/attack-paths/simulate",
+            post(crate::admin::graph::simulate),
+        )
+        .route(
+            "/api/attack-paths/timeline",
+            get(crate::admin::graph::get_timeline),
+        )
+        .route(
+            "/api/attack-paths/{id}/remediate",
+            post(crate::admin::graph::remediate_path),
+        )
         // Asset inventory (agentless connectors)
         .route("/api/assets", get(crate::admin::assets_api::list_assets))
-        .route("/api/assets/sync", post(crate::admin::assets_api::sync_assets))
+        .route(
+            "/api/assets/sync",
+            post(crate::admin::assets_api::sync_assets),
+        )
         // Executive board report + signed evidence pack
         .route("/api/report/board", get(crate::admin::report::board_report))
         .route("/api/evidence", get(crate::admin::evidence::evidence_pack))
         // Posture SLOs / policy-as-code (CI gate via ?gate=1)
         .route("/api/slos", get(crate::admin::slos::get_slos))
-        .route("/api/slos/history", get(crate::admin::slos::get_slo_history))
+        .route(
+            "/api/slos/history",
+            get(crate::admin::slos::get_slo_history),
+        )
         // Compliance & migration
-        .route("/api/compliance", get(crate::admin::compliance::get_compliance))
-        .route("/api/compliance/report", get(crate::admin::compliance::get_report))
+        .route(
+            "/api/compliance",
+            get(crate::admin::compliance::get_compliance),
+        )
+        .route(
+            "/api/compliance/report",
+            get(crate::admin::compliance::get_report),
+        )
         // Alerts
         .route("/api/alerts", get(crate::admin::alerts_api::list_alerts))
-        .route("/api/alerts/test", post(crate::admin::alerts_api::test_alert))
+        .route(
+            "/api/alerts/test",
+            post(crate::admin::alerts_api::test_alert),
+        )
         // Posture & CBOM
         .route("/api/posture", get(crate::admin::posture::get_posture))
-        .route("/api/posture/history", get(crate::admin::posture::get_posture_history))
+        .route(
+            "/api/posture/history",
+            get(crate::admin::posture::get_posture_history),
+        )
         .route("/api/cbom", get(crate::admin::cbom::get_cbom))
-        .route("/api/cbom/attestation", get(crate::admin::cbom::get_attestation))
+        .route(
+            "/api/cbom/attestation",
+            get(crate::admin::cbom::get_attestation),
+        )
         .route("/api/cbom/download", get(crate::admin::cbom::download_cbom))
-        .route("/api/cbom/components", get(crate::admin::cbom::list_components))
+        .route(
+            "/api/cbom/components",
+            get(crate::admin::cbom::list_components),
+        )
         .route("/api/cbom/services", get(crate::admin::cbom::list_services))
         // Scanning
         .route("/api/scans", get(crate::admin::scans::list_scans))
@@ -166,14 +211,38 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/scans/{id}", get(crate::admin::scans::get_scan))
         .route("/api/findings", get(crate::admin::scans::list_all_findings))
         // Integrations
-        .route("/api/integrations", get(crate::admin::integrations_api::list_integrations))
-        .route("/api/integrations/{id}/test", post(crate::admin::integrations_api::test_integration))
-        .route("/api/integrations/{id}/sync", post(crate::admin::integrations_api::sync_integration))
-        .route("/api/integrations/{id}/scan", post(crate::admin::integrations_api::scan_integration))
-        .route("/api/integrations/{id}/register-webhook", post(crate::admin::integrations_api::register_webhook))
-        .route("/api/findings/{id}/remediate", post(crate::admin::remediation::remediate))
-        .route("/api/remediations", get(crate::admin::remediation::list_remediations))
-        .route("/api/remediations/sync", post(crate::admin::remediation::sync_remediations))
+        .route(
+            "/api/integrations",
+            get(crate::admin::integrations_api::list_integrations),
+        )
+        .route(
+            "/api/integrations/{id}/test",
+            post(crate::admin::integrations_api::test_integration),
+        )
+        .route(
+            "/api/integrations/{id}/sync",
+            post(crate::admin::integrations_api::sync_integration),
+        )
+        .route(
+            "/api/integrations/{id}/scan",
+            post(crate::admin::integrations_api::scan_integration),
+        )
+        .route(
+            "/api/integrations/{id}/register-webhook",
+            post(crate::admin::integrations_api::register_webhook),
+        )
+        .route(
+            "/api/findings/{id}/remediate",
+            post(crate::admin::remediation::remediate),
+        )
+        .route(
+            "/api/remediations",
+            get(crate::admin::remediation::list_remediations),
+        )
+        .route(
+            "/api/remediations/sync",
+            post(crate::admin::remediation::sync_remediations),
+        )
         // Inbound webhooks (push status)
         .route("/api/webhooks/github", post(crate::admin::webhooks::github))
         .route("/api/webhooks/jira", post(crate::admin::webhooks::jira))
@@ -183,7 +252,10 @@ fn admin_routes() -> Router<AppState> {
 /// Combined router: proxy routes plus admin routes nested under `/admin`.
 /// Used by integration tests and as a single-port fallback.
 pub fn build_router(state: AppState) -> Router {
-    let admin = admin_routes().layer(axum::middleware::from_fn_with_state(state.clone(), auth_layer));
+    let admin = admin_routes().layer(axum::middleware::from_fn_with_state(
+        state.clone(),
+        auth_layer,
+    ));
     Router::new()
         .merge(proxy_routes(state.clone()))
         .nest("/admin", admin)
@@ -204,7 +276,10 @@ pub fn build_proxy_router(state: AppState) -> Router {
 /// Admin-only router for the dashboard-facing listener (serves `/api/*`).
 pub fn build_admin_router(state: AppState) -> Router {
     admin_routes()
-        .layer(axum::middleware::from_fn_with_state(state.clone(), auth_layer))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_layer,
+        ))
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .with_state(state)
@@ -218,15 +293,15 @@ async fn health() -> impl IntoResponse {
     }))
 }
 
-async fn proxy_handler(
-    State(state): State<AppState>,
-    request: Request,
-) -> Response {
+async fn proxy_handler(State(state): State<AppState>, request: Request) -> Response {
     let start = Instant::now();
     let path = request.uri().path().to_string();
 
     // Get session context
-    let session_ctx = request.extensions().get::<SessionContext>().cloned()
+    let session_ctx = request
+        .extensions()
+        .get::<SessionContext>()
+        .cloned()
         .unwrap_or(SessionContext {
             session_id: "unknown".to_string(),
             agent_name: "default".to_string(),
@@ -237,9 +312,10 @@ async fn proxy_handler(
     // Resolve provider
     let (provider_name, provider) = match state.providers.resolve_from_path(&path) {
         Some(p) => p,
-        None => return GatewayError::ProviderNotFound(
-            format!("no provider for path: {path}")
-        ).into_response(),
+        None => {
+            return GatewayError::ProviderNotFound(format!("no provider for path: {path}"))
+                .into_response()
+        }
     };
 
     // Get the request body
@@ -250,7 +326,10 @@ async fn proxy_handler(
             let (_, body) = request.into_parts();
             match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
                 Ok(b) => b,
-                Err(e) => return GatewayError::Internal(format!("failed to read body: {e}")).into_response(),
+                Err(e) => {
+                    return GatewayError::Internal(format!("failed to read body: {e}"))
+                        .into_response()
+                }
             }
         }
     };
@@ -259,8 +338,12 @@ async fn proxy_handler(
 
     // Parse for audit info
     let normalized = provider.parse_request(&body);
-    let model = normalized.as_ref().map(|n| n.model.clone()).unwrap_or_default();
-    let tools_requested: Vec<String> = normalized.as_ref()
+    let model = normalized
+        .as_ref()
+        .map(|n| n.model.clone())
+        .unwrap_or_default();
+    let tools_requested: Vec<String> = normalized
+        .as_ref()
         .map(|n| n.tools.iter().map(|t| t.name.clone()).collect())
         .unwrap_or_default();
 
@@ -268,8 +351,7 @@ async fn proxy_handler(
     let upstream_url = provider.build_upstream_url(&path);
 
     // Forward request to upstream
-    let mut upstream_req = state.http_client.post(&upstream_url)
-        .body(body.to_vec());
+    let mut upstream_req = state.http_client.post(&upstream_url).body(body.to_vec());
 
     // Set content-type
     upstream_req = upstream_req.header("content-type", "application/json");
@@ -297,7 +379,10 @@ async fn proxy_handler(
     let response_headers = upstream_response.headers().clone();
     let response_body = match upstream_response.bytes().await {
         Ok(b) => b,
-        Err(e) => return GatewayError::UpstreamError(format!("failed to read response: {e}")).into_response(),
+        Err(e) => {
+            return GatewayError::UpstreamError(format!("failed to read response: {e}"))
+                .into_response()
+        }
     };
 
     let response_hash = sha3_256_hex(&response_body);
@@ -331,22 +416,30 @@ async fn proxy_handler(
     };
 
     // Audit log (async, non-blocking)
-    let _ = state.audit_logger.log(&session_ctx.session_id, qw_audit::AuditEvent::RequestProcessed {
-        provider: provider_name.to_string(),
-        model,
-        prompt_hash,
-        response_hash,
-        policy_decision: policy_result.map(|p| p.decision_reason).unwrap_or_else(|| "allowed".to_string()),
-        tools_requested,
-        tools_allowed,
-        tools_denied,
-        threats_detected,
-        latency_ms,
-    }).await;
+    let _ = state
+        .audit_logger
+        .log(
+            &session_ctx.session_id,
+            qw_audit::AuditEvent::RequestProcessed {
+                provider: provider_name.to_string(),
+                model,
+                prompt_hash,
+                response_hash,
+                policy_decision: policy_result
+                    .map(|p| p.decision_reason)
+                    .unwrap_or_else(|| "allowed".to_string()),
+                tools_requested,
+                tools_allowed,
+                tools_denied,
+                threats_detected,
+                latency_ms,
+            },
+        )
+        .await;
 
     // Build response
-    let mut response = Response::builder()
-        .status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK));
+    let mut response =
+        Response::builder().status(StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::OK));
 
     // Copy relevant headers from upstream
     for (key, value) in response_headers.iter() {

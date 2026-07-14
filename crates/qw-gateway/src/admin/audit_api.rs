@@ -1,8 +1,4 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde_json::json;
 
 use crate::state::AppState;
@@ -12,7 +8,8 @@ pub async fn list_audit(State(state): State<AppState>) -> impl IntoResponse {
 
     let entries: Vec<serde_json::Value> = match std::fs::read_to_string(&audit_path) {
         Ok(content) => {
-            content.lines()
+            content
+                .lines()
                 .rev()
                 .take(100) // Last 100 entries
                 .filter_map(|line| serde_json::from_str(line).ok())
@@ -39,10 +36,12 @@ pub async fn verify_audit(State(state): State<AppState>) -> impl IntoResponse {
             "chain_intact": result.chain_intact,
             "merkle_roots_valid": result.merkle_roots_valid,
             "errors": result.errors,
-        })).into_response(),
+        }))
+        .into_response(),
         Err(e) => Json(json!({
             "valid": false,
             "error": format!("{e}"),
-        })).into_response(),
+        }))
+        .into_response(),
     }
 }

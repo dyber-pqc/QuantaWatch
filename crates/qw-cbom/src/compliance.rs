@@ -183,7 +183,10 @@ impl ComplianceEngine {
                     ComplianceStatus::NonCompliant => non_compliant += 1,
                     ComplianceStatus::NotApplicable => {}
                 }
-                if matches!(status, ComplianceStatus::AtRisk | ComplianceStatus::NonCompliant) {
+                if matches!(
+                    status,
+                    ComplianceStatus::AtRisk | ComplianceStatus::NonCompliant
+                ) {
                     if let Some(y) = deadline {
                         nearest = Some(nearest.map_or(y, |n| n.min(y)));
                     }
@@ -331,7 +334,9 @@ impl ComplianceEngine {
                 CryptoClass::Weak => bump(&mut weak, f),
                 CryptoClass::ExpiringCert => bump(&mut certs, f),
                 CryptoClass::QuantumVulnerable => match f.asset_type {
-                    CryptoAssetType::TlsConnection | CryptoAssetType::ProtocolEndpoint => bump(&mut tls, f),
+                    CryptoAssetType::TlsConnection | CryptoAssetType::ProtocolEndpoint => {
+                        bump(&mut tls, f)
+                    }
                     CryptoAssetType::Certificate
                     | CryptoAssetType::SigningKey
                     | CryptoAssetType::EncryptionKey => bump(&mut sigs, f),
@@ -376,7 +381,12 @@ mod tests {
     use super::*;
     use chrono::Utc;
 
-    fn rec(category: FindingCategory, asset_type: CryptoAssetType, pqc: PqcStatus, sev: FindingSeverity) -> FindingRecord {
+    fn rec(
+        category: FindingCategory,
+        asset_type: CryptoAssetType,
+        pqc: PqcStatus,
+        sev: FindingSeverity,
+    ) -> FindingRecord {
         FindingRecord {
             id: uuid::Uuid::new_v4().to_string(),
             scan_id: "s".into(),
@@ -419,11 +429,19 @@ mod tests {
         // CNSA 2.0 treats classical asymmetric as non-compliant.
         assert_eq!(report.non_compliant, 1);
         assert_eq!(report.overall_compliance_pct, 0.0);
-        let tls = report.migration_items.iter().find(|m| m.id == "tls-pqc").unwrap();
+        let tls = report
+            .migration_items
+            .iter()
+            .find(|m| m.id == "tls-pqc")
+            .unwrap();
         assert_eq!(tls.deadline_year, 2030);
         assert_eq!(tls.priority, "P1");
         // NIST IR 8547 marks the same asset at-risk (deprecated, not yet disallowed).
-        let nist = report.frameworks.iter().find(|f| f.id == "nist-ir-8547").unwrap();
+        let nist = report
+            .frameworks
+            .iter()
+            .find(|f| f.id == "nist-ir-8547")
+            .unwrap();
         assert_eq!(nist.at_risk, 1);
         assert_eq!(nist.non_compliant, 0);
     }
@@ -437,7 +455,11 @@ mod tests {
             FindingSeverity::High,
         )];
         let report = ComplianceEngine::assess(&findings);
-        let weak = report.migration_items.iter().find(|m| m.id == "remediate-weak").unwrap();
+        let weak = report
+            .migration_items
+            .iter()
+            .find(|m| m.id == "remediate-weak")
+            .unwrap();
         assert_eq!(weak.priority, "P0");
     }
 }

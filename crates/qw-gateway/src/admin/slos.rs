@@ -6,7 +6,12 @@
 
 use std::collections::HashMap;
 
-use axum::{extract::{State, Query}, response::IntoResponse, http::StatusCode, Extension, Json};
+use axum::{
+    extract::{Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Extension, Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -30,14 +35,26 @@ pub struct SloResult {
 /// Evaluate all SLOs that apply to `tenant`.
 pub async fn evaluate(state: &AppState, tenant: &str) -> Vec<SloResult> {
     // Compute the three metrics once.
-    let providers: Vec<_> = state.provider_crypto.iter().map(|e| e.value().clone()).collect();
+    let providers: Vec<_> = state
+        .provider_crypto
+        .iter()
+        .map(|e| e.value().clone())
+        .collect();
     let posture = {
         let cache = state.posture_cache.read().await;
-        cache.as_ref().map(|p| p.overall_score).unwrap_or_else(|| PostureEngine::summarize(&[], &providers).overall_score)
+        cache
+            .as_ref()
+            .map(|p| p.overall_score)
+            .unwrap_or_else(|| PostureEngine::summarize(&[], &providers).overall_score)
     };
     let graph = crate::admin::graph::build_graph(state, tenant, &HashMap::new());
-    let critical_paths = graph.paths.iter().filter(|p| p.severity == "critical").count() as f64;
-    let compliance = ComplianceEngine::assess(&state.store.all_findings(tenant)).overall_compliance_pct;
+    let critical_paths = graph
+        .paths
+        .iter()
+        .filter(|p| p.severity == "critical")
+        .count() as f64;
+    let compliance =
+        ComplianceEngine::assess(&state.store.all_findings(tenant)).overall_compliance_pct;
 
     let metric_value = |m: &str| match m {
         "posture" => posture,
@@ -46,7 +63,10 @@ pub async fn evaluate(state: &AppState, tenant: &str) -> Vec<SloResult> {
         _ => 0.0,
     };
 
-    state.config.slos.iter()
+    state
+        .config
+        .slos
+        .iter()
         .filter(|s| s.tenant.as_deref().map(|t| t == tenant).unwrap_or(true))
         .map(|s| {
             let actual = metric_value(&s.metric);
@@ -55,8 +75,13 @@ pub async fn evaluate(state: &AppState, tenant: &str) -> Vec<SloResult> {
                 _ => actual >= s.threshold,
             };
             SloResult {
-                name: s.name.clone(), metric: s.metric.clone(), operator: s.operator.clone(),
-                threshold: s.threshold, actual: (actual * 10.0).round() / 10.0, pass, action: s.action.clone(),
+                name: s.name.clone(),
+                metric: s.metric.clone(),
+                operator: s.operator.clone(),
+                threshold: s.threshold,
+                actual: (actual * 10.0).round() / 10.0,
+                pass,
+                action: s.action.clone(),
             }
         })
         .collect()
@@ -107,20 +132,31 @@ pub async fn check_and_alert(state: &AppState, tenant: &str) {
     }
     let failing = results.iter().filter(|r| !r.pass).count() as u32;
     let gate_breach = results.iter().any(|r| !r.pass && r.action == "fail");
-    state.store.record_slo_snapshot(tenant, &qw_store::SloSnapshot {
-        timestamp: chrono::Utc::now(),
-        total: results.len() as u32,
-        passing: results.len() as u32 - failing,
-        failing,
-        gate_breach,
-    });
+    state.store.record_slo_snapshot(
+        tenant,
+        &qw_store::SloSnapshot {
+            timestamp: chrono::Utc::now(),
+            total: results.len() as u32,
+            passing: results.len() as u32 - failing,
+            failing,
+            gate_breach,
+        },
+    );
 
     for r in results.into_iter().filter(|r| !r.pass) {
-        let sev = if r.action == "fail" { crate::alerts::AlertSeverity::Critical } else { crate::alerts::AlertSeverity::Warning };
+        let sev = if r.action == "fail" {
+            crate::alerts::AlertSeverity::Critical
+        } else {
+            crate::alerts::AlertSeverity::Warning
+        };
         let mut ev = crate::alerts::AlertEvent::new(
-            "slo_breach", sev,
+            "slo_breach",
+            sev,
             format!("SLO breached: {}", r.name),
-            format!("{} {} {} — actual {}.", r.metric, r.operator, r.threshold, r.actual),
+            format!(
+                "{} {} {} — actual {}.",
+                r.metric, r.operator, r.threshold, r.actual
+            ),
         );
         ev.metadata.insert("slo".into(), r.name.clone());
         state.alert_manager.fire(tenant, ev).await;

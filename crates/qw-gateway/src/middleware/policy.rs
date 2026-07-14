@@ -1,21 +1,17 @@
 use axum::{
     extract::{Request, State},
     middleware::Next,
-    response::{Response, IntoResponse},
+    response::{IntoResponse, Response},
 };
 use std::collections::HashMap;
 
-use qw_policy::RequestContext;
-use crate::state::AppState;
 use crate::error::GatewayError;
 use crate::middleware::identity::SessionContext;
+use crate::state::AppState;
+use qw_policy::RequestContext;
 
 /// Policy enforcement middleware.
-pub async fn policy_layer(
-    State(state): State<AppState>,
-    request: Request,
-    next: Next,
-) -> Response {
+pub async fn policy_layer(State(state): State<AppState>, request: Request, next: Next) -> Response {
     let session_ctx = request.extensions().get::<SessionContext>().cloned();
 
     let (agent_name, session_id) = match &session_ctx {
@@ -25,7 +21,9 @@ pub async fn policy_layer(
 
     // Extract request info for policy evaluation
     let path = request.uri().path().to_string();
-    let provider_name = state.providers.resolve_from_path(&path)
+    let provider_name = state
+        .providers
+        .resolve_from_path(&path)
         .map(|(name, _)| name.to_string())
         .unwrap_or_default();
 
@@ -33,7 +31,9 @@ pub async fn policy_layer(
     let (parts, body) = request.into_parts();
     let body_bytes = match axum::body::to_bytes(body, 10 * 1024 * 1024).await {
         Ok(b) => b,
-        Err(e) => return GatewayError::Internal(format!("failed to read body: {e}")).into_response(),
+        Err(e) => {
+            return GatewayError::Internal(format!("failed to read body: {e}")).into_response()
+        }
     };
 
     // Parse request for model/tool info
@@ -49,7 +49,8 @@ pub async fn policy_layer(
     };
 
     // Build policy context
-    let client_ip = parts.headers
+    let client_ip = parts
+        .headers
         .get("x-forwarded-for")
         .or_else(|| parts.headers.get("x-real-ip"))
         .and_then(|v| v.to_str().ok())
@@ -80,11 +81,17 @@ pub async fn policy_layer(
         );
 
         // Log policy violation
-        let _ = state.audit_logger.log(&session_id, qw_audit::AuditEvent::PolicyViolation {
-            rule: decision.reason.clone(),
-            reason: decision.reason.clone(),
-            agent_name: agent_name.clone(),
-        }).await;
+        let _ = state
+            .audit_logger
+            .log(
+                &session_id,
+                qw_audit::AuditEvent::PolicyViolation {
+                    rule: decision.reason.clone(),
+                    reason: decision.reason.clone(),
+                    agent_name: agent_name.clone(),
+                },
+            )
+            .await;
 
         return GatewayError::PolicyDenied(decision.reason).into_response();
     }
@@ -98,10 +105,12 @@ pub async fn policy_layer(
 
     // Store body bytes and policy decision in extensions for downstream use
     let mut request = Request::from_parts(parts, axum::body::Body::from(body_bytes.clone()));
-    request.extensions_mut().insert(session_ctx.unwrap_or(SessionContext {
-        session_id,
-        agent_name,
-    }));
+    request
+        .extensions_mut()
+        .insert(session_ctx.unwrap_or(SessionContext {
+            session_id,
+            agent_name,
+        }));
     request.extensions_mut().insert(PolicyResult {
         decision_reason: decision.reason,
         tools_allowed: decision.tools_allowed,

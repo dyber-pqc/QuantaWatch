@@ -1,8 +1,8 @@
+use crate::registry::{Scanner, ScannerError};
+use crate::types::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use std::collections::HashMap;
-use crate::types::*;
-use crate::registry::{Scanner, ScannerError};
 
 pub struct CertificateScanner {
     #[allow(dead_code)]
@@ -35,8 +35,12 @@ impl CertificateScanner {
 
 #[async_trait]
 impl Scanner for CertificateScanner {
-    fn id(&self) -> &str { "certificate" }
-    fn display_name(&self) -> &str { "Certificate Scanner" }
+    fn id(&self) -> &str {
+        "certificate"
+    }
+    fn display_name(&self) -> &str {
+        "Certificate Scanner"
+    }
 
     fn categories(&self) -> Vec<FindingCategory> {
         vec![
@@ -89,7 +93,8 @@ impl Scanner for CertificateScanner {
         let not_after_chrono = chrono::DateTime::<Utc>::from_timestamp(
             not_after.unix_timestamp(),
             not_after.nanosecond(),
-        ).unwrap_or_else(Utc::now);
+        )
+        .unwrap_or_else(Utc::now);
         let now_utc = Utc::now();
 
         if not_after_chrono < now_utc {
@@ -240,26 +245,53 @@ mod tests {
 
     #[test]
     fn test_classify_signature_pqc_ready() {
-        assert_eq!(CertificateScanner::classify_signature("ml-dsa-65", None), PqcStatus::PqcReady);
-        assert_eq!(CertificateScanner::classify_signature("dilithium3", None), PqcStatus::PqcReady);
+        assert_eq!(
+            CertificateScanner::classify_signature("ml-dsa-65", None),
+            PqcStatus::PqcReady
+        );
+        assert_eq!(
+            CertificateScanner::classify_signature("dilithium3", None),
+            PqcStatus::PqcReady
+        );
     }
 
     #[test]
     fn test_classify_signature_ecdsa_classical_secure() {
-        assert_eq!(CertificateScanner::classify_signature("ecdsa-with-sha256", None), PqcStatus::ClassicalSecure);
-        assert_eq!(CertificateScanner::classify_signature("1.2.840.10045.4.3.2", None), PqcStatus::ClassicalSecure);
+        assert_eq!(
+            CertificateScanner::classify_signature("ecdsa-with-sha256", None),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            CertificateScanner::classify_signature("1.2.840.10045.4.3.2", None),
+            PqcStatus::ClassicalSecure
+        );
     }
 
     #[test]
     fn test_classify_signature_rsa() {
-        assert_eq!(CertificateScanner::classify_signature("sha256withrsaencryption", Some(2048)), PqcStatus::ClassicalSecure);
-        assert_eq!(CertificateScanner::classify_signature("1.2.840.113549.1.1.11", Some(4096)), PqcStatus::ClassicalSecure);
-        assert_eq!(CertificateScanner::classify_signature("sha256withrsaencryption", None), PqcStatus::ClassicalSecure);
-        assert_eq!(CertificateScanner::classify_signature("sha1withrsaencryption", Some(1024)), PqcStatus::ClassicalWeak);
+        assert_eq!(
+            CertificateScanner::classify_signature("sha256withrsaencryption", Some(2048)),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            CertificateScanner::classify_signature("1.2.840.113549.1.1.11", Some(4096)),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            CertificateScanner::classify_signature("sha256withrsaencryption", None),
+            PqcStatus::ClassicalSecure
+        );
+        assert_eq!(
+            CertificateScanner::classify_signature("sha1withrsaencryption", Some(1024)),
+            PqcStatus::ClassicalWeak
+        );
     }
 
     #[test]
     fn test_classify_signature_unknown() {
-        assert_eq!(CertificateScanner::classify_signature("some-unknown-alg", None), PqcStatus::Unknown);
+        assert_eq!(
+            CertificateScanner::classify_signature("some-unknown-alg", None),
+            PqcStatus::Unknown
+        );
     }
 }

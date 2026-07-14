@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -247,7 +247,9 @@ impl Default for ScannerConfig {
     }
 }
 
-fn default_store_path() -> String { "./scans".to_string() }
+fn default_store_path() -> String {
+    "./scans".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlsScannerConfig {
@@ -261,12 +263,20 @@ pub struct TlsScannerConfig {
 
 impl Default for TlsScannerConfig {
     fn default() -> Self {
-        Self { enabled: true, timeout_secs: 10, targets: vec![] }
+        Self {
+            enabled: true,
+            timeout_secs: 10,
+            targets: vec![],
+        }
     }
 }
 
-fn default_true() -> bool { true }
-fn default_timeout() -> u64 { 10 }
+fn default_true() -> bool {
+    true
+}
+fn default_timeout() -> u64 {
+    10
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyScannerConfig {
@@ -278,11 +288,16 @@ pub struct DependencyScannerConfig {
 
 impl Default for DependencyScannerConfig {
     fn default() -> Self {
-        Self { enabled: true, paths: default_dep_paths() }
+        Self {
+            enabled: true,
+            paths: default_dep_paths(),
+        }
     }
 }
 
-fn default_dep_paths() -> Vec<String> { vec![".".to_string()] }
+fn default_dep_paths() -> Vec<String> {
+    vec![".".to_string()]
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CertScannerConfig {
@@ -291,11 +306,12 @@ pub struct CertScannerConfig {
 }
 
 impl Default for CertScannerConfig {
-    fn default() -> Self { Self { enabled: true } }
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CodeScannerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -304,7 +320,6 @@ pub struct CodeScannerConfig {
     #[serde(default)]
     pub exclude: Vec<String>,
 }
-
 
 #[cfg(test)]
 mod tests {

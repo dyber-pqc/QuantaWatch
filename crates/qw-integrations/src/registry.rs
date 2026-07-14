@@ -1,6 +1,6 @@
-use async_trait::async_trait;
-use qw_scanner::{ScanTarget, Finding};
 use crate::types::*;
+use async_trait::async_trait;
+use qw_scanner::{Finding, ScanTarget};
 use std::collections::HashMap;
 
 #[derive(Debug, thiserror::Error)]
@@ -33,20 +33,32 @@ pub trait Integration: Send + Sync + 'static {
     /// Fetch the raw content of a discovered target (e.g. a remote dependency
     /// file) so it can be scanned inline. Defaults to `None` for integrations
     /// that do not expose file content.
-    async fn fetch_content(&self, _target: &ScanTarget) -> Result<Option<String>, IntegrationError> {
+    async fn fetch_content(
+        &self,
+        _target: &ScanTarget,
+    ) -> Result<Option<String>, IntegrationError> {
         Ok(None)
     }
 
     /// Fetch the current status of a previously-created remediation
     /// (ticket/PR) by its external id, to reconcile the closed-loop state.
-    async fn remediation_status(&self, _external_id: &str) -> Result<TicketStatus, IntegrationError> {
+    async fn remediation_status(
+        &self,
+        _external_id: &str,
+    ) -> Result<TicketStatus, IntegrationError> {
         Ok(TicketStatus::Unknown)
     }
 
     /// Register an inbound webhook with the provider so it pushes status
     /// changes to `callback_url` (signed with `secret`). Returns a description.
-    async fn register_webhook(&self, _callback_url: &str, _secret: &str) -> Result<String, IntegrationError> {
-        Err(IntegrationError::NotSupported("webhook registration not supported".to_string()))
+    async fn register_webhook(
+        &self,
+        _callback_url: &str,
+        _secret: &str,
+    ) -> Result<String, IntegrationError> {
+        Err(IntegrationError::NotSupported(
+            "webhook registration not supported".to_string(),
+        ))
     }
 }
 
@@ -62,11 +74,14 @@ impl Default for IntegrationRegistry {
 
 impl IntegrationRegistry {
     pub fn new() -> Self {
-        Self { integrations: HashMap::new() }
+        Self {
+            integrations: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, integration: Box<dyn Integration>) {
-        self.integrations.insert(integration.id().to_string(), integration);
+        self.integrations
+            .insert(integration.id().to_string(), integration);
     }
 
     pub fn get(&self, id: &str) -> Option<&dyn Integration> {
@@ -74,18 +89,21 @@ impl IntegrationRegistry {
     }
 
     pub fn list(&self) -> Vec<IntegrationInfo> {
-        self.integrations.values().map(|i| IntegrationInfo {
-            id: i.id().to_string(),
-            integration_type: i.id().split('-').next().unwrap_or(i.id()).to_string(),
-            display_name: i.display_name().to_string(),
-            capabilities: i.capabilities(),
-            status: ConnectionStatus {
-                connected: false,
-                user: None,
-                scopes: vec![],
-                error: None,
-            },
-        }).collect()
+        self.integrations
+            .values()
+            .map(|i| IntegrationInfo {
+                id: i.id().to_string(),
+                integration_type: i.id().split('-').next().unwrap_or(i.id()).to_string(),
+                display_name: i.display_name().to_string(),
+                capabilities: i.capabilities(),
+                status: ConnectionStatus {
+                    connected: false,
+                    user: None,
+                    scopes: vec![],
+                    error: None,
+                },
+            })
+            .collect()
     }
 }
 
@@ -114,7 +132,10 @@ pub fn build_integration_registry(configs: &[IntegrationConfig]) -> IntegrationR
                 }
             }
             other => {
-                tracing::warn!(integration_type = other, "Unknown integration type, skipping");
+                tracing::warn!(
+                    integration_type = other,
+                    "Unknown integration type, skipping"
+                );
             }
         }
     }

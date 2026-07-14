@@ -1,6 +1,6 @@
-use ml_kem::{MlKem768, DecapsulationKey, EncapsulationKey, Ciphertext};
-use ml_kem::kem::{Decapsulate, Encapsulate, KeyExport, Generate};
 use crate::CryptoError;
+use ml_kem::kem::{Decapsulate, Encapsulate, Generate, KeyExport};
+use ml_kem::{Ciphertext, DecapsulationKey, EncapsulationKey, MlKem768};
 
 /// ML-KEM-768 key pair (FIPS 203, security category 3).
 pub struct KemKeyPair {

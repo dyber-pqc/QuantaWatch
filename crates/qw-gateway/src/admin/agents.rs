@@ -55,7 +55,11 @@ fn providers_for_models(models: &[String]) -> BTreeSet<String> {
         if ml.contains("claude") {
             set.insert("anthropic".to_string());
         }
-        if ml.contains("gpt") || ml.starts_with("o1") || ml.starts_with("o3") || ml.contains("openai") {
+        if ml.contains("gpt")
+            || ml.starts_with("o1")
+            || ml.starts_with("o3")
+            || ml.contains("openai")
+        {
             set.insert("openai".to_string());
         }
         if ml.contains("ollama") {
@@ -141,11 +145,19 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
         // 4. Overall = weakest channel (security is gated by the worst link).
         let (overall_score, pqc_status) = providers
             .iter()
-            .min_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal))
+            .min_by(|a, b| {
+                a.score
+                    .partial_cmp(&b.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
             .map(|p| (p.score, p.pqc_status.clone()))
             .unwrap_or((100.0, PqcStatus::Unknown));
 
-        providers.sort_by(|a, b| a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal));
+        providers.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         agents.push(AgentPosture {
             name: name.clone(),
@@ -162,14 +174,19 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
     }
 
     // Most at-risk agents first.
-    agents.sort_by(|a, b| a.overall_score.partial_cmp(&b.overall_score).unwrap_or(std::cmp::Ordering::Equal));
+    agents.sort_by(|a, b| {
+        a.overall_score
+            .partial_cmp(&b.overall_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let total = agents.len();
     let at_risk = agents.iter().filter(|a| a.overall_score < 80.0).count();
     let avg_score = if agents.is_empty() {
         100.0
     } else {
-        (agents.iter().map(|a| a.overall_score).sum::<f64>() / agents.len() as f64 * 10.0).round() / 10.0
+        (agents.iter().map(|a| a.overall_score).sum::<f64>() / agents.len() as f64 * 10.0).round()
+            / 10.0
     };
 
     Json(json!({

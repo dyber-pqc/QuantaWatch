@@ -1,10 +1,10 @@
-pub mod traits;
 pub mod anthropic;
-pub mod openai;
 pub mod ollama;
+pub mod openai;
+pub mod traits;
 
-use std::collections::HashMap;
 use crate::config::GatewayConfig;
+use std::collections::HashMap;
 use traits::LlmProvider;
 
 /// Registry of configured LLM providers.
@@ -38,7 +38,10 @@ impl ProviderRegistry {
     }
 
     /// Resolve provider from a request path.
-    pub fn resolve_from_path<'a>(&'a self, path: &'a str) -> Option<(&'a str, &'a dyn LlmProvider)> {
+    pub fn resolve_from_path<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> Option<(&'a str, &'a dyn LlmProvider)> {
         // Check path-based routing
         if path.starts_with("/v1/messages") || path.starts_with("/claude") {
             if let Some(p) = self.providers.get("anthropic") {
@@ -50,7 +53,10 @@ impl ProviderRegistry {
                 return Some(("openai", p.as_ref()));
             }
         }
-        if path.starts_with("/api/chat") || path.starts_with("/api/generate") || path.starts_with("/ollama") {
+        if path.starts_with("/api/chat")
+            || path.starts_with("/api/generate")
+            || path.starts_with("/ollama")
+        {
             if let Some(p) = self.providers.get("ollama") {
                 return Some(("ollama", p.as_ref()));
             }
@@ -73,33 +79,47 @@ pub fn build_registry(config: &GatewayConfig) -> ProviderRegistry {
     let mut registry = ProviderRegistry::new();
 
     for (name, provider_config) in &config.providers {
-        let api_key = provider_config.api_key_env.as_ref()
+        let api_key = provider_config
+            .api_key_env
+            .as_ref()
             .and_then(|env| std::env::var(env).ok());
 
         match provider_config.protocol.as_str() {
             "anthropic" => {
-                registry.register(name, Box::new(anthropic::AnthropicProvider::new(
-                    provider_config.upstream.clone(),
-                    api_key,
-                )));
+                registry.register(
+                    name,
+                    Box::new(anthropic::AnthropicProvider::new(
+                        provider_config.upstream.clone(),
+                        api_key,
+                    )),
+                );
             }
             "openai" => {
-                registry.register(name, Box::new(openai::OpenAiProvider::new(
-                    provider_config.upstream.clone(),
-                    api_key,
-                )));
+                registry.register(
+                    name,
+                    Box::new(openai::OpenAiProvider::new(
+                        provider_config.upstream.clone(),
+                        api_key,
+                    )),
+                );
             }
             "ollama" => {
-                registry.register(name, Box::new(ollama::OllamaProvider::new(
-                    provider_config.upstream.clone(),
-                )));
+                registry.register(
+                    name,
+                    Box::new(ollama::OllamaProvider::new(
+                        provider_config.upstream.clone(),
+                    )),
+                );
             }
             "openai-compat" => {
                 // Use OpenAI adapter for any OpenAI-compatible endpoint
-                registry.register(name, Box::new(openai::OpenAiProvider::new(
-                    provider_config.upstream.clone(),
-                    api_key,
-                )));
+                registry.register(
+                    name,
+                    Box::new(openai::OpenAiProvider::new(
+                        provider_config.upstream.clone(),
+                        api_key,
+                    )),
+                );
             }
             _ => {
                 tracing::warn!(name = %name, protocol = %provider_config.protocol, "Unknown protocol, skipping");

@@ -1,9 +1,12 @@
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "qw", about = "QuantaWatch CLI - Post-quantum security for AI agents")]
+#[command(
+    name = "qw",
+    about = "QuantaWatch CLI - Post-quantum security for AI agents"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -130,7 +133,12 @@ async fn main() -> Result<()> {
                 std::process::exit(1);
             }
         }
-        Commands::Inspect { path, last, session, event_type } => {
+        Commands::Inspect {
+            path,
+            last,
+            session,
+            event_type,
+        } => {
             println!("QuantaWatch Audit Inspector");
             println!("==========================");
             println!("Log: {}", path.display());
@@ -219,11 +227,10 @@ async fn main() -> Result<()> {
                 println!("    key_hash: \"{hash}\"");
                 println!("    role: operator");
             } else {
-                let password = password.ok_or_else(|| {
-                    anyhow::anyhow!("provide a password, or use --api-key")
-                })?;
-                let hash = qw_crypto::hash_password(&password)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
+                let password = password
+                    .ok_or_else(|| anyhow::anyhow!("provide a password, or use --api-key"))?;
+                let hash =
+                    qw_crypto::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
                 println!("Config entry (quantawatch.yaml under auth.users):");
                 println!("  - username: admin");
                 println!("    password_hash: \"{hash}\"");
@@ -235,8 +242,12 @@ async fn main() -> Result<()> {
             println!("==================================");
             let content = std::fs::read_to_string(&path)?;
             let pack: serde_json::Value = serde_json::from_str(&content)?;
-            let body = pack.get("evidencePack").ok_or_else(|| anyhow::anyhow!("missing 'evidencePack'"))?;
-            let sig = pack.get("signature").ok_or_else(|| anyhow::anyhow!("missing 'signature'"))?;
+            let body = pack
+                .get("evidencePack")
+                .ok_or_else(|| anyhow::anyhow!("missing 'evidencePack'"))?;
+            let sig = pack
+                .get("signature")
+                .ok_or_else(|| anyhow::anyhow!("missing 'signature'"))?;
 
             let claimed_digest = sig["digest"].as_str().unwrap_or_default();
             let pubkey = hex::decode(sig["publicKey"].as_str().unwrap_or_default())
@@ -250,22 +261,51 @@ async fn main() -> Result<()> {
             let digest_ok = digest == claimed_digest;
             let sig_ok = qw_crypto::verify(&pubkey, digest.as_bytes(), &signature).unwrap_or(false);
 
-            println!("  Tenant:        {}", body["tenant"].as_str().unwrap_or("?"));
-            println!("  Generated:     {}", body["generatedAt"].as_str().unwrap_or("?"));
-            println!("  Signer (fp):   {}", body["gatewayFingerprint"].as_str().unwrap_or("?"));
-            println!("  Algorithm:     {}", sig["algorithm"].as_str().unwrap_or("?"));
-            println!("  Attack paths:  {} ({} critical)",
+            println!(
+                "  Tenant:        {}",
+                body["tenant"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  Generated:     {}",
+                body["generatedAt"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  Signer (fp):   {}",
+                body["gatewayFingerprint"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  Algorithm:     {}",
+                sig["algorithm"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  Attack paths:  {} ({} critical)",
                 body["attackPaths"]["total"].as_u64().unwrap_or(0),
-                body["attackPaths"]["critical"].as_u64().unwrap_or(0));
-            println!("  Audit chain:   valid={}", body["auditChain"]["valid"].as_bool().unwrap_or(false));
+                body["attackPaths"]["critical"].as_u64().unwrap_or(0)
+            );
+            println!(
+                "  Audit chain:   valid={}",
+                body["auditChain"]["valid"].as_bool().unwrap_or(false)
+            );
             println!();
-            println!("  Digest match:  {}", if digest_ok { "OK" } else { "MISMATCH" });
-            println!("  Signature:     {}", if sig_ok { "VALID (ML-DSA-65)" } else { "INVALID" });
+            println!(
+                "  Digest match:  {}",
+                if digest_ok { "OK" } else { "MISMATCH" }
+            );
+            println!(
+                "  Signature:     {}",
+                if sig_ok {
+                    "VALID (ML-DSA-65)"
+                } else {
+                    "INVALID"
+                }
+            );
             println!();
             if digest_ok && sig_ok {
                 println!("VERIFIED — this evidence pack is authentic and unmodified.");
             } else {
-                println!("VERIFICATION FAILED — the pack has been tampered with or is not authentic.");
+                println!(
+                    "VERIFICATION FAILED — the pack has been tampered with or is not authentic."
+                );
                 std::process::exit(1);
             }
         }
@@ -293,19 +333,53 @@ async fn main() -> Result<()> {
             let digest_ok = recomputed == claimed_digest;
 
             // Reconstruct the signed quote payload: digest|nonce|name=value;...
-            let measure_str = att["measurements"].as_array().cloned().unwrap_or_default().iter()
-                .map(|m| format!("{}={}", m["name"].as_str().unwrap_or(""), m["value"].as_str().unwrap_or("")))
-                .collect::<Vec<_>>().join(";");
+            let measure_str = att["measurements"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .iter()
+                .map(|m| {
+                    format!(
+                        "{}={}",
+                        m["name"].as_str().unwrap_or(""),
+                        m["value"].as_str().unwrap_or("")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(";");
             let quote = format!("{claimed_digest}|{nonce}|{measure_str}");
             let sig_ok = qw_crypto::verify(&pubkey, quote.as_bytes(), &signature).unwrap_or(false);
 
-            println!("  Type:          {}", att["attestationType"].as_str().unwrap_or("?"));
-            println!("  Algorithm:     {}", att["algorithm"].as_str().unwrap_or("?"));
-            println!("  Signer (fp):   {}", att["signerFingerprint"].as_str().unwrap_or("?"));
+            println!(
+                "  Type:          {}",
+                att["attestationType"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  Algorithm:     {}",
+                att["algorithm"].as_str().unwrap_or("?")
+            );
+            println!(
+                "  Signer (fp):   {}",
+                att["signerFingerprint"].as_str().unwrap_or("?")
+            );
             println!("  Measurements:  {measure_str}");
             println!();
-            println!("  BOM digest:    {}", if digest_ok { "OK (CBOM unmodified)" } else { "MISMATCH" });
-            println!("  Quote sig:     {}", if sig_ok { "VALID (ML-DSA-65)" } else { "INVALID" });
+            println!(
+                "  BOM digest:    {}",
+                if digest_ok {
+                    "OK (CBOM unmodified)"
+                } else {
+                    "MISMATCH"
+                }
+            );
+            println!(
+                "  Quote sig:     {}",
+                if sig_ok {
+                    "VALID (ML-DSA-65)"
+                } else {
+                    "INVALID"
+                }
+            );
             println!();
             if digest_ok && sig_ok {
                 println!("VERIFIED — the CBOM is authentically attested and unmodified.");
@@ -349,7 +423,13 @@ async fn scan_directory(dir: &std::path::Path) -> Result<Vec<qw_scanner::ScanRes
     let registry = all_scanners();
     let mut results = Vec::new();
 
-    const MANIFESTS: &[&str] = &["Cargo.toml", "package.json", "requirements.txt", "go.mod", "Gemfile"];
+    const MANIFESTS: &[&str] = &[
+        "Cargo.toml",
+        "package.json",
+        "requirements.txt",
+        "go.mod",
+        "Gemfile",
+    ];
     for name in MANIFESTS {
         let p = dir.join(name);
         if p.is_file() {
@@ -377,7 +457,10 @@ fn print_findings(results: &[qw_scanner::ScanResult]) {
             continue;
         }
         for f in &result.findings {
-            let loc = f.asset.location.line
+            let loc = f
+                .asset
+                .location
+                .line
                 .map(|l| format!("{}:{}", f.asset.location.path, l))
                 .unwrap_or_else(|| f.asset.location.path.clone());
             println!("[{:?}] {} ({})", f.severity, f.title, f.pqc_status);
@@ -394,7 +477,10 @@ fn print_posture(summary: &qw_cbom::PostureSummary) {
 
     println!("By category:");
     for cat in &summary.by_category {
-        println!("  {:<20} {:.1}  ({} assets)", cat.category, cat.score, cat.asset_count);
+        println!(
+            "  {:<20} {:.1}  ({} assets)",
+            cat.category, cat.score, cat.asset_count
+        );
     }
 
     if !summary.by_status.is_empty() {

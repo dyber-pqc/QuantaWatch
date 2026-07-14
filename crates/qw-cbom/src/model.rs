@@ -16,7 +16,10 @@ pub struct CryptoBom {
     pub services: Vec<CryptoService>,
     #[serde(rename = "x-quantawatch-posture")]
     pub posture: PostureSummary,
-    #[serde(rename = "x-quantawatch-attestation", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "x-quantawatch-attestation",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub attestation: Option<Attestation>,
 }
 

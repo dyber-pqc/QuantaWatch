@@ -1,5 +1,5 @@
-use ml_dsa::{KeyGen, MlDsa65, KeyPair};
 use crate::CryptoError;
+use ml_dsa::{KeyGen, KeyPair, MlDsa65};
 
 /// ML-DSA-65 signing key pair (FIPS 204, security category 3).
 pub struct SigningKeyPair {
@@ -16,7 +16,9 @@ impl SigningKeyPair {
 
     /// Sign a message with ML-DSA-65 (deterministic).
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let sig = self.keypair.signing_key()
+        let sig = self
+            .keypair
+            .signing_key()
             .sign_deterministic(message, &[])
             .map_err(|e| CryptoError::Signing(format!("{e:?}")))?;
         Ok(sig.encode().to_vec())
@@ -39,8 +41,12 @@ pub fn sign(keypair: &SigningKeyPair, message: &[u8]) -> Result<Vec<u8>, CryptoE
 }
 
 /// Verify an ML-DSA-65 signature given raw public key bytes.
-pub fn verify(public_key_bytes: &[u8], message: &[u8], signature_bytes: &[u8]) -> Result<bool, CryptoError> {
-    use ml_dsa::{VerifyingKey, Signature, EncodedVerifyingKey, EncodedSignature};
+pub fn verify(
+    public_key_bytes: &[u8],
+    message: &[u8],
+    signature_bytes: &[u8],
+) -> Result<bool, CryptoError> {
+    use ml_dsa::{EncodedSignature, EncodedVerifyingKey, Signature, VerifyingKey};
 
     let vk_encoded = EncodedVerifyingKey::<MlDsa65>::try_from(public_key_bytes)
         .map_err(|_| CryptoError::Verification("invalid public key length".to_string()))?;
@@ -50,7 +56,11 @@ pub fn verify(public_key_bytes: &[u8], message: &[u8], signature_bytes: &[u8]) -
         .map_err(|_| CryptoError::Verification("invalid signature length".to_string()))?;
     let sig = match Signature::<MlDsa65>::decode(&sig_encoded) {
         Some(s) => s,
-        None => return Err(CryptoError::Verification("invalid signature encoding".to_string())),
+        None => {
+            return Err(CryptoError::Verification(
+                "invalid signature encoding".to_string(),
+            ))
+        }
     };
 
     Ok(vk.verify_with_context(message, &[], &sig))

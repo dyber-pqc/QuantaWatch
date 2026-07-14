@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use axum::{
     extract::State,
-    response::IntoResponse,
     http::{header, StatusCode},
+    response::IntoResponse,
     Extension, Json,
 };
 use serde_json::json;
@@ -29,11 +29,19 @@ pub async fn evidence_pack(
             StatusCode::OK,
             [
                 (header::CONTENT_TYPE, "application/json".to_string()),
-                (header::CONTENT_DISPOSITION, "attachment; filename=\"quantawatch-evidence-pack.json\"".to_string()),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"quantawatch-evidence-pack.json\"".to_string(),
+                ),
             ],
             s,
-        ).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))).into_response(),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
     }
 }
 
@@ -41,10 +49,16 @@ pub async fn evidence_pack(
 /// scheduled delivery task).
 pub async fn build_pack(state: &AppState, tenant: &str) -> serde_json::Value {
     // 1. Posture.
-    let providers: Vec<_> = state.provider_crypto.iter().map(|e| e.value().clone()).collect();
+    let providers: Vec<_> = state
+        .provider_crypto
+        .iter()
+        .map(|e| e.value().clone())
+        .collect();
     let posture = {
         let cache = state.posture_cache.read().await;
-        cache.clone().unwrap_or_else(|| PostureEngine::summarize(&[], &providers))
+        cache
+            .clone()
+            .unwrap_or_else(|| PostureEngine::summarize(&[], &providers))
     };
 
     // 2. CBOM with signed attestation.
@@ -56,7 +70,11 @@ pub async fn build_pack(state: &AppState, tenant: &str) -> serde_json::Value {
 
     // 4. Attack-path graph.
     let graph = crate::admin::graph::build_graph(state, tenant, &HashMap::new());
-    let critical = graph.paths.iter().filter(|p| p.severity == "critical").count();
+    let critical = graph
+        .paths
+        .iter()
+        .filter(|p| p.severity == "critical")
+        .count();
 
     // 5. Audit-chain verification (tamper-evidence).
     let audit = {
@@ -88,7 +106,11 @@ pub async fn build_pack(state: &AppState, tenant: &str) -> serde_json::Value {
     // Sign the canonical body with the gateway's ML-DSA-65 identity.
     let canonical = serde_json::to_vec(&body).unwrap_or_default();
     let digest = sha3_256_hex(&canonical);
-    let signature = state.gateway_identity.sign(digest.as_bytes()).map(hex::encode).unwrap_or_default();
+    let signature = state
+        .gateway_identity
+        .sign(digest.as_bytes())
+        .map(hex::encode)
+        .unwrap_or_default();
 
     json!({
         "evidencePack": body,

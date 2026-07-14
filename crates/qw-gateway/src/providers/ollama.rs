@@ -1,5 +1,5 @@
-use bytes::Bytes;
 use super::traits::*;
+use bytes::Bytes;
 
 pub struct OllamaProvider {
     upstream: String,
@@ -12,38 +12,52 @@ impl OllamaProvider {
 }
 
 impl LlmProvider for OllamaProvider {
-    fn name(&self) -> &str { "ollama" }
+    fn name(&self) -> &str {
+        "ollama"
+    }
 
-    fn upstream_url(&self) -> &str { &self.upstream }
+    fn upstream_url(&self) -> &str {
+        &self.upstream
+    }
 
     fn parse_request(&self, body: &Bytes) -> Option<NormalizedRequest> {
         let json: serde_json::Value = serde_json::from_slice(body).ok()?;
 
         let model = json.get("model")?.as_str()?.to_string();
         let stream = json.get("stream").and_then(|s| s.as_bool()).unwrap_or(true);
-        let system_prompt = json.get("system").and_then(|s| s.as_str()).map(String::from);
+        let system_prompt = json
+            .get("system")
+            .and_then(|s| s.as_str())
+            .map(String::from);
 
-        let messages = json.get("messages")
+        let messages = json
+            .get("messages")
             .and_then(|m| m.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|msg| {
-                    let role = msg.get("role")?.as_str()?.to_string();
-                    let content = msg.get("content")?.as_str()?.to_string();
-                    Some(NormalizedMessage { role, content })
-                }).collect()
+                arr.iter()
+                    .filter_map(|msg| {
+                        let role = msg.get("role")?.as_str()?.to_string();
+                        let content = msg.get("content")?.as_str()?.to_string();
+                        Some(NormalizedMessage { role, content })
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
-        let tools = json.get("tools")
+        let tools = json
+            .get("tools")
             .and_then(|t| t.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|tool| {
-                    let name = tool.get("function")
-                        .and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str())?
-                        .to_string();
-                    Some(ToolDefinition { name })
-                }).collect()
+                arr.iter()
+                    .filter_map(|tool| {
+                        let name = tool
+                            .get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())?
+                            .to_string();
+                        Some(ToolDefinition { name })
+                    })
+                    .collect()
             })
             .unwrap_or_default();
 
@@ -75,12 +89,14 @@ impl LlmProvider for OllamaProvider {
             .and_then(|m| m.get("tool_calls"))
             .and_then(|tc| tc.as_array())
             .map(|arr| {
-                arr.iter().filter_map(|tc| {
-                    tc.get("function")
-                        .and_then(|f| f.get("name"))
-                        .and_then(|n| n.as_str())
-                        .map(String::from)
-                }).collect()
+                arr.iter()
+                    .filter_map(|tc| {
+                        tc.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                            .map(String::from)
+                    })
+                    .collect()
             })
             .unwrap_or_default()
     }

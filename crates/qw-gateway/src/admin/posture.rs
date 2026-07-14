@@ -1,12 +1,11 @@
 use axum::{
-    extract::{State, Query},
+    extract::{Query, State},
     response::IntoResponse,
-    Extension,
-    Json,
+    Extension, Json,
 };
+use qw_cbom::PostureEngine;
 use serde::Deserialize;
 use serde_json::json;
-use qw_cbom::PostureEngine;
 
 use crate::auth::{tenant_of, AuthContext};
 use crate::state::AppState;
@@ -20,7 +19,9 @@ pub async fn get_posture(State(state): State<AppState>) -> impl IntoResponse {
 
     // Compute fresh posture from scan store + provider crypto
     let scan_results = vec![];
-    let providers: Vec<_> = state.provider_crypto.iter()
+    let providers: Vec<_> = state
+        .provider_crypto
+        .iter()
         .map(|e| e.value().clone())
         .collect();
 

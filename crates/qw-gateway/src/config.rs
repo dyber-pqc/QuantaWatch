@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use serde::{Serialize, Deserialize};
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GatewayConfig {
@@ -70,8 +70,12 @@ pub struct ConnectorConfig {
     pub tags: Vec<String>,
 }
 
-fn default_asset_kind() -> String { "tls_endpoint".to_string() }
-fn default_environment() -> String { "default".to_string() }
+fn default_asset_kind() -> String {
+    "tls_endpoint".to_string()
+}
+fn default_environment() -> String {
+    "default".to_string()
+}
 
 /// Authentication & RBAC. Disabled by default for backward compatibility.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -106,7 +110,9 @@ pub struct EvidenceDeliveryConfig {
     pub tenants: Vec<String>,
 }
 
-fn default_delivery_interval() -> u64 { 86_400 }
+fn default_delivery_interval() -> u64 {
+    86_400
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OidcConfig {
@@ -135,8 +141,12 @@ pub struct OidcConfig {
     pub default_org: String,
 }
 
-fn default_app_url() -> String { "/".to_string() }
-fn default_groups_claim() -> String { "groups".to_string() }
+fn default_app_url() -> String {
+    "/".to_string()
+}
+fn default_groups_claim() -> String {
+    "groups".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserConfig {
@@ -161,19 +171,23 @@ pub struct ApiKeyConfig {
     pub org: String,
 }
 
-fn default_auth_session_ttl() -> u64 { 28_800 }
-fn default_role() -> String { "viewer".to_string() }
-fn default_org() -> String { "default".to_string() }
+fn default_auth_session_ttl() -> u64 {
+    28_800
+}
+fn default_role() -> String {
+    "viewer".to_string()
+}
+fn default_org() -> String {
+    "default".to_string()
+}
 
 /// Background scheduled-scanning configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ScheduleConfig {
     /// Interval in seconds between automatic re-scans. 0 disables scheduled scanning.
     #[serde(default)]
     pub scan_interval_secs: u64,
 }
-
 
 /// A posture SLO (service-level objective) — policy-as-code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,8 +207,12 @@ pub struct SloConfig {
     pub action: String,
 }
 
-fn default_operator() -> String { "gte".to_string() }
-fn default_slo_action() -> String { "alert".to_string() }
+fn default_operator() -> String {
+    "gte".to_string()
+}
+fn default_slo_action() -> String {
+    "alert".to_string()
+}
 
 /// A per-tenant scan schedule.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -248,9 +266,15 @@ pub struct AlertChannelConfig {
     pub min_severity: Option<String>,
 }
 
-fn default_posture_drop() -> f64 { 5.0 }
-fn default_cert_days() -> u32 { 30 }
-fn default_channel_type() -> String { "webhook".to_string() }
+fn default_posture_drop() -> f64 {
+    5.0
+}
+fn default_cert_days() -> u32 {
+    30
+}
+fn default_channel_type() -> String {
+    "webhook".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -267,8 +291,12 @@ fn default_gateway() -> ServerConfig {
     }
 }
 
-fn default_listen() -> String { "0.0.0.0:9090".to_string() }
-fn default_admin_listen() -> String { "0.0.0.0:9091".to_string() }
+fn default_listen() -> String {
+    "0.0.0.0:9090".to_string()
+}
+fn default_admin_listen() -> String {
+    "0.0.0.0:9091".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -281,7 +309,9 @@ pub struct ProviderConfig {
     pub api_key_header: Option<String>,
 }
 
-fn default_protocol() -> String { "openai-compat".to_string() }
+fn default_protocol() -> String {
+    "openai-compat".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PolicyConfig {
@@ -291,8 +321,12 @@ pub struct PolicyConfig {
     pub default: String,
 }
 
-fn default_policy_path() -> String { "./quantawatch.yaml".to_string() }
-fn default_deny() -> String { "deny".to_string() }
+fn default_policy_path() -> String {
+    "./quantawatch.yaml".to_string()
+}
+fn default_deny() -> String {
+    "deny".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditConfig {
@@ -311,8 +345,12 @@ impl Default for AuditConfig {
     }
 }
 
-fn default_audit_path() -> String { "./audit".to_string() }
-fn default_merkle_batch() -> usize { 64 }
+fn default_audit_path() -> String {
+    "./audit".to_string()
+}
+fn default_merkle_batch() -> usize {
+    64
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonitorConfig {
@@ -340,8 +378,12 @@ impl Default for MonitorConfig {
     }
 }
 
-fn default_blocking_threshold() -> String { "high".to_string() }
-fn default_true() -> bool { true }
+fn default_blocking_threshold() -> String {
+    "high".to_string()
+}
+fn default_true() -> bool {
+    true
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdentityConfig {
@@ -360,8 +402,12 @@ impl Default for IdentityConfig {
     }
 }
 
-fn default_session_ttl() -> i64 { 3600 }
-fn default_key_dir() -> String { "./keys".to_string() }
+fn default_session_ttl() -> i64 {
+    3600
+}
+fn default_key_dir() -> String {
+    "./keys".to_string()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
@@ -402,24 +448,33 @@ impl GatewayConfig {
 impl Default for GatewayConfig {
     fn default() -> Self {
         let mut providers = HashMap::new();
-        providers.insert("anthropic".to_string(), ProviderConfig {
-            upstream: "https://api.anthropic.com".to_string(),
-            protocol: "anthropic".to_string(),
-            api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
-            api_key_header: Some("x-api-key".to_string()),
-        });
-        providers.insert("openai".to_string(), ProviderConfig {
-            upstream: "https://api.openai.com".to_string(),
-            protocol: "openai".to_string(),
-            api_key_env: Some("OPENAI_API_KEY".to_string()),
-            api_key_header: Some("Authorization".to_string()),
-        });
-        providers.insert("ollama".to_string(), ProviderConfig {
-            upstream: "http://localhost:11434".to_string(),
-            protocol: "ollama".to_string(),
-            api_key_env: None,
-            api_key_header: None,
-        });
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                upstream: "https://api.anthropic.com".to_string(),
+                protocol: "anthropic".to_string(),
+                api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+                api_key_header: Some("x-api-key".to_string()),
+            },
+        );
+        providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                upstream: "https://api.openai.com".to_string(),
+                protocol: "openai".to_string(),
+                api_key_env: Some("OPENAI_API_KEY".to_string()),
+                api_key_header: Some("Authorization".to_string()),
+            },
+        );
+        providers.insert(
+            "ollama".to_string(),
+            ProviderConfig {
+                upstream: "http://localhost:11434".to_string(),
+                protocol: "ollama".to_string(),
+                api_key_env: None,
+                api_key_header: None,
+            },
+        );
 
         Self {
             gateway: default_gateway(),

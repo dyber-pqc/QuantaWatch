@@ -1,8 +1,4 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Json,
-};
+use axum::{extract::State, response::IntoResponse, Json};
 use serde_json::json;
 
 use crate::state::AppState;

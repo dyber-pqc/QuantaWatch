@@ -81,19 +81,25 @@ impl AuthManager {
     pub fn create_external_session(&self, username: &str, role: Role, org: &str) -> (String, u64) {
         let token = random_token(32);
         let ttl = self.config.session_ttl_secs;
-        self.sessions.insert(token.clone(), Session {
-            username: username.to_string(),
-            role,
-            org: org.to_string(),
-            expires_at: chrono::Utc::now() + chrono::Duration::seconds(ttl as i64),
-        });
+        self.sessions.insert(
+            token.clone(),
+            Session {
+                username: username.to_string(),
+                role,
+                org: org.to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(ttl as i64),
+            },
+        );
         (token, ttl)
     }
 
     /// Begin an OIDC flow: mint and remember a state nonce (10-min TTL).
     pub fn begin_oidc(&self) -> String {
         let state = random_token(16);
-        self.oidc_states.insert(state.clone(), chrono::Utc::now() + chrono::Duration::minutes(10));
+        self.oidc_states.insert(
+            state.clone(),
+            chrono::Utc::now() + chrono::Duration::minutes(10),
+        );
         state
     }
 

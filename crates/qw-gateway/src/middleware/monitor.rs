@@ -1,13 +1,13 @@
 use axum::{
     extract::{Request, State},
     middleware::Next,
-    response::{Response, IntoResponse},
+    response::{IntoResponse, Response},
 };
 use bytes::Bytes;
 
-use crate::state::AppState;
 use crate::error::GatewayError;
 use crate::middleware::identity::SessionContext;
+use crate::state::AppState;
 
 /// Payload sensitivity signal derived by the monitor, consumed by the proxy
 /// handler to record observed data flows (blast-radius analysis).
@@ -40,26 +40,38 @@ pub async fn monitor_layer(
                     scan_text.push('\n');
                 }
 
-                let assessment = state.security_monitor.scan_request(
-                    &scan_text,
-                    normalized.system_prompt.as_deref(),
-                );
+                let assessment = state
+                    .security_monitor
+                    .scan_request(&scan_text, normalized.system_prompt.as_deref());
 
                 // Derive the flow-sensitivity signal (PII / data-exfiltration = sensitive).
                 signal.threat = !assessment.threats.is_empty();
                 signal.sensitive = assessment.threats.iter().any(|t| {
                     let c = format!("{:?}", t.category).to_lowercase();
-                    c.contains("pii") || c.contains("exfil") || c.contains("data") || c.contains("secret")
+                    c.contains("pii")
+                        || c.contains("exfil")
+                        || c.contains("data")
+                        || c.contains("secret")
                 });
 
                 // Record the observed agent→provider data flow (blast-radius analysis),
                 // whether or not it is ultimately blocked — a blocked sensitive attempt is
                 // itself meaningful exposure signal.
-                let agent = session_ctx.as_ref().map(|c| c.agent_name.as_str()).unwrap_or("default");
-                state.store.record_flow(qw_store::DEFAULT_TENANT, agent, provider_name, signal.sensitive, signal.threat);
+                let agent = session_ctx
+                    .as_ref()
+                    .map(|c| c.agent_name.as_str())
+                    .unwrap_or("default");
+                state.store.record_flow(
+                    qw_store::DEFAULT_TENANT,
+                    agent,
+                    provider_name,
+                    signal.sensitive,
+                    signal.threat,
+                );
 
                 if assessment.should_block {
-                    let session_id = session_ctx.as_ref()
+                    let session_id = session_ctx
+                        .as_ref()
                         .map(|c| c.session_id.as_str())
                         .unwrap_or("unknown");
 
@@ -72,20 +84,30 @@ pub async fn monitor_layer(
                             "Threat detected and blocked"
                         );
 
-                        let _ = state.audit_logger.log(session_id, qw_audit::AuditEvent::ThreatBlocked {
-                            category: format!("{:?}", threat.category),
-                            severity: format!("{:?}", threat.severity),
-                            pattern: threat.pattern_name.clone(),
-                        }).await;
+                        let _ = state
+                            .audit_logger
+                            .log(
+                                session_id,
+                                qw_audit::AuditEvent::ThreatBlocked {
+                                    category: format!("{:?}", threat.category),
+                                    severity: format!("{:?}", threat.severity),
+                                    pattern: threat.pattern_name.clone(),
+                                },
+                            )
+                            .await;
                     }
 
-                    return GatewayError::ThreatDetected(
-                        format!("{} threat(s) detected: {}", assessment.threats.len(),
-                            assessment.threats.iter()
-                                .map(|t| t.description.as_str())
-                                .collect::<Vec<_>>()
-                                .join("; "))
-                    ).into_response();
+                    return GatewayError::ThreatDetected(format!(
+                        "{} threat(s) detected: {}",
+                        assessment.threats.len(),
+                        assessment
+                            .threats
+                            .iter()
+                            .map(|t| t.description.as_str())
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    ))
+                    .into_response();
                 }
             }
         }
