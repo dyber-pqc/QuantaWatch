@@ -3,9 +3,10 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{any, get, post},
-    Router,
+    Json, Router,
 };
 use bytes::Bytes;
+use serde_json::json;
 use std::time::Instant;
 
 use qw_crypto::sha3_256_hex;
@@ -350,27 +351,62 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
     // Build upstream URL
     let upstream_url = provider.build_upstream_url(&path);
 
-    // Forward request to upstream
-    let mut upstream_req = state.http_client.post(&upstream_url).body(body.to_vec());
+    // Circuit breaker: if this provider's upstream is already known-down, fail
+    // fast with 503 instead of making the caller wait out the full timeout.
+    let breaker = state.resilience.breaker(provider_name);
+    if !breaker.allow() {
+        tracing::warn!(provider = %provider_name, "upstream circuit open; fast-failing");
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({
+                "error": "upstream temporarily unavailable (circuit open)",
+                "provider": provider_name,
+                "retryAfterSecs": state.config.resilience.circuit_cooldown_secs,
+            })),
+        )
+            .into_response();
+    }
 
-    // Set content-type
-    upstream_req = upstream_req.header("content-type", "application/json");
-
-    // Set API key if configured
+    // Build the upstream request.
+    let mut req_builder = state
+        .http_client
+        .post(&upstream_url)
+        .body(body.to_vec())
+        .header("content-type", "application/json");
     if let Some((header, value)) = provider.api_key_header() {
-        upstream_req = upstream_req.header(header, &value);
+        req_builder = req_builder.header(header, &value);
     }
-
-    // Set Anthropic-specific headers
     if provider_name == "anthropic" {
-        upstream_req = upstream_req.header("anthropic-version", "2023-06-01");
+        req_builder = req_builder.header("anthropic-version", "2023-06-01");
     }
-
-    // Send upstream request
-    let upstream_response = match upstream_req.send().await {
+    let upstream_req = match req_builder.build() {
         Ok(r) => r,
         Err(e) => {
-            tracing::error!(error = %e, provider = %provider_name, "Upstream request failed");
+            return GatewayError::Internal(format!("failed to build upstream request: {e}"))
+                .into_response()
+        }
+    };
+
+    // Send with retry (transport failures only) and record the outcome so the
+    // breaker can trip on sustained upstream failure.
+    let upstream_response = match state
+        .resilience
+        .send_with_retry(&state.http_client, upstream_req)
+        .await
+    {
+        Ok(r) => {
+            // Upstream 5xx counts as an upstream-health failure; 4xx does not
+            // (that's the caller's request, not a sick upstream).
+            if r.status().is_server_error() {
+                breaker.record_failure();
+            } else {
+                breaker.record_success();
+            }
+            r
+        }
+        Err(e) => {
+            breaker.record_failure();
+            tracing::error!(error = %e, provider = %provider_name, "Upstream request failed after retries");
             return GatewayError::UpstreamError(format!("{e}")).into_response();
         }
     };

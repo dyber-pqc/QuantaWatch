@@ -6,9 +6,8 @@ use qw_gateway::config::GatewayConfig;
 use qw_gateway::router::build_router;
 use qw_gateway::state::AppState;
 
-/// Helper: build an AppState from defaults using temporary directories,
-/// then return the Axum router ready for `oneshot` calls.
-async fn test_app() -> axum::Router {
+/// Helper: build an AppState from defaults using temporary directories.
+async fn test_state() -> AppState {
     let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let key_dir = tmp.path().join("keys");
     let audit_dir = tmp.path().join("audit");
@@ -36,7 +35,12 @@ async fn test_app() -> axum::Router {
     // In a real test suite you would store it alongside the router.
     std::mem::forget(tmp);
 
-    build_router(state)
+    state
+}
+
+/// Helper: an Axum router over a fresh AppState, ready for `oneshot` calls.
+async fn test_app() -> axum::Router {
+    build_router(test_state().await)
 }
 
 // ---------------------------------------------------------------------------
@@ -101,6 +105,41 @@ async fn post_to_provider_path_runs_middleware() {
         response.status(),
         StatusCode::NOT_FOUND,
         "proxy handler should be reached, got a 404 route-miss"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Data-path resilience: an open circuit fast-fails with 503
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn open_circuit_fast_fails_with_503() {
+    let state = test_state().await;
+
+    // Trip the openai upstream's circuit by recording enough failures. The
+    // breaker registry is stable, so the proxy handler will observe the same
+    // open breaker for this provider.
+    let breaker = state.resilience.breaker("openai");
+    for _ in 0..state.config.resilience.circuit_failure_threshold {
+        breaker.record_failure();
+    }
+
+    let app = build_router(state);
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/chat/completions")
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"model":"gpt-4","messages":[]}"#))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+
+    // Fast-fail without touching the upstream at all.
+    assert_eq!(
+        response.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "open circuit should return 503, got {}",
+        response.status()
     );
 }
 

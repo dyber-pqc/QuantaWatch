@@ -5,6 +5,18 @@ gateway:
   listen: "0.0.0.0:9090"
   admin_listen: "0.0.0.0:9091"
 
+# In-path proxy resilience. The gateway is on the critical path of every LLM
+# request, so these bound worst-case latency and stop a down upstream from
+# taking callers with it. All fields are optional (defaults shown).
+resilience:
+  connect_timeout_secs: 10        # TCP connect timeout to the upstream
+  request_timeout_secs: 120       # total per-request timeout
+  max_retries: 2                  # retries on transport failure (connect errors only)
+  retry_backoff_ms: 200           # base backoff, doubled each attempt
+  retry_on_timeout: false         # retrying a timeout risks a duplicate call
+  circuit_failure_threshold: 5    # consecutive failures before the circuit opens
+  circuit_cooldown_secs: 30       # how long it stays open before a probe
+
 providers:
   anthropic:
     upstream: "https://api.anthropic.com"

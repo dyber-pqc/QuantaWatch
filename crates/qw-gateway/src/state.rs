@@ -32,6 +32,7 @@ pub struct AppState {
     pub provider_crypto: Arc<DashMap<String, ProviderCryptoInfo>>,
     pub alert_manager: Arc<crate::alerts::AlertManager>,
     pub auth_manager: Arc<crate::auth::AuthManager>,
+    pub resilience: Arc<crate::resilience::Resilience>,
 }
 
 /// Public session info stored in the DashMap (without secret keys).
@@ -81,10 +82,21 @@ impl AppState {
         // Initialize provider registry
         let provider_registry = Arc::new(providers::build_registry(&config));
 
-        // HTTP client for upstream requests
+        // HTTP client for upstream requests, bounded by the resilience config so
+        // a slow upstream can't hang callers indefinitely.
         let http_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
+            .connect_timeout(std::time::Duration::from_secs(
+                config.resilience.connect_timeout_secs,
+            ))
+            .timeout(std::time::Duration::from_secs(
+                config.resilience.request_timeout_secs,
+            ))
             .build()?;
+
+        // Per-provider circuit breakers + retry policy for the in-path proxy.
+        let resilience = Arc::new(crate::resilience::Resilience::new(
+            config.resilience.clone(),
+        ));
 
         // Initialize scanner registry
         let scanner_registry = Arc::new(qw_scanner::build_scanner_registry(&config.scanner));
@@ -124,6 +136,7 @@ impl AppState {
             provider_crypto: Arc::new(DashMap::new()),
             alert_manager,
             auth_manager,
+            resilience,
         })
     }
 }

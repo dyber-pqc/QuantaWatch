@@ -9,5 +9,6 @@ pub mod error;
 pub mod middleware;
 pub mod oidc;
 pub mod providers;
+pub mod resilience;
 pub mod router;
 pub mod state;

@@ -34,6 +34,9 @@ pub struct GatewayConfig {
     pub alerts: AlertConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// In-path proxy resilience (timeouts, retries, circuit breaking).
+    #[serde(default)]
+    pub resilience: ResilienceConfig,
     /// Declared external crypto assets (TLS endpoints, ingresses, etc.).
     #[serde(default)]
     pub assets: Vec<AssetConfig>,
@@ -75,6 +78,71 @@ fn default_asset_kind() -> String {
 }
 fn default_environment() -> String {
     "default".to_string()
+}
+
+/// Data-path resilience for the in-path proxy: how the gateway behaves when an
+/// upstream LLM provider is slow, flaky, or down. The gateway sits on the
+/// critical path of every request, so these knobs decide whether a degraded
+/// upstream degrades the customer's product.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResilienceConfig {
+    /// TCP connect timeout for upstream requests.
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout_secs: u64,
+    /// Total per-request timeout (connect + response). Bounds worst-case latency.
+    #[serde(default = "default_request_timeout")]
+    pub request_timeout_secs: u64,
+    /// Max retry attempts on a transport-level failure (never reached upstream).
+    /// Non-idempotent completions are only retried when the request provably
+    /// never hit the server (connect errors), so a retry can't double-charge.
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+    /// Base backoff between retries (doubled each attempt).
+    #[serde(default = "default_retry_backoff_ms")]
+    pub retry_backoff_ms: u64,
+    /// Also retry on request timeout. Off by default: a timeout may mean the
+    /// upstream did process the request, so retrying risks a duplicate call.
+    #[serde(default)]
+    pub retry_on_timeout: bool,
+    /// Consecutive failures before a provider's circuit opens.
+    #[serde(default = "default_circuit_threshold")]
+    pub circuit_failure_threshold: u32,
+    /// How long a circuit stays open before a half-open probe is allowed.
+    #[serde(default = "default_circuit_cooldown")]
+    pub circuit_cooldown_secs: u64,
+}
+
+impl Default for ResilienceConfig {
+    fn default() -> Self {
+        Self {
+            connect_timeout_secs: default_connect_timeout(),
+            request_timeout_secs: default_request_timeout(),
+            max_retries: default_max_retries(),
+            retry_backoff_ms: default_retry_backoff_ms(),
+            retry_on_timeout: false,
+            circuit_failure_threshold: default_circuit_threshold(),
+            circuit_cooldown_secs: default_circuit_cooldown(),
+        }
+    }
+}
+
+fn default_connect_timeout() -> u64 {
+    10
+}
+fn default_request_timeout() -> u64 {
+    120
+}
+fn default_max_retries() -> u32 {
+    2
+}
+fn default_retry_backoff_ms() -> u64 {
+    200
+}
+fn default_circuit_threshold() -> u32 {
+    5
+}
+fn default_circuit_cooldown() -> u64 {
+    30
 }
 
 /// Authentication & RBAC. Disabled by default for backward compatibility.
@@ -491,6 +559,7 @@ impl Default for GatewayConfig {
             slos: Vec::new(),
             alerts: AlertConfig::default(),
             auth: AuthConfig::default(),
+            resilience: ResilienceConfig::default(),
             assets: Vec::new(),
             connectors: Vec::new(),
         }
