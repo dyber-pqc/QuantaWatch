@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod alerts;
 pub mod assets;
+pub mod attest;
 pub mod auth;
 pub mod background;
 pub mod cloud;

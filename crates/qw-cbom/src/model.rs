@@ -44,6 +44,166 @@ pub struct Attestation {
     pub public_key: String,
     pub signed_at: DateTime<Utc>,
     pub note: String,
+    /// Certificate chain from the signing key up to a trust anchor. Empty for
+    /// the software provider (self-attested); for a hardware-rooted provider it
+    /// chains the Attestation Key (AK) → platform → root so a verifier can
+    /// establish that the quote came from a genuine, certified platform.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cert_chain: Vec<AttestationCert>,
+}
+
+/// One link in an attestation key's certificate chain. Each link binds a
+/// subject public key to an issuer and is signed by that issuer's key; the
+/// issuer's key is the `subject` of the next link up, until a self-signed root
+/// that the verifier can pin as a trust anchor. This is the post-quantum
+/// analogue of a TPM AK / EK / vendor-CA chain (all signatures ML-DSA-65).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttestationCert {
+    /// Subject role: "ak" (leaf, signs quotes) | "platform" | "root".
+    pub role: String,
+    /// SHA3-256 fingerprint of the subject public key.
+    pub subject_fingerprint: String,
+    /// Hex ML-DSA-65 subject public key.
+    pub subject_public_key: String,
+    /// SHA3-256 fingerprint of the issuer key (== subject for a self-signed root).
+    pub issuer_fingerprint: String,
+    /// Hex ML-DSA-65 signature by the issuer over this cert's signed content.
+    pub signature: String,
+}
+
+impl AttestationCert {
+    /// Canonical bytes an issuer signs to certify this subject.
+    pub fn signed_content(&self) -> Vec<u8> {
+        format!(
+            "{}|{}|{}",
+            self.role, self.subject_fingerprint, self.subject_public_key
+        )
+        .into_bytes()
+    }
+}
+
+/// Verify an attestation certificate chain: the leaf must certify
+/// `ak_pubkey_hex` (the quote-signing key), every link must be validly signed
+/// by the link above it, and the top must be a self-signed root. Returns the
+/// root fingerprint — a trust anchor the caller can pin — or an error naming the
+/// first broken link. This is what turns "trust the gateway's self-signed key"
+/// into "verify a chain rooted in a hardware/vendor trust anchor".
+pub fn verify_cert_chain(chain: &[AttestationCert], ak_pubkey_hex: &str) -> Result<String, String> {
+    if chain.is_empty() {
+        return Err("empty certificate chain".into());
+    }
+    // The leaf must certify the key that signed the quote.
+    if chain[0].subject_public_key != ak_pubkey_hex {
+        return Err("leaf certificate does not certify the quote-signing key".into());
+    }
+    for (i, cert) in chain.iter().enumerate() {
+        // Integrity: the subject fingerprint must match the subject key bytes.
+        let subj_bytes = hex::decode(&cert.subject_public_key)
+            .map_err(|_| format!("cert {i}: bad subject public key hex"))?;
+        if qw_crypto::sha3_256_hex(&subj_bytes) != cert.subject_fingerprint {
+            return Err(format!(
+                "cert {i}: subject fingerprint does not match subject key"
+            ));
+        }
+        // The issuer's verifying key is the subject of the link above, or —
+        // at the top — this cert itself (a self-signed root).
+        let issuer_pubkey_hex = if i + 1 < chain.len() {
+            let parent = &chain[i + 1];
+            if parent.subject_fingerprint != cert.issuer_fingerprint {
+                return Err(format!(
+                    "cert {i}: issuer fingerprint does not match the parent's subject"
+                ));
+            }
+            &parent.subject_public_key
+        } else {
+            if cert.issuer_fingerprint != cert.subject_fingerprint {
+                return Err("root certificate is not self-signed".into());
+            }
+            &cert.subject_public_key
+        };
+        let issuer_bytes = hex::decode(issuer_pubkey_hex)
+            .map_err(|_| format!("cert {i}: bad issuer public key hex"))?;
+        let sig =
+            hex::decode(&cert.signature).map_err(|_| format!("cert {i}: bad signature hex"))?;
+        if !qw_crypto::verify(&issuer_bytes, &cert.signed_content(), &sig).unwrap_or(false) {
+            return Err(format!(
+                "cert {i}: signature does not verify under the issuer key"
+            ));
+        }
+    }
+    Ok(chain[chain.len() - 1].subject_fingerprint.clone())
+}
+
+#[cfg(test)]
+mod attestation_tests {
+    use super::*;
+    use qw_crypto::SigningKeyPair;
+
+    /// Issue a cert: `issuer` certifies `subject` in the given role.
+    fn issue(role: &str, subject: &SigningKeyPair, issuer: &SigningKeyPair) -> AttestationCert {
+        let subject_pk = subject.verifying_key_bytes();
+        let issuer_pk = issuer.verifying_key_bytes();
+        let mut cert = AttestationCert {
+            role: role.into(),
+            subject_fingerprint: qw_crypto::sha3_256_hex(&subject_pk),
+            subject_public_key: hex::encode(&subject_pk),
+            issuer_fingerprint: qw_crypto::sha3_256_hex(&issuer_pk),
+            signature: String::new(),
+        };
+        cert.signature = hex::encode(issuer.sign(&cert.signed_content()).unwrap());
+        cert
+    }
+
+    /// A two-link chain: AK certified by a self-signed root.
+    fn synthetic_chain() -> (SigningKeyPair, Vec<AttestationCert>) {
+        let root = SigningKeyPair::generate().unwrap();
+        let ak = SigningKeyPair::generate().unwrap();
+        let ak_cert = issue("ak", &ak, &root);
+        let root_cert = issue("root", &root, &root); // self-signed
+        (ak, vec![ak_cert, root_cert])
+    }
+
+    #[test]
+    fn valid_chain_verifies_and_returns_root_fp() {
+        let (ak, chain) = synthetic_chain();
+        let ak_hex = hex::encode(ak.verifying_key_bytes());
+        let root_fp = verify_cert_chain(&chain, &ak_hex).expect("chain should verify");
+        assert_eq!(root_fp, chain[1].subject_fingerprint);
+    }
+
+    #[test]
+    fn rejects_chain_for_a_different_ak() {
+        let (_ak, chain) = synthetic_chain();
+        let other = SigningKeyPair::generate().unwrap();
+        let other_hex = hex::encode(other.verifying_key_bytes());
+        assert!(verify_cert_chain(&chain, &other_hex).is_err());
+    }
+
+    #[test]
+    fn rejects_tampered_leaf_signature() {
+        let (ak, mut chain) = synthetic_chain();
+        let ak_hex = hex::encode(ak.verifying_key_bytes());
+        // Flip a hex nibble in the leaf signature.
+        let sig = &mut chain[0].signature;
+        let last = sig.pop().unwrap();
+        sig.push(if last == '0' { '1' } else { '0' });
+        assert!(verify_cert_chain(&chain, &ak_hex).is_err());
+    }
+
+    #[test]
+    fn rejects_non_self_signed_root() {
+        let (ak, mut chain) = synthetic_chain();
+        let ak_hex = hex::encode(ak.verifying_key_bytes());
+        // Break the root's self-signed property.
+        chain[1].issuer_fingerprint = "deadbeef".into();
+        assert!(verify_cert_chain(&chain, &ak_hex).is_err());
+    }
+
+    #[test]
+    fn rejects_empty_chain() {
+        assert!(verify_cert_chain(&[], "abcd").is_err());
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

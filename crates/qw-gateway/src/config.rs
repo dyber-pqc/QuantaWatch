@@ -37,6 +37,9 @@ pub struct GatewayConfig {
     /// In-path proxy resilience (timeouts, retries, circuit breaking).
     #[serde(default)]
     pub resilience: ResilienceConfig,
+    /// CBOM attestation root of trust.
+    #[serde(default)]
+    pub attestation: AttestationConfig,
     /// Declared external crypto assets (TLS endpoints, ingresses, etc.).
     #[serde(default)]
     pub assets: Vec<AssetConfig>,
@@ -143,6 +146,28 @@ fn default_circuit_threshold() -> u32 {
 }
 fn default_circuit_cooldown() -> u64 {
     30
+}
+
+/// CBOM attestation root of trust. `software` (default) self-signs with the
+/// gateway identity; `synthetic-tpm` demonstrates a hardware-style AK→CA
+/// certificate chain; `tpm2`/`nitro`/`sev-snp`/`tdx` are reserved for real
+/// hardware backends (fall back to software until wired).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttestationConfig {
+    #[serde(default = "default_attestation_provider")]
+    pub provider: String,
+}
+
+impl Default for AttestationConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_attestation_provider(),
+        }
+    }
+}
+
+fn default_attestation_provider() -> String {
+    "software".to_string()
 }
 
 /// Authentication & RBAC. Disabled by default for backward compatibility.
@@ -560,6 +585,7 @@ impl Default for GatewayConfig {
             alerts: AlertConfig::default(),
             auth: AuthConfig::default(),
             resilience: ResilienceConfig::default(),
+            attestation: AttestationConfig::default(),
             assets: Vec::new(),
             connectors: Vec::new(),
         }

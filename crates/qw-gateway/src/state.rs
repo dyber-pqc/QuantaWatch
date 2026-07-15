@@ -33,6 +33,7 @@ pub struct AppState {
     pub alert_manager: Arc<crate::alerts::AlertManager>,
     pub auth_manager: Arc<crate::auth::AuthManager>,
     pub resilience: Arc<crate::resilience::Resilience>,
+    pub attestor: Arc<dyn crate::attest::Attestor>,
 }
 
 /// Public session info stored in the DashMap (without secret keys).
@@ -53,6 +54,10 @@ impl AppState {
         // Initialize gateway identity (PQC keys)
         let key_dir = std::path::PathBuf::from(&config.identity.key_dir);
         let gateway_identity = Arc::new(GatewayIdentity::load_or_generate(&key_dir)?);
+
+        // Select the CBOM attestation root of trust from config.
+        let attestor =
+            crate::attest::build_attestor(&config.attestation.provider, gateway_identity.clone());
 
         // Initialize policy engine from config
         let policy_yaml = build_policy_yaml(&config);
@@ -137,6 +142,7 @@ impl AppState {
             alert_manager,
             auth_manager,
             resilience,
+            attestor,
         })
     }
 }

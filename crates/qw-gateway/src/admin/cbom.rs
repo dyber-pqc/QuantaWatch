@@ -27,10 +27,11 @@ pub fn build_cbom(state: &AppState) -> CryptoBom {
 }
 
 /// Produce a signed attestation quote binding the CBOM digest + platform
-/// measurements to the gateway's PQC identity. Software stand-in for a hardware
-/// QuantaTPM quote — same structure, honestly labelled.
+/// measurements to the configured attestation key. The signing key and trust
+/// material (self-signed for `software`, an AK→CA chain for hardware-rooted
+/// providers) come from `state.attestor`.
 fn attest(state: &AppState, bom: &CryptoBom) -> Attestation {
-    let identity = &state.gateway_identity;
+    let attestor = &state.attestor;
 
     // Digest the CBOM payload *without* an attestation (it's None here), over a
     // CANONICAL (sorted-key) serialization so an external verifier — which parses
@@ -40,21 +41,24 @@ fn attest(state: &AppState, bom: &CryptoBom) -> Attestation {
     let bom_digest = sha3_256_hex(&payload);
     let nonce = uuid::Uuid::new_v4().to_string();
 
-    let pubkey = identity.public_key_bytes();
-    let measurements = vec![
+    let signer_pubkey = attestor.signer_public_key();
+    // Base measurements common to every provider, plus any platform-specific
+    // ones (PCRs, AK fingerprint) the attestor contributes.
+    let mut measurements = vec![
         Measurement {
             name: "gateway-identity".into(),
-            value: identity.fingerprint.clone(),
+            value: state.gateway_identity.fingerprint.clone(),
         },
         Measurement {
-            name: "platform-key".into(),
-            value: sha3_256_hex(&pubkey),
+            name: "signing-key".into(),
+            value: sha3_256_hex(&signer_pubkey),
         },
         Measurement {
             name: "tool".into(),
             value: format!("quantawatch-{}", env!("CARGO_PKG_VERSION")),
         },
     ];
+    measurements.extend(attestor.platform_measurements());
 
     // Quote payload = digest | nonce | name=value;... (deterministic ordering)
     let measure_str = measurements
@@ -63,23 +67,20 @@ fn attest(state: &AppState, bom: &CryptoBom) -> Attestation {
         .collect::<Vec<_>>()
         .join(";");
     let quote_payload = format!("{bom_digest}|{nonce}|{measure_str}");
-    let signature = identity
-        .sign(quote_payload.as_bytes())
-        .map(hex::encode)
-        .unwrap_or_default();
+    let signature = hex::encode(attestor.sign(quote_payload.as_bytes()));
 
     Attestation {
-        attestation_type: "software-ml-dsa-65".into(),
-        algorithm: "ML-DSA-65".into(),
-        signer_fingerprint: identity.fingerprint.clone(),
+        attestation_type: attestor.kind().into(),
+        algorithm: attestor.algorithm().into(),
+        signer_fingerprint: attestor.signer_fingerprint(),
         bom_digest,
         nonce,
         measurements,
         signature,
-        public_key: hex::encode(&pubkey),
+        public_key: hex::encode(&signer_pubkey),
         signed_at: chrono::Utc::now(),
-        note: "Software-emulated attestation over the live CBOM; QuantaTPM hardware quote pending."
-            .into(),
+        note: attestor.note(),
+        cert_chain: attestor.cert_chain(),
     }
 }
 

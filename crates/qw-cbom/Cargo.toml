@@ -7,6 +7,8 @@ description = "Cryptographic Bill of Materials (CBOM) generation and posture sco
 
 [dependencies]
 qw-scanner = { path = "../qw-scanner" }
+qw-crypto = { path = "../qw-crypto" }
+hex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }

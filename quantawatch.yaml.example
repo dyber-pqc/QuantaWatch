@@ -17,6 +17,16 @@ resilience:
   circuit_failure_threshold: 5    # consecutive failures before the circuit opens
   circuit_cooldown_secs: 30       # how long it stays open before a probe
 
+# CBOM attestation root of trust.
+#   software      - gateway identity self-signs the quote (default; no hardware RoT)
+#   synthetic-tpm - demonstrates a hardware-style AK -> platform-CA certificate
+#                   chain (PQC model of a TPM 2.0 / AWS Nitro quote), verifiable
+#                   by `qw verify-attestation`
+#   tpm2 | nitro | sev-snp | tdx - reserved for real hardware backends
+#                   (fall back to software until wired)
+attestation:
+  provider: software
+
 providers:
   anthropic:
     upstream: "https://api.anthropic.com"

@@ -350,6 +350,21 @@ async fn main() -> Result<()> {
             let quote = format!("{claimed_digest}|{nonce}|{measure_str}");
             let sig_ok = qw_crypto::verify(&pubkey, quote.as_bytes(), &signature).unwrap_or(false);
 
+            // If the attestation carries a certificate chain (hardware-rooted
+            // providers), verify it chains the quote-signing key up to a
+            // self-signed root. Software attestations have no chain.
+            let ak_hex = att["publicKey"].as_str().unwrap_or_default();
+            let chain_result: Option<Result<String, String>> = att
+                .get("certChain")
+                .and_then(|c| c.as_array())
+                .filter(|a| !a.is_empty())
+                .map(|_| {
+                    let chain: Vec<qw_cbom::AttestationCert> =
+                        serde_json::from_value(att["certChain"].clone()).unwrap_or_default();
+                    qw_cbom::verify_cert_chain(&chain, ak_hex)
+                });
+            let chain_ok = !matches!(chain_result, Some(Err(_)));
+
             println!(
                 "  Type:          {}",
                 att["attestationType"].as_str().unwrap_or("?")
@@ -380,9 +395,25 @@ async fn main() -> Result<()> {
                     "INVALID"
                 }
             );
+            match &chain_result {
+                None => println!("  Trust chain:   none (software self-attested)"),
+                Some(Ok(root)) => println!(
+                    "  Trust chain:   VALID — rooted at {}",
+                    &root[..root.len().min(16)]
+                ),
+                Some(Err(e)) => println!("  Trust chain:   INVALID — {e}"),
+            }
             println!();
-            if digest_ok && sig_ok {
-                println!("VERIFIED — the CBOM is authentically attested and unmodified.");
+            if digest_ok && sig_ok && chain_ok {
+                let rooted = matches!(chain_result, Some(Ok(_)));
+                if rooted {
+                    println!(
+                        "VERIFIED — the CBOM is authentically attested, unmodified, and rooted in a \
+                         trusted attestation chain."
+                    );
+                } else {
+                    println!("VERIFIED — the CBOM is authentically attested and unmodified.");
+                }
             } else {
                 println!("VERIFICATION FAILED.");
                 std::process::exit(1);

@@ -2231,6 +2231,8 @@ name = "qw-cbom"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hex",
+ "qw-crypto",
  "qw-scanner",
  "serde",
  "serde_json",
