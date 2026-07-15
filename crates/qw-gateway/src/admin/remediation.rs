@@ -87,7 +87,13 @@ pub async fn remediate(
         }
     };
 
-    let finding = finding_from_record(&record);
+    // Closed-loop: attach the concrete PQC migration plan for THIS finding so
+    // the opened PR / ticket carries the specific fix (target algorithm, steps,
+    // proposed patch) instead of a generic recommendation.
+    let mut finding = finding_from_record(&record);
+    if let Some(plan) = qw_cbom::plan_migration(&record) {
+        finding.remediation = Some(qw_cbom::plan_to_markdown(&plan));
+    }
 
     let opts = RemediationOpts {
         project: body.project.clone(),
@@ -120,6 +126,55 @@ pub async fn remediate(
         )
             .into_response(),
     }
+}
+
+/// Return the concrete PQC migration plan for a single finding (without filing
+/// anything) — the target algorithm, rationale, steps, and a proposed patch.
+pub async fn get_migration_plan(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+    Path(finding_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    match state.store.get_finding(&tenant, &finding_id) {
+        Some(record) => match qw_cbom::plan_migration(&record) {
+            Some(plan) => {
+                let markdown = qw_cbom::plan_to_markdown(&plan);
+                Json(json!({ "plan": plan, "markdown": markdown })).into_response()
+            }
+            None => Json(json!({
+                "plan": serde_json::Value::Null,
+                "reason": "finding is already PQC-ready or hybrid",
+            }))
+            .into_response(),
+        },
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Finding '{}' not found", finding_id) })),
+        )
+            .into_response(),
+    }
+}
+
+/// Generate migration plans for every open finding in the tenant, most-urgent
+/// first, with a priority rollup for the dashboard.
+pub async fn list_migration_plans(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    let findings = state.store.all_findings(&tenant);
+    let plans = qw_cbom::plan_all(&findings);
+    let count = |p: qw_cbom::MigrationPriority| plans.iter().filter(|x| x.priority == p).count();
+    Json(json!({
+        "plans": plans,
+        "total": plans.len(),
+        "byPriority": {
+            "p0": count(qw_cbom::MigrationPriority::P0),
+            "p1": count(qw_cbom::MigrationPriority::P1),
+            "p2": count(qw_cbom::MigrationPriority::P2),
+        },
+    }))
 }
 
 /// Reconcile the status of every open remediation for `tenant` against its

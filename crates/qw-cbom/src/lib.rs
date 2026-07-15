@@ -3,6 +3,7 @@ pub mod compliance;
 pub mod history;
 pub mod model;
 pub mod posture;
+pub mod remediation;
 
 pub use builder::CbomBuilder;
 pub use compliance::{
@@ -11,3 +12,7 @@ pub use compliance::{
 pub use history::{PostureHistoryStore, PostureSnapshot};
 pub use model::*;
 pub use posture::PostureEngine;
+pub use remediation::{
+    plan_all, plan_migration, plan_to_markdown, MigrationPatch, MigrationPlan, MigrationPriority,
+    MigrationStrategy,
+};
