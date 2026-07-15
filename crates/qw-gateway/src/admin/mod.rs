@@ -10,6 +10,7 @@ pub mod evidence;
 pub mod graph;
 pub mod integrations_api;
 pub mod metrics_api;
+pub mod onboarding;
 pub mod posture;
 pub mod remediation;
 pub mod report;

@@ -140,6 +140,10 @@ fn admin_routes() -> Router<AppState> {
             "/api/sessions/{id}",
             get(crate::admin::sessions::get_session),
         )
+        .route(
+            "/api/onboarding/scan",
+            post(crate::admin::onboarding::onboarding_scan),
+        )
         .route("/api/audit", get(crate::admin::audit_api::list_audit))
         .route(
             "/api/audit/export",

@@ -16,8 +16,12 @@ pub enum MigrationStrategy {
     ReplaceSignature,
     /// Classical key exchange -> hybrid X25519 + ML-KEM-768 (FIPS 203).
     HybridKeyExchange,
-    /// Weak symmetric cipher -> AES-256-GCM.
+    /// Broken/deprecated symmetric cipher (3DES, RC4) -> AES-256-GCM.
     ReplaceSymmetric,
+    /// Sound but undersized symmetric cipher (AES-128) -> AES-256-GCM. Not
+    /// broken today; Grover halves the effective strength and CNSA 2.0 mandates
+    /// AES-256, so this is alignment work rather than an incident.
+    StrengthenSymmetric,
     /// Weak hash -> SHA-384 / SHA3-256.
     ReplaceHash,
     /// Secret material exposed in code -> rotate + move to a KMS/HSM.
@@ -90,17 +94,18 @@ fn algo_upper(f: &FindingRecord) -> String {
 /// Classify a finding into a migration strategy + target algorithm.
 fn classify(f: &FindingRecord) -> (MigrationStrategy, &'static str) {
     let a = algo_upper(f);
-    // Weak symmetric / hash first (independent of asset type).
-    if a.contains("3DES")
-        || a.contains("DES")
-        || a.contains("RC4")
-        || a.contains("AES-128")
-        || a.contains("AES_128")
-    {
+    // Genuinely broken symmetric ciphers — weak today, regardless of quantum.
+    if a.contains("3DES") || a.contains("DES") || a.contains("RC4") {
         return (MigrationStrategy::ReplaceSymmetric, "AES-256-GCM");
     }
     if a.contains("MD5") || a.contains("SHA1") || a.contains("SHA-1") {
         return (MigrationStrategy::ReplaceHash, "SHA-384");
+    }
+    // AES-128 is sound today — it is a CNSA 2.0 gap, not an incident. Keeping
+    // this distinct from ReplaceSymmetric stops us telling an operator their
+    // perfectly good TLS is "cryptographically weak".
+    if a.contains("AES-128") || a.contains("AES_128") {
+        return (MigrationStrategy::StrengthenSymmetric, "AES-256-GCM");
     }
     // Hardcoded secret material -> rotate, regardless of algorithm.
     if matches!(f.category.to_string().as_str(), "hardcoded_key") {
@@ -136,6 +141,10 @@ fn priority_of(f: &FindingRecord, strategy: MigrationStrategy) -> MigrationPrior
     {
         return MigrationPriority::P0;
     }
+    // Sound-but-undersized crypto is alignment work, not an incident.
+    if strategy == MigrationStrategy::StrengthenSymmetric {
+        return MigrationPriority::P2;
+    }
     // Quantum-vulnerable asymmetric: HNDL-exposed, migrate before the deadlines.
     if matches!(
         strategy,
@@ -150,15 +159,24 @@ fn priority_of(f: &FindingRecord, strategy: MigrationStrategy) -> MigrationPrior
 
 fn effort_of(strategy: MigrationStrategy) -> &'static str {
     match strategy {
-        MigrationStrategy::ReplaceHash | MigrationStrategy::ReplaceSymmetric => "low",
+        MigrationStrategy::ReplaceHash
+        | MigrationStrategy::ReplaceSymmetric
+        | MigrationStrategy::StrengthenSymmetric => "low",
         MigrationStrategy::RotateKey | MigrationStrategy::UpgradeLibrary => "medium",
         MigrationStrategy::ReplaceSignature | MigrationStrategy::HybridKeyExchange => "high",
     }
 }
 
-/// Generate a best-effort proposed patch for a finding, when its location is
-/// something we can name a concrete change for.
-fn build_patch(f: &FindingRecord, target: &str) -> Option<MigrationPatch> {
+/// Generate a best-effort proposed patch for a finding.
+///
+/// Dispatches on the **strategy**, not the asset type: the proposed change must
+/// match the plan it belongs to. (Keying off asset_type meant e.g. a
+/// "replace the symmetric cipher" plan shipped a hybrid-KEM config patch.)
+fn build_patch(
+    f: &FindingRecord,
+    strategy: MigrationStrategy,
+    target: &str,
+) -> Option<MigrationPatch> {
     let loc = &f.location;
     let a = f.algorithm.clone().unwrap_or_else(|| "classical".into());
     let is_dep = loc.ends_with("Cargo.toml")
@@ -166,8 +184,28 @@ fn build_patch(f: &FindingRecord, target: &str) -> Option<MigrationPatch> {
         || loc.ends_with("requirements.txt")
         || loc.ends_with("go.mod")
         || loc.ends_with("pom.xml");
-    match f.asset_type {
-        CryptoAssetType::CryptoLibrary if is_dep => Some(MigrationPatch {
+    match strategy {
+        MigrationStrategy::ReplaceSymmetric | MigrationStrategy::StrengthenSymmetric => {
+            Some(MigrationPatch {
+                path: loc.clone(),
+                kind: "cipher-suite".into(),
+                before: format!("# negotiated cipher: {a}"),
+                after: format!(
+                    "# prefer {target} in the cipher-suite order, e.g.:\n\
+                     #   ssl_ciphers TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256;"
+                ),
+                note: format!("Move the negotiated cipher from {a} to {target}."),
+            })
+        }
+        MigrationStrategy::ReplaceHash => Some(MigrationPatch {
+            path: loc.clone(),
+            kind: "hash".into(),
+            before: format!("# digest: {a}"),
+            after: format!("# use {target} (or SHA3-256) and re-sign affected artifacts"),
+            note: format!("{a} is no longer collision-resistant; move to {target}."),
+        }),
+        MigrationStrategy::RotateKey => None, // steps-only; no safe textual patch
+        MigrationStrategy::UpgradeLibrary if is_dep => Some(MigrationPatch {
             path: loc.clone(),
             kind: "dependency".into(),
             before: format!("# quantum-vulnerable crypto dependency ({a})"),
@@ -176,26 +214,25 @@ fn build_patch(f: &FindingRecord, target: &str) -> Option<MigrationPatch> {
                 .into(),
             note: format!("Move signing/KEM usage from {a} to {target}."),
         }),
-        CryptoAssetType::TlsConnection | CryptoAssetType::ProtocolEndpoint => {
-            Some(MigrationPatch {
-                path: loc.clone(),
-                kind: "tls-config".into(),
-                before: "# TLS key-exchange groups: classical only (e.g. x25519, secp256r1)".into(),
-                after: "# enable a hybrid PQC group first, e.g.:\n\
+        // A library plan whose location isn't a manifest we can name a change in.
+        MigrationStrategy::UpgradeLibrary => None,
+        MigrationStrategy::HybridKeyExchange => Some(MigrationPatch {
+            path: loc.clone(),
+            kind: "tls-config".into(),
+            before: "# TLS key-exchange groups: classical only (e.g. x25519, secp256r1)".into(),
+            after: "# enable a hybrid PQC group first, e.g.:\n\
                     #   ssl_ecdh_curve X25519MLKEM768:X25519;   # nginx / OpenSSL 3.5+\n\
                     # or the equivalent for your terminator (Envoy, HAProxy, cloud LB)"
-                    .into(),
-                note: format!("Negotiate {target} so captured traffic is not HNDL-exposed."),
-            })
-        }
-        CryptoAssetType::Certificate | CryptoAssetType::SigningKey => Some(MigrationPatch {
+                .into(),
+            note: format!("Negotiate {target} so captured traffic is not HNDL-exposed."),
+        }),
+        MigrationStrategy::ReplaceSignature => Some(MigrationPatch {
             path: loc.clone(),
             kind: "certificate".into(),
             before: format!("# leaf/intermediate signed with {a}"),
             after: format!("# reissue with {target}; run a hybrid chain during transition"),
             note: "Coordinate with your CA / PKI for ML-DSA (or composite) issuance.".into(),
         }),
-        _ => None,
     }
 }
 
@@ -221,6 +258,11 @@ pub fn plan_migration(f: &FindingRecord) -> Option<MigrationPlan> {
         MigrationStrategy::ReplaceSymmetric | MigrationStrategy::ReplaceHash => {
             format!("{current} is cryptographically weak by today's standards, independent of quantum risk.")
         }
+        MigrationStrategy::StrengthenSymmetric => format!(
+            "{current} is not broken — this is CNSA 2.0 alignment. Grover's algorithm halves the \
+             effective strength of a symmetric key, so CNSA 2.0 mandates AES-256 for data that \
+             must stay confidential into the quantum era."
+        ),
         MigrationStrategy::RotateKey => {
             "Secret material is exposed in source; it must be rotated and moved to managed storage.".into()
         }
@@ -251,6 +293,10 @@ pub fn plan_migration(f: &FindingRecord) -> Option<MigrationPlan> {
             "Replace the weak cipher with AES-256-GCM (or ChaCha20-Poly1305).".into(),
             "Re-encrypt data at rest where applicable.".into(),
         ],
+        MigrationStrategy::StrengthenSymmetric => vec![
+            "Prefer AES-256 cipher suites ahead of AES-128 in the negotiation order.".into(),
+            "Confirm clients still negotiate successfully, then drop AES-128.".into(),
+        ],
         MigrationStrategy::ReplaceHash => vec![
             "Replace the weak hash with SHA-384 or SHA3-256.".into(),
             "Re-sign / re-hash affected artifacts.".into(),
@@ -272,7 +318,7 @@ pub fn plan_migration(f: &FindingRecord) -> Option<MigrationPlan> {
         rationale,
         steps,
         effort: effort_of(strategy).to_string(),
-        patch: build_patch(f, target),
+        patch: build_patch(f, strategy, target),
     })
 }
 
@@ -392,6 +438,80 @@ mod tests {
         assert_eq!(p.strategy, MigrationStrategy::ReplaceSymmetric);
         assert_eq!(p.target_algorithm, "AES-256-GCM");
         assert_eq!(p.priority, MigrationPriority::P0);
+    }
+
+    #[test]
+    fn aes_128_is_cnsa_alignment_not_an_incident() {
+        // Regression: AES-128 was classified as "cryptographically weak" and
+        // raised as P0 — telling operators their sound TLS was broken.
+        let f = finding(
+            Some("TLS13_AES_128_GCM_SHA256"),
+            CryptoAssetType::TlsConnection,
+            PqcStatus::ClassicalSecure,
+            FindingSeverity::Medium,
+            FindingCategory::ClassicalCrypto,
+            "github.com:443",
+        );
+        let p = plan_migration(&f).unwrap();
+        assert_eq!(p.strategy, MigrationStrategy::StrengthenSymmetric);
+        assert_eq!(p.priority, MigrationPriority::P2, "not an incident");
+        assert!(
+            !p.rationale.contains("weak"),
+            "must not call AES-128 weak: {}",
+            p.rationale
+        );
+        assert!(p.rationale.contains("CNSA 2.0"));
+    }
+
+    #[test]
+    fn patch_always_matches_its_strategy() {
+        // Regression: build_patch keyed off asset_type while classify keyed off
+        // the algorithm, so a symmetric-cipher plan shipped a hybrid-KEM patch.
+        let aes128_on_tls = finding(
+            Some("TLS13_AES_128_GCM_SHA256"),
+            CryptoAssetType::TlsConnection,
+            PqcStatus::ClassicalSecure,
+            FindingSeverity::Medium,
+            FindingCategory::ClassicalCrypto,
+            "github.com:443",
+        );
+        let p = plan_migration(&aes128_on_tls).unwrap();
+        let patch = p.patch.as_ref().unwrap();
+        assert_eq!(patch.kind, "cipher-suite", "symmetric plan -> cipher patch");
+        assert!(
+            !patch.after.contains("MLKEM"),
+            "a cipher-suite plan must not propose a KEM group: {}",
+            patch.after
+        );
+
+        // A genuine key-exchange plan still gets the hybrid-KEM patch.
+        let ecdhe = finding(
+            Some("ECDHE"),
+            CryptoAssetType::TlsConnection,
+            PqcStatus::ClassicalSecure,
+            FindingSeverity::Medium,
+            FindingCategory::MissingPqc,
+            "api.example.com:443",
+        );
+        let p2 = plan_migration(&ecdhe).unwrap();
+        assert_eq!(p2.patch.as_ref().unwrap().kind, "tls-config");
+        assert!(p2.patch.as_ref().unwrap().after.contains("MLKEM768"));
+    }
+
+    #[test]
+    fn rotate_key_has_no_textual_patch() {
+        let f = finding(
+            None,
+            CryptoAssetType::SigningKey,
+            PqcStatus::Unknown,
+            FindingSeverity::Critical,
+            FindingCategory::HardcodedKey,
+            "src/secrets.rs",
+        );
+        let p = plan_migration(&f).unwrap();
+        assert_eq!(p.strategy, MigrationStrategy::RotateKey);
+        assert!(p.patch.is_none(), "no safe textual patch for a rotation");
+        assert!(!p.steps.is_empty());
     }
 
     #[test]
