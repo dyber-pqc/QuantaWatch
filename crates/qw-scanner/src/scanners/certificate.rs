@@ -76,7 +76,8 @@ impl Scanner for CertificateScanner {
 
         let subject = parsed.subject().to_string();
         let issuer = parsed.issuer().to_string();
-        let sig_alg = parsed.signature_algorithm.algorithm.to_string();
+        // Resolve the bare OID to a human-readable name at discovery time.
+        let sig_alg = crate::algorithms::resolve(&parsed.signature_algorithm.algorithm.to_string());
         let sig_alg_lower = sig_alg.to_lowercase();
         let pubkey_alg = parsed.public_key().algorithm.algorithm.to_string();
 

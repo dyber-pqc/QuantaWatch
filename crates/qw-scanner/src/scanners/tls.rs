@@ -206,22 +206,30 @@ impl Scanner for TlsScanner {
         if let Some(certs) = conn.peer_certificates() {
             for (i, cert) in certs.iter().enumerate() {
                 if let Ok((_, parsed)) = x509_parser::parse_x509_certificate(cert.as_ref()) {
-                    let sig_alg = parsed.signature_algorithm.algorithm.to_string();
+                    // x509-parser yields a bare OID; resolve it at the point of
+                    // discovery so findings, CBOM entries and migration plans
+                    // carry "ECDSA-SHA256" rather than "1.2.840.10045.4.3.2".
+                    let sig_alg = crate::algorithms::resolve(
+                        &parsed.signature_algorithm.algorithm.to_string(),
+                    );
+                    let sig_alg_lc = sig_alg.to_lowercase();
                     let issuer = parsed.issuer().to_string();
                     let subject = parsed.subject().to_string();
                     let not_after = parsed.validity().not_after.to_datetime();
 
-                    let cert_pqc = if sig_alg.contains("ml-dsa") || sig_alg.contains("dilithium") {
-                        PqcStatus::PqcReady
-                    } else if sig_alg.contains("ecdsa")
-                        || sig_alg.contains("1.2.840.10045")
-                        || sig_alg.contains("rsa")
-                        || sig_alg.contains("1.2.840.113549")
-                    {
-                        PqcStatus::ClassicalSecure
-                    } else {
-                        PqcStatus::Unknown
-                    };
+                    let cert_pqc =
+                        if sig_alg_lc.contains("ml-dsa") || sig_alg_lc.contains("dilithium") {
+                            PqcStatus::PqcReady
+                        } else if sig_alg_lc.contains("ecdsa")
+                            || sig_alg_lc.contains("rsa")
+                            || sig_alg_lc.contains("ed25519")
+                            || sig_alg_lc.contains("ed448")
+                            || sig_alg_lc.contains("dsa")
+                        {
+                            PqcStatus::ClassicalSecure
+                        } else {
+                            PqcStatus::Unknown
+                        };
 
                     // Convert time::OffsetDateTime to chrono::DateTime<Utc>
                     let not_after_chrono = chrono::DateTime::<Utc>::from_timestamp(
