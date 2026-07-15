@@ -125,6 +125,9 @@ async fn auth_layer(
 fn admin_routes() -> Router<AppState> {
     Router::new()
         .route("/api/health", get(health))
+        // Prometheus scrape target. Behind auth like every other admin route —
+        // scrape with an API key (Prometheus `authorization` credentials).
+        .route("/metrics", get(crate::admin::metrics_api::get_metrics))
         .route("/api/auth/login", post(crate::admin::auth_api::login))
         .route("/api/auth/logout", post(crate::admin::auth_api::logout))
         .route("/api/auth/me", get(crate::admin::auth_api::me))
@@ -368,6 +371,7 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
     let breaker = state.resilience.breaker(provider_name);
     if !breaker.allow() {
         tracing::warn!(provider = %provider_name, "upstream circuit open; fast-failing");
+        state.metrics.record_circuit_rejection(provider_name);
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({
@@ -418,6 +422,9 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
         }
         Err(e) => {
             breaker.record_failure();
+            state
+                .metrics
+                .record_upstream_failure(provider_name, start.elapsed().as_millis() as u64);
             tracing::error!(error = %e, provider = %provider_name, "Upstream request failed after retries");
             return GatewayError::UpstreamError(format!("{e}")).into_response();
         }
@@ -435,6 +442,9 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
 
     let response_hash = sha3_256_hex(&response_body);
     let latency_ms = start.elapsed().as_millis() as u64;
+    state
+        .metrics
+        .record_proxy(provider_name, status.as_u16(), latency_ms);
 
     // Scan response for threats (if configured)
     let mut threats_detected = 0u32;
@@ -444,6 +454,9 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
             threats_detected = assessment.threats.len() as u32;
             if !assessment.threats.is_empty() {
                 for threat in &assessment.threats {
+                    state
+                        .metrics
+                        .record_threat(&format!("{:?}", threat.category).to_lowercase());
                     tracing::warn!(
                         session_id = %session_ctx.session_id,
                         category = ?threat.category,

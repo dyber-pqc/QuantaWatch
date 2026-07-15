@@ -34,6 +34,7 @@ pub struct AppState {
     pub auth_manager: Arc<crate::auth::AuthManager>,
     pub resilience: Arc<crate::resilience::Resilience>,
     pub attestor: Arc<dyn crate::attest::Attestor>,
+    pub metrics: Arc<crate::metrics::Metrics>,
 }
 
 /// Public session info stored in the DashMap (without secret keys).
@@ -148,6 +149,7 @@ impl AppState {
             auth_manager,
             resilience,
             attestor,
+            metrics: Arc::new(crate::metrics::Metrics::new()),
         })
     }
 }

@@ -7,6 +7,7 @@ pub mod background;
 pub mod cloud;
 pub mod config;
 pub mod error;
+pub mod metrics;
 pub mod middleware;
 pub mod oidc;
 pub mod providers;
