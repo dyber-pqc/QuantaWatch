@@ -484,6 +484,13 @@ pub struct IdentityConfig {
     pub session_ttl: i64,
     #[serde(default = "default_key_dir")]
     pub key_dir: String,
+    /// ENV var holding the gateway's signing identity as a hex-encoded 32-byte
+    /// seed. Point this at a Kubernetes Secret / KMS-injected value so every
+    /// replica derives the SAME identity — required to run more than one
+    /// gateway, and to keep the audit chain verifiable across restarts.
+    /// Falls back to `key_dir` when unset.
+    #[serde(default)]
+    pub seed_env: Option<String>,
 }
 
 impl Default for IdentityConfig {
@@ -491,6 +498,7 @@ impl Default for IdentityConfig {
         Self {
             session_ttl: default_session_ttl(),
             key_dir: default_key_dir(),
+            seed_env: None,
         }
     }
 }

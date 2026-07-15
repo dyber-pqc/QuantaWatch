@@ -52,8 +52,13 @@ pub struct SessionInfo {
 impl AppState {
     pub async fn new(config: GatewayConfig) -> Result<Self> {
         // Initialize gateway identity (PQC keys)
+        // Prefer an externally-managed seed (K8s Secret / KMS) so replicas share
+        // one signing identity; otherwise persist/load it from key_dir.
         let key_dir = std::path::PathBuf::from(&config.identity.key_dir);
-        let gateway_identity = Arc::new(GatewayIdentity::load_or_generate(&key_dir)?);
+        let gateway_identity = Arc::new(match &config.identity.seed_env {
+            Some(env_var) => GatewayIdentity::load_from_env_or_dir(env_var, &key_dir)?,
+            None => GatewayIdentity::load_or_generate(&key_dir)?,
+        });
 
         // Select the CBOM attestation root of trust from config.
         let attestor =

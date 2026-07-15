@@ -79,7 +79,15 @@ agents:
 
 identity:
   session_ttl: 3600
+  # The gateway's ML-DSA-65 signing identity is persisted here as a 32-byte
+  # FIPS 204 seed (gateway_seed.key, 0600) so it survives restarts — the audit
+  # hash chain and CBOM attestation are signed with it, so a changing identity
+  # would make every earlier signature unverifiable.
   key_dir: "./keys"
+  # For multiple replicas: point this at an env var (Kubernetes Secret / KMS)
+  # holding the same hex-encoded 32-byte seed, so every replica derives the
+  # SAME identity. Generate one with: openssl rand -hex 32
+  # seed_env: QW_GATEWAY_SEED
 
 monitor:
   blocking_threshold: high

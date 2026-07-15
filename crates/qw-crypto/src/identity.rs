@@ -81,6 +81,17 @@ impl SessionIdentity {
     }
 }
 
+/// Write secret material, restricting it to the owner where the OS supports it.
+fn write_secret(path: &Path, bytes: &[u8]) -> Result<(), CryptoError> {
+    std::fs::write(path, bytes)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 /// Master signing key for the gateway instance (used for audit signing).
 pub struct GatewayIdentity {
     pub signing_keypair: SigningKeyPair,
@@ -98,28 +109,84 @@ impl GatewayIdentity {
         })
     }
 
-    /// Load from file or generate new if not present.
-    pub fn load_or_generate(key_dir: &Path) -> Result<Self, CryptoError> {
-        let pk_path = key_dir.join("gateway_public.key");
-        let sk_path = key_dir.join("gateway_secret.key");
+    /// Reconstruct the identity from its 32-byte FIPS 204 seed.
+    pub fn from_seed(seed: &[u8; 32]) -> Result<Self, CryptoError> {
+        let signing_keypair = SigningKeyPair::from_seed(seed)?;
+        let fingerprint = sha3_256_hex(&signing_keypair.verifying_key_bytes());
+        Ok(Self {
+            signing_keypair,
+            fingerprint,
+        })
+    }
 
-        if pk_path.exists() && sk_path.exists() {
-            // For now, always generate fresh keys on startup
-            // TODO: Implement key serialization/deserialization
-            tracing::warn!("Key persistence not yet implemented, generating fresh keys");
+    /// Load the identity from `key_dir`, or generate and persist a new one.
+    ///
+    /// Persists the 32-byte seed (`gateway_seed.key`, 0600) rather than the
+    /// expanded key. A *stable* identity matters: the audit hash chain and the
+    /// CBOM attestation are signed with it, so regenerating on every start
+    /// would make every pre-restart signature unverifiable.
+    pub fn load_or_generate(key_dir: &Path) -> Result<Self, CryptoError> {
+        let seed_path = key_dir.join("gateway_seed.key");
+        let pk_path = key_dir.join("gateway_public.key");
+
+        if let Ok(bytes) = std::fs::read(&seed_path) {
+            match <[u8; 32]>::try_from(bytes.as_slice()) {
+                Ok(seed) => {
+                    let identity = Self::from_seed(&seed)?;
+                    tracing::info!(
+                        fingerprint = %identity.fingerprint,
+                        "Gateway identity loaded from disk"
+                    );
+                    return Ok(identity);
+                }
+                Err(_) => tracing::warn!(
+                    path = %seed_path.display(),
+                    "gateway seed is not 32 bytes; generating a new identity"
+                ),
+            }
         }
 
         let identity = Self::generate()?;
-
-        // Create key directory if needed
         std::fs::create_dir_all(key_dir)?;
+        write_secret(&seed_path, identity.signing_keypair.seed())?;
+        std::fs::write(&pk_path, identity.public_key_bytes())?;
 
-        // Save public key
-        let pk_bytes = identity.signing_keypair.verifying_key_bytes();
-        std::fs::write(&pk_path, &pk_bytes)?;
-
-        tracing::info!(fingerprint = %identity.fingerprint, "Gateway identity initialized");
+        tracing::info!(
+            fingerprint = %identity.fingerprint,
+            "Gateway identity generated and persisted"
+        );
         Ok(identity)
+    }
+
+    /// Load the identity from a hex-encoded 32-byte seed held in `env_var`,
+    /// falling back to `key_dir`.
+    ///
+    /// This is the seam for shared/externally-managed keys: point `env_var` at
+    /// a Kubernetes Secret or a KMS-injected value and every replica derives
+    /// the *same* signing identity — a prerequisite for running more than one
+    /// gateway behind a load balancer.
+    pub fn load_from_env_or_dir(env_var: &str, key_dir: &Path) -> Result<Self, CryptoError> {
+        match std::env::var(env_var) {
+            Ok(encoded) => {
+                let raw = hex::decode(encoded.trim()).map_err(|e| {
+                    CryptoError::Serialization(format!("{env_var} is not valid hex: {e}"))
+                })?;
+                let seed = <[u8; 32]>::try_from(raw.as_slice()).map_err(|_| {
+                    CryptoError::Serialization(format!(
+                        "{env_var} must decode to exactly 32 bytes (got {})",
+                        raw.len()
+                    ))
+                })?;
+                let identity = Self::from_seed(&seed)?;
+                tracing::info!(
+                    fingerprint = %identity.fingerprint,
+                    source = env_var,
+                    "Gateway identity loaded from environment"
+                );
+                Ok(identity)
+            }
+            Err(_) => Self::load_or_generate(key_dir),
+        }
     }
 
     /// Sign arbitrary data with ML-DSA-65.
@@ -167,6 +234,77 @@ mod tests {
         assert_eq!(gw.fingerprint.len(), 64);
         let sig = gw.sign(b"audit entry").unwrap();
         assert!(!sig.is_empty());
+    }
+
+    #[test]
+    fn gateway_identity_is_stable_across_restarts() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // First boot: generates and persists the seed.
+        let first = GatewayIdentity::load_or_generate(dir.path()).unwrap();
+        let sig = first.sign(b"audit entry written before restart").unwrap();
+
+        // Second boot from the same key_dir: must be the SAME identity, and
+        // signatures written before the restart must still verify.
+        let second = GatewayIdentity::load_or_generate(dir.path()).unwrap();
+        assert_eq!(
+            first.fingerprint, second.fingerprint,
+            "identity must survive a restart, or the audit chain becomes unverifiable"
+        );
+        assert!(crate::signing::verify(
+            &second.public_key_bytes(),
+            b"audit entry written before restart",
+            &sig
+        )
+        .unwrap());
+    }
+
+    #[test]
+    fn gateway_identity_persists_seed_not_expanded_key() {
+        let dir = tempfile::tempdir().unwrap();
+        GatewayIdentity::load_or_generate(dir.path()).unwrap();
+        let seed = std::fs::read(dir.path().join("gateway_seed.key")).unwrap();
+        assert_eq!(seed.len(), 32, "we persist the 32-byte FIPS 204 seed");
+        // The public key is also written for external verifiers.
+        assert!(dir.path().join("gateway_public.key").exists());
+    }
+
+    #[test]
+    fn corrupt_seed_falls_back_to_a_fresh_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gateway_seed.key"), b"too short").unwrap();
+        // Must not panic; regenerates instead.
+        let id = GatewayIdentity::load_or_generate(dir.path()).unwrap();
+        assert_eq!(id.fingerprint.len(), 64);
+    }
+
+    #[test]
+    fn replicas_sharing_a_seed_env_derive_one_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed = [42u8; 32];
+        let var = "QW_TEST_SEED_SHARED";
+        std::env::set_var(var, hex::encode(seed));
+
+        // Two "replicas" booting from the same Secret-provided seed.
+        let a = GatewayIdentity::load_from_env_or_dir(var, dir.path()).unwrap();
+        let b = GatewayIdentity::load_from_env_or_dir(var, dir.path()).unwrap();
+        std::env::remove_var(var);
+
+        assert_eq!(a.fingerprint, b.fingerprint);
+        assert_eq!(
+            a.fingerprint,
+            GatewayIdentity::from_seed(&seed).unwrap().fingerprint
+        );
+    }
+
+    #[test]
+    fn bad_seed_env_is_an_error_not_a_silent_new_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let var = "QW_TEST_SEED_BAD";
+        std::env::set_var(var, "not-hex!!");
+        let res = GatewayIdentity::load_from_env_or_dir(var, dir.path());
+        std::env::remove_var(var);
+        assert!(res.is_err(), "a misconfigured seed must fail loudly");
     }
 
     #[test]

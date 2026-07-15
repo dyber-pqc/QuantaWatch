@@ -60,6 +60,12 @@ secretEnv:
   OPENAI_API_KEY: ""
   QW_WEBHOOK_SECRET: ""
   GITHUB_TOKEN: ""
+  # The gateway's ML-DSA signing identity as a hex-encoded 32-byte seed
+  # (`openssl rand -hex 32`), referenced from config via `identity.seed_env`.
+  # Set this to keep the identity — and therefore the audit chain and CBOM
+  # attestation — stable across pod restarts and rescheduling. Required before
+  # any multi-replica deployment so all replicas sign as the same gateway.
+  # QW_GATEWAY_SEED: ""
   # GITHUB_WEBHOOK_SECRET: ""   # per-integration inbound secret
   # OIDC_CLIENT_SECRET: ""
   # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY, AZURE_*, GCP_* as needed

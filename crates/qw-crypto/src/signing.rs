@@ -1,17 +1,49 @@
 use crate::CryptoError;
-use ml_dsa::{KeyGen, KeyPair, MlDsa65};
+use ml_dsa::{KeyGen, KeyPair, MlDsa65, B32};
+use zeroize::Zeroize;
 
 /// ML-DSA-65 signing key pair (FIPS 204, security category 3).
+///
+/// The 32-byte FIPS 204 seed (ξ) is retained alongside the expanded key so the
+/// identity can be persisted and reconstructed byte-for-byte. That is what
+/// makes a *stable* gateway identity possible — without it the audit hash chain
+/// becomes unverifiable after a restart, and horizontally-scaled replicas each
+/// sign with a different key.
 pub struct SigningKeyPair {
     keypair: KeyPair<MlDsa65>,
+    seed: [u8; 32],
 }
 
 impl SigningKeyPair {
-    /// Generate a new ML-DSA-65 key pair.
+    /// Generate a new ML-DSA-65 key pair from a fresh random seed.
     pub fn generate() -> Result<Self, CryptoError> {
-        let mut rng = getrandom::rand_core::UnwrapErr(getrandom::SysRng);
-        let keypair = MlDsa65::key_gen(&mut rng);
-        Ok(Self { keypair })
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed)
+            .map_err(|e| CryptoError::KeyGeneration(format!("rng failed: {e}")))?;
+        let kp = Self::from_seed(&seed)?;
+        seed.zeroize();
+        Ok(kp)
+    }
+
+    /// Deterministically reconstruct the key pair from its 32-byte FIPS 204
+    /// seed (ML-DSA.KeyGen_internal, Algorithm 6).
+    pub fn from_seed(seed: &[u8; 32]) -> Result<Self, CryptoError> {
+        let mut xi = B32::default();
+        xi.copy_from_slice(seed);
+        let keypair = MlDsa65::from_seed(&xi);
+        xi.zeroize();
+        Ok(Self {
+            keypair,
+            seed: *seed,
+        })
+    }
+
+    /// The 32-byte seed this key was derived from.
+    ///
+    /// **Secret material** — persist it only somewhere a secret belongs (0600
+    /// file, Kubernetes Secret, KMS/HSM). Never log or export it.
+    pub fn seed(&self) -> &[u8; 32] {
+        &self.seed
     }
 
     /// Sign a message with ML-DSA-65 (deterministic).
@@ -32,6 +64,14 @@ impl SigningKeyPair {
     /// Verify a signature against this key pair's public key.
     pub fn verify(&self, message: &[u8], signature_bytes: &[u8]) -> Result<bool, CryptoError> {
         verify(&self.verifying_key_bytes(), message, signature_bytes)
+    }
+}
+
+/// Zeroize the retained seed when the key pair is dropped (the expanded
+/// ml-dsa `SigningKey` already zeroizes itself).
+impl Drop for SigningKeyPair {
+    fn drop(&mut self) {
+        self.seed.zeroize();
     }
 }
 
@@ -99,5 +139,39 @@ mod tests {
         let pk1 = kp.verifying_key_bytes();
         let pk2 = kp.verifying_key_bytes();
         assert_eq!(pk1, pk2);
+    }
+
+    #[test]
+    fn seed_roundtrip_reconstructs_the_same_key() {
+        let original = SigningKeyPair::generate().unwrap();
+        let seed = *original.seed();
+
+        // Reconstruct from the seed alone — as a restarted process (or a second
+        // replica reading the same Secret) would.
+        let restored = SigningKeyPair::from_seed(&seed).unwrap();
+        assert_eq!(
+            original.verifying_key_bytes(),
+            restored.verifying_key_bytes(),
+            "same seed must yield the same public key"
+        );
+
+        // A signature made before the "restart" verifies under the restored key.
+        let sig = original.sign(b"audit entry 1").unwrap();
+        assert!(restored.verify(b"audit entry 1", &sig).unwrap());
+    }
+
+    #[test]
+    fn from_seed_is_deterministic() {
+        let seed = [7u8; 32];
+        let a = SigningKeyPair::from_seed(&seed).unwrap();
+        let b = SigningKeyPair::from_seed(&seed).unwrap();
+        assert_eq!(a.verifying_key_bytes(), b.verifying_key_bytes());
+    }
+
+    #[test]
+    fn different_seeds_give_different_keys() {
+        let a = SigningKeyPair::from_seed(&[1u8; 32]).unwrap();
+        let b = SigningKeyPair::from_seed(&[2u8; 32]).unwrap();
+        assert_ne!(a.verifying_key_bytes(), b.verifying_key_bytes());
     }
 }
