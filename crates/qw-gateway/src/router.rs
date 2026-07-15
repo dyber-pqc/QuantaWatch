@@ -23,12 +23,16 @@ fn proxy_routes(state: AppState) -> Router<AppState> {
         .route("/health", get(health))
         .route("/v1/messages", post(proxy_handler))
         .route("/v1/chat/completions", post(proxy_handler))
+        .route("/v1/chat", post(proxy_handler))
         .route("/api/chat", post(proxy_handler))
         .route("/api/generate", post(proxy_handler))
         // Provider-prefixed routes
         .route("/claude/{*rest}", any(proxy_handler))
         .route("/openai/{*rest}", any(proxy_handler))
         .route("/ollama/{*rest}", any(proxy_handler))
+        .route("/azure/{*rest}", any(proxy_handler))
+        .route("/azure-openai/{*rest}", any(proxy_handler))
+        .route("/cohere/{*rest}", any(proxy_handler))
         // Middleware layers (applied in reverse order)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

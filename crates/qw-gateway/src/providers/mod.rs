@@ -1,4 +1,6 @@
 pub mod anthropic;
+pub mod azure;
+pub mod cohere;
 pub mod ollama;
 pub mod openai;
 pub mod traits;
@@ -48,9 +50,24 @@ impl ProviderRegistry {
                 return Some(("anthropic", p.as_ref()));
             }
         }
+        // Azure addresses models by deployment: /openai/deployments/{dep}/...
+        // Checked before plain OpenAI so the deployment path isn't swallowed.
+        if path.starts_with("/openai/deployments") || path.starts_with("/azure") {
+            for name in ["azure-openai", "azure"] {
+                if let Some(p) = self.providers.get(name) {
+                    return Some((name, p.as_ref()));
+                }
+            }
+        }
         if path.starts_with("/v1/chat/completions") || path.starts_with("/openai") {
             if let Some(p) = self.providers.get("openai") {
                 return Some(("openai", p.as_ref()));
+            }
+        }
+        // Cohere's chat endpoint is /v1/chat (distinct from /v1/chat/completions).
+        if path.starts_with("/v1/chat") || path.starts_with("/cohere") {
+            if let Some(p) = self.providers.get("cohere") {
+                return Some(("cohere", p.as_ref()));
             }
         }
         if path.starts_with("/api/chat")
@@ -111,11 +128,31 @@ pub fn build_registry(config: &GatewayConfig) -> ProviderRegistry {
                     )),
                 );
             }
+            // Mistral, Groq, DeepSeek, Together, vLLM, … all speak this.
             "openai-compat" => {
                 // Use OpenAI adapter for any OpenAI-compatible endpoint
                 registry.register(
                     name,
                     Box::new(openai::OpenAiProvider::new(
+                        provider_config.upstream.clone(),
+                        api_key,
+                    )),
+                );
+            }
+            "azure-openai" | "azure" => {
+                registry.register(
+                    name,
+                    Box::new(azure::AzureOpenAiProvider::new(
+                        provider_config.upstream.clone(),
+                        api_key,
+                        provider_config.api_key_header.clone(),
+                    )),
+                );
+            }
+            "cohere" => {
+                registry.register(
+                    name,
+                    Box::new(cohere::CohereProvider::new(
                         provider_config.upstream.clone(),
                         api_key,
                     )),

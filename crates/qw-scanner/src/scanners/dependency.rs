@@ -212,6 +212,12 @@ impl DependencyScanner {
             Some("cargo_lock")
         } else if path.ends_with("go.mod") {
             Some("go")
+        } else if path.ends_with("pom.xml") {
+            Some("maven")
+        } else if path.ends_with("Gemfile") {
+            Some("rubygems")
+        } else if path.ends_with("composer.json") {
+            Some("composer")
         } else {
             None
         }
@@ -504,6 +510,166 @@ impl DependencyScanner {
 
         findings
     }
+
+    /// Build a crypto-dependency finding. Shared by the ecosystem parsers so a
+    /// new ecosystem only needs to yield package names.
+    fn crypto_finding(
+        pkg_name: &str,
+        crypto_lib: &CryptoLib,
+        path: &str,
+        ecosystem: &str,
+    ) -> Finding {
+        let (severity, category) = match &crypto_lib.pqc_status {
+            PqcStatus::PqcReady => (FindingSeverity::Info, FindingCategory::PqcReady),
+            PqcStatus::ClassicalSecure => {
+                (FindingSeverity::Medium, FindingCategory::ClassicalCrypto)
+            }
+            PqcStatus::ClassicalWeak => (FindingSeverity::High, FindingCategory::WeakAlgorithm),
+            _ => (FindingSeverity::Low, FindingCategory::ClassicalCrypto),
+        };
+        Finding {
+            id: uuid::Uuid::new_v4().to_string(),
+            category,
+            severity,
+            title: format!("Crypto dependency: {pkg_name}"),
+            description: format!(
+                "{} found in {} manifest - {}",
+                pkg_name, ecosystem, crypto_lib.description
+            ),
+            asset: CryptoAsset {
+                id: uuid::Uuid::new_v4().to_string(),
+                asset_type: CryptoAssetType::CryptoLibrary,
+                name: pkg_name.to_string(),
+                algorithm: None,
+                key_length: None,
+                protocol_version: None,
+                location: AssetLocation {
+                    source_type: "dependency_file".to_string(),
+                    path: path.to_string(),
+                    line: None,
+                },
+                discovered_by: "dependency".to_string(),
+                discovered_at: Utc::now(),
+            },
+            remediation: match &crypto_lib.pqc_status {
+                PqcStatus::PqcReady => None,
+                PqcStatus::ClassicalSecure => Some(
+                    "Consider adding PQC alternatives alongside this classical crypto library"
+                        .to_string(),
+                ),
+                PqcStatus::ClassicalWeak => Some(format!(
+                    "Replace {pkg_name} with a modern, maintained alternative"
+                )),
+                _ => None,
+            },
+            pqc_status: crypto_lib.pqc_status.clone(),
+            metadata: HashMap::from([("ecosystem".to_string(), ecosystem.to_string())]),
+        }
+    }
+
+    /// Match a package name (normalized) against the known crypto libraries.
+    fn match_lib(name: &str) -> Option<&'static CryptoLib> {
+        let normalized = name.to_lowercase().replace('_', "-");
+        CRYPTO_LIBS.iter().find(|cl| cl.name == normalized)
+    }
+
+    /// Go modules: `require github.com/cloudflare/circl v1.3.7`, including
+    /// grouped `require ( ... )` blocks. The last path segment is the lib name.
+    fn parse_go_mod(content: &str, path: &str) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        for line in content.lines() {
+            let mut line = line.trim();
+            if line.is_empty()
+                || line.starts_with("//")
+                || line.starts_with("module ")
+                || line.starts_with("go ")
+                || line == ")"
+                || line == "require ("
+            {
+                continue;
+            }
+            // Strip a leading `require ` on single-line form.
+            if let Some(rest) = line.strip_prefix("require ") {
+                line = rest.trim();
+            }
+            // First token is the module path.
+            let Some(module) = line.split_whitespace().next() else {
+                continue;
+            };
+            let leaf = module.rsplit('/').next().unwrap_or(module);
+            if let Some(lib) = Self::match_lib(leaf) {
+                findings.push(Self::crypto_finding(module, lib, path, "go"));
+            }
+        }
+        findings
+    }
+
+    /// Maven POM: scan `<artifactId>name</artifactId>` occurrences.
+    fn parse_pom_xml(content: &str, path: &str) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        for chunk in content.split("<artifactId>").skip(1) {
+            let Some(end) = chunk.find("</artifactId>") else {
+                continue;
+            };
+            let artifact = chunk[..end].trim();
+            if artifact.is_empty() {
+                continue;
+            }
+            if let Some(lib) = Self::match_lib(artifact) {
+                findings.push(Self::crypto_finding(artifact, lib, path, "maven"));
+            }
+        }
+        findings
+    }
+
+    /// Ruby Gemfile: `gem "openssl", "~> 3.0"`.
+    fn parse_gemfile(content: &str, path: &str) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let Some(rest) = line.strip_prefix("gem ") else {
+                continue;
+            };
+            // The gem name is the first single- or double-quoted token.
+            let rest = rest.trim();
+            let quote = match rest.chars().next() {
+                Some(q @ ('"' | '\'')) => q,
+                _ => continue,
+            };
+            let after = &rest[1..];
+            let Some(end) = after.find(quote) else {
+                continue;
+            };
+            let name = &after[..end];
+            if let Some(lib) = Self::match_lib(name) {
+                findings.push(Self::crypto_finding(name, lib, path, "rubygems"));
+            }
+        }
+        findings
+    }
+
+    /// PHP composer.json: `require` / `require-dev` maps of `vendor/package`.
+    fn parse_composer_json(content: &str, path: &str) -> Vec<Finding> {
+        let mut findings = Vec::new();
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(content) else {
+            return findings;
+        };
+        for section in ["require", "require-dev"] {
+            let Some(map) = json.get(section).and_then(|v| v.as_object()) else {
+                continue;
+            };
+            for pkg in map.keys() {
+                let leaf = pkg.rsplit('/').next().unwrap_or(pkg);
+                if let Some(lib) = Self::match_lib(leaf) {
+                    findings.push(Self::crypto_finding(pkg, lib, path, "composer"));
+                }
+            }
+        }
+        findings
+    }
 }
 
 #[async_trait]
@@ -544,9 +710,13 @@ impl Scanner for DependencyScanner {
         };
 
         let findings = match file_type {
-            "cargo" => Self::parse_cargo_toml(&content, &target.address),
+            "cargo" | "cargo_lock" => Self::parse_cargo_toml(&content, &target.address),
             "npm" => Self::parse_package_json(&content, &target.address),
             "pip" => Self::parse_requirements_txt(&content, &target.address),
+            "go" => Self::parse_go_mod(&content, &target.address),
+            "maven" => Self::parse_pom_xml(&content, &target.address),
+            "rubygems" => Self::parse_gemfile(&content, &target.address),
+            "composer" => Self::parse_composer_json(&content, &target.address),
             _ => Vec::new(),
         };
 
@@ -585,7 +755,63 @@ mod tests {
             Some("pip")
         );
         assert_eq!(DependencyScanner::detect_file_type("go.mod"), Some("go"));
+        assert_eq!(
+            DependencyScanner::detect_file_type("pom.xml"),
+            Some("maven")
+        );
+        assert_eq!(
+            DependencyScanner::detect_file_type("Gemfile"),
+            Some("rubygems")
+        );
+        assert_eq!(
+            DependencyScanner::detect_file_type("composer.json"),
+            Some("composer")
+        );
         assert_eq!(DependencyScanner::detect_file_type("random.txt"), None);
+    }
+
+    #[test]
+    fn test_parse_go_mod_single_and_block_forms() {
+        let content = "module example.com/app\n\ngo 1.22\n\nrequire github.com/foo/openssl v1.2.3\n\nrequire (\n\tgithub.com/open-quantum-safe/liboqs v0.10.0\n\tgithub.com/unrelated/logger v1.0.0\n)\n";
+        let findings = DependencyScanner::parse_go_mod(content, "go.mod");
+        assert_eq!(
+            findings.len(),
+            2,
+            "should find openssl + liboqs, not logger"
+        );
+        assert!(findings.iter().any(|f| f.title.contains("openssl")));
+        let oqs = findings
+            .iter()
+            .find(|f| f.title.contains("liboqs"))
+            .expect("liboqs");
+        assert_eq!(oqs.pqc_status, PqcStatus::PqcReady);
+        assert_eq!(oqs.metadata.get("ecosystem").unwrap(), "go");
+    }
+
+    #[test]
+    fn test_parse_pom_xml_finds_artifact() {
+        let content = "<project><dependencies><dependency><groupId>org.x</groupId><artifactId>openssl</artifactId></dependency><dependency><artifactId>junit</artifactId></dependency></dependencies></project>";
+        let findings = DependencyScanner::parse_pom_xml(content, "pom.xml");
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].title.contains("openssl"));
+        assert_eq!(findings[0].metadata.get("ecosystem").unwrap(), "maven");
+    }
+
+    #[test]
+    fn test_parse_gemfile_handles_both_quote_styles() {
+        let content = "source 'https://rubygems.org'\n# comment\ngem 'openssl', '~> 3.0'\ngem \"bcrypt\"\ngem 'rails'\n";
+        let findings = DependencyScanner::parse_gemfile(content, "Gemfile");
+        assert_eq!(findings.len(), 2, "openssl + bcrypt, not rails");
+        assert!(findings.iter().any(|f| f.title.contains("bcrypt")));
+    }
+
+    #[test]
+    fn test_parse_composer_json_require_sections() {
+        let content = r#"{"require":{"vendor/openssl":"^3.0","other/thing":"^1.0"},"require-dev":{"dev/bcrypt":"^1.0"}}"#;
+        let findings = DependencyScanner::parse_composer_json(content, "composer.json");
+        assert_eq!(findings.len(), 2);
+        assert!(findings.iter().any(|f| f.title.contains("vendor/openssl")));
+        assert!(findings.iter().any(|f| f.title.contains("dev/bcrypt")));
     }
 
     #[test]
