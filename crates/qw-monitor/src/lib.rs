@@ -1,22 +1,27 @@
 pub mod error;
 pub mod exfiltration;
+pub mod heuristics;
 pub mod injection;
 pub mod patterns;
 pub mod pii;
 pub mod types;
 
 pub use error::MonitorError;
+pub use heuristics::{Detector, HeuristicDetector};
 pub use types::{DetectedThreat, Severity, ThreatAssessment, ThreatCategory};
 
 use exfiltration::ExfiltrationDetector;
 use injection::InjectionDetector;
 use pii::PiiDetector;
 
-/// Combined security monitor that runs all detectors.
+/// Combined security monitor that runs all detectors: the regex detectors plus
+/// the model-free heuristic/semantic layer (obfuscation, encoding, paraphrased
+/// overrides) that generalizes beyond fixed patterns.
 pub struct SecurityMonitor {
     injection: InjectionDetector,
     exfiltration: ExfiltrationDetector,
     pii: PiiDetector,
+    heuristics: HeuristicDetector,
     blocking_threshold: Severity,
 }
 
@@ -26,6 +31,7 @@ impl SecurityMonitor {
             injection: InjectionDetector::new(),
             exfiltration: ExfiltrationDetector::new(),
             pii: PiiDetector::new(),
+            heuristics: HeuristicDetector::new(),
             blocking_threshold,
         }
     }
@@ -45,6 +51,10 @@ impl SecurityMonitor {
         // Scan for PII in outbound prompts
         threats.extend(self.pii.scan(text));
 
+        // Heuristic/semantic signals (obfuscation, encoded payloads, paraphrased
+        // instruction-overrides) that the fixed patterns miss.
+        threats.extend(self.heuristics.scan(text));
+
         ThreatAssessment::from_threats(threats, &self.blocking_threshold)
     }
 
@@ -53,6 +63,8 @@ impl SecurityMonitor {
         let mut threats = Vec::new();
         threats.extend(self.exfiltration.scan(text));
         threats.extend(self.pii.scan(text));
+        // Encoded-payload / obfuscation signals in the model's output too.
+        threats.extend(self.heuristics.scan(text));
         ThreatAssessment::from_threats(threats, &self.blocking_threshold)
     }
 }
