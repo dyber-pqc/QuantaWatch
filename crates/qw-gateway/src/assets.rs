@@ -61,10 +61,26 @@ pub async fn sync_assets(state: &AppState, tenant: &str) -> (usize, usize) {
     let mut assets = discover(state);
 
     // Live cloud connectors (AWS KMS/ACM, Azure Key Vault) — real API calls,
-    // no-op gracefully when credentials are absent.
-    for c in &state.config.connectors {
-        if matches!(c.connector_type.as_str(), "aws" | "azure" | "gcp") {
-            assets.extend(crate::cloud::discover(&state.http_client, c).await);
+    // no-op gracefully when credentials are absent. Skipped entirely when
+    // air-gapped: these reach public cloud control planes.
+    if state.config.air_gapped {
+        let cloud_connectors = state
+            .config
+            .connectors
+            .iter()
+            .filter(|c| matches!(c.connector_type.as_str(), "aws" | "azure" | "gcp"))
+            .count();
+        if cloud_connectors > 0 {
+            tracing::info!(
+                skipped = cloud_connectors,
+                "air-gapped: skipping cloud connector discovery"
+            );
+        }
+    } else {
+        for c in &state.config.connectors {
+            if matches!(c.connector_type.as_str(), "aws" | "azure" | "gcp") {
+                assets.extend(crate::cloud::discover(&state.http_client, c).await);
+            }
         }
     }
 

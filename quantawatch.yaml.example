@@ -27,6 +27,15 @@ resilience:
 attestation:
   provider: software
 
+# Air-gapped mode: refuse ALL outbound network calls except the configured LLM
+# provider upstreams (which in an air-gapped site are themselves internal).
+# Disables alert webhooks, evidence-pack delivery, cloud connector discovery,
+# and outbound integration calls (GitHub/Jira/...) — those endpoints return 503.
+# Nothing is lost locally: alerts and findings are still recorded and visible,
+# migration plans are still generated (GET /api/findings/{id}/plan), and the
+# audit log is exported pull-based via GET /api/audit/export.
+air_gapped: false
+
 providers:
   anthropic:
     upstream: "https://api.anthropic.com"

@@ -142,6 +142,10 @@ fn admin_routes() -> Router<AppState> {
         )
         .route("/api/audit", get(crate::admin::audit_api::list_audit))
         .route(
+            "/api/audit/export",
+            get(crate::admin::audit_api::export_audit),
+        )
+        .route(
             "/api/audit/verify",
             post(crate::admin::audit_api::verify_audit),
         )

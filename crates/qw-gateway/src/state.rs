@@ -126,7 +126,22 @@ impl AppState {
             config.alerts.clone(),
             http_client.clone(),
             store.clone(),
+            config.air_gapped,
         ));
+
+        if config.air_gapped {
+            tracing::warn!(
+                "AIR-GAPPED MODE: outbound alert delivery, evidence-pack delivery, cloud \
+                 connector discovery, and integration calls are disabled. Alerts and findings \
+                 are still recorded locally; export the audit log via GET /api/audit/export."
+            );
+            if config.auth.oidc.is_some() {
+                tracing::warn!(
+                    "air_gapped is set but an OIDC provider is configured; SSO discovery/JWKS \
+                     requires egress and will fail unless the issuer is reachable internally."
+                );
+            }
+        }
 
         // Initialize auth manager
         let auth_manager = Arc::new(crate::auth::AuthManager::new(config.auth.clone()));

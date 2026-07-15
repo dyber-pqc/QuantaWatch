@@ -89,6 +89,12 @@ pub fn spawn(state: AppState) {
 
 /// Build and ship a signed evidence pack per tenant to the configured sink.
 async fn deliver_evidence(state: &AppState, ed: &crate::config::EvidenceDeliveryConfig) {
+    if state.config.air_gapped {
+        tracing::info!(
+            "air-gapped: skipping evidence pack delivery; download packs via the admin API instead"
+        );
+        return;
+    }
     let Ok(sink) = std::env::var(&ed.sink_url_env) else {
         tracing::warn!(
             "evidence sink URL env '{}' not set; skipping delivery",

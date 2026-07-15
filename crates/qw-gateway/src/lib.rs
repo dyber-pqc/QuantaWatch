@@ -13,4 +13,5 @@ pub mod oidc;
 pub mod providers;
 pub mod resilience;
 pub mod router;
+pub mod siem;
 pub mod state;

@@ -60,6 +60,11 @@ pub async fn remediate(
     Path(finding_id): Path<String>,
     Json(body): Json<RemediateRequest>,
 ) -> impl IntoResponse {
+    // Filing a ticket/PR is an outbound call. The migration *plan* itself stays
+    // available offline via GET /api/findings/{id}/plan.
+    if state.config.air_gapped {
+        return crate::admin::integrations_api::air_gapped_refusal();
+    }
     let tenant = tenant_of(&ctx);
     let record = match state.store.get_finding(&tenant, &finding_id) {
         Some(r) => r,

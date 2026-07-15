@@ -40,6 +40,14 @@ pub struct GatewayConfig {
     /// CBOM attestation root of trust.
     #[serde(default)]
     pub attestation: AttestationConfig,
+    /// Air-gapped mode: refuse ALL outbound network calls except the configured
+    /// LLM provider upstreams (which in an air-gapped site are themselves
+    /// internal). Disables alert webhooks, evidence-pack delivery, cloud
+    /// connector discovery, and outbound integration calls (GitHub/Jira/...).
+    /// Alerts and findings are still recorded locally and remain visible in the
+    /// UI and via the pull-based SIEM export — nothing leaves the enclave.
+    #[serde(default)]
+    pub air_gapped: bool,
     /// Declared external crypto assets (TLS endpoints, ingresses, etc.).
     #[serde(default)]
     pub assets: Vec<AssetConfig>,
@@ -594,6 +602,7 @@ impl Default for GatewayConfig {
             auth: AuthConfig::default(),
             resilience: ResilienceConfig::default(),
             attestation: AttestationConfig::default(),
+            air_gapped: false,
             assets: Vec::new(),
             connectors: Vec::new(),
         }

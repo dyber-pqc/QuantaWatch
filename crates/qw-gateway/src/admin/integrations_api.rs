@@ -9,6 +9,20 @@ use std::collections::HashSet;
 
 use crate::state::AppState;
 
+/// Endpoints that call an external service are refused in air-gapped mode.
+/// Listing configured integrations is still allowed (it is purely local).
+pub fn air_gapped_refusal() -> axum::response::Response {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({
+            "error": "disabled in air-gapped mode",
+            "detail": "This endpoint makes an outbound call to an external service. \
+                       Set air_gapped: false to enable it.",
+        })),
+    )
+        .into_response()
+}
+
 pub async fn list_integrations(State(state): State<AppState>) -> impl IntoResponse {
     let integrations = state.integration_registry.list();
     Json(json!({
@@ -21,6 +35,9 @@ pub async fn test_integration(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if state.config.air_gapped {
+        return air_gapped_refusal();
+    }
     match state.integration_registry.get(&id) {
         Some(integration) => match integration.test_connection().await {
             Ok(status) => {
@@ -63,6 +80,9 @@ pub async fn sync_integration(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if state.config.air_gapped {
+        return air_gapped_refusal();
+    }
     match state.integration_registry.get(&id) {
         Some(integration) => match integration.discover_targets().await {
             Ok(targets) => {
@@ -116,6 +136,9 @@ pub async fn register_webhook(
     axum::extract::Path(id): axum::extract::Path<String>,
     axum::Json(body): axum::Json<RegisterWebhookRequest>,
 ) -> impl IntoResponse {
+    if state.config.air_gapped {
+        return air_gapped_refusal();
+    }
     let Some(integration) = state.integration_registry.get(&id) else {
         return (
             StatusCode::NOT_FOUND,
@@ -154,6 +177,9 @@ pub async fn scan_integration(
     ctx: Option<axum::Extension<crate::auth::AuthContext>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
+    if state.config.air_gapped {
+        return air_gapped_refusal();
+    }
     let tenant = crate::auth::tenant_of(&ctx);
     let integration = match state.integration_registry.get(&id) {
         Some(i) => i,

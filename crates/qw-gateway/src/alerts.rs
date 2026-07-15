@@ -16,14 +16,23 @@ pub struct AlertManager {
     config: AlertConfig,
     http: reqwest::Client,
     store: Arc<Store>,
+    /// In air-gapped mode alerts are still recorded, but never delivered
+    /// outbound — no webhook or Slack call leaves the enclave.
+    air_gapped: bool,
 }
 
 impl AlertManager {
-    pub fn new(config: AlertConfig, http: reqwest::Client, store: Arc<Store>) -> Self {
+    pub fn new(
+        config: AlertConfig,
+        http: reqwest::Client,
+        store: Arc<Store>,
+        air_gapped: bool,
+    ) -> Self {
         Self {
             config,
             http,
             store,
+            air_gapped,
         }
     }
 
@@ -49,8 +58,11 @@ impl AlertManager {
     }
 
     /// Record an alert (under `tenant`) and deliver it to channels that meet its severity floor.
+    ///
+    /// Air-gapped deployments still record every alert (visible in the UI and
+    /// via the pull-based SIEM export); only outbound delivery is suppressed.
     pub async fn fire(&self, tenant: &str, mut event: AlertEvent) {
-        if self.config.enabled {
+        if self.config.enabled && !self.air_gapped {
             let mut delivered = 0u32;
             for ch in &self.config.channels {
                 let floor = ch
