@@ -207,7 +207,14 @@ cargo run -p qw-cli -- verify-attestation ./cbom.json
 
 # Signed evidence pack
 cargo run -p qw-cli -- verify-evidence ./evidence.json
+
+# Any file signed with ML-DSA-65 (e.g. a release SHA256SUMS)
+cargo run -p qw-cli -- verify-file SHA256SUMS --signature SHA256SUMS.sig --public-key docs/release-signing-key.pub
 ```
+
+Releases are reproducible and signed twice — with Sigstore and with
+QuantaWatch's own post-quantum ML-DSA-65 signature. See
+[`docs/RELEASES.md`](docs/RELEASES.md) to verify a release or reproduce a build.
 
 ## Configuration
 

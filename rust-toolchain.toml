@@ -1,0 +1,6 @@
+# Pin the exact toolchain so builds are reproducible: the same source + the same
+# compiler produces the same binary. Bump deliberately, in lockstep with the
+# Dockerfile and the release workflow.
+[toolchain]
+channel = "1.93.0"
+components = ["rustfmt", "clippy"]

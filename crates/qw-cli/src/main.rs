@@ -84,6 +84,35 @@ enum Commands {
         /// Path to the CBOM JSON (from /api/cbom or /api/cbom/download)
         path: PathBuf,
     },
+    /// Sign a file with ML-DSA-65 (post-quantum). Signs the file's SHA3-256
+    /// digest; writes a hex signature and prints the signer's public key.
+    Sign {
+        /// File to sign
+        path: PathBuf,
+        /// Directory holding the signing identity (gateway_seed.key)
+        #[arg(long, default_value = "./keys")]
+        key_dir: PathBuf,
+        /// ENV var holding a hex 32-byte seed (overrides key_dir; use in CI)
+        #[arg(long)]
+        seed_env: Option<String>,
+        /// Output path for the signature (defaults to <path>.sig)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+        /// Also write the signer's public key here (publish it as the trust anchor)
+        #[arg(long)]
+        pubkey_out: Option<PathBuf>,
+    },
+    /// Verify an ML-DSA-65 signature over a file, against a published public key.
+    VerifyFile {
+        /// File that was signed
+        path: PathBuf,
+        /// Signature file (hex). Defaults to <path>.sig
+        #[arg(long)]
+        signature: Option<PathBuf>,
+        /// Public key file (hex or raw bytes) — the release trust anchor
+        #[arg(long)]
+        public_key: PathBuf,
+    },
     /// Show version and build info
     Version,
 }
@@ -116,8 +145,25 @@ enum CbomAction {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // ML-DSA-65 / ML-KEM-768 keygen and signing use large stack arrays that can
+    // overflow the OS main-thread stack (~1 MB on Windows). RUST_MIN_STACK only
+    // affects spawned threads, not `main`, so run the whole CLI on a thread with
+    // a generous stack.
+    std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .thread_stack_size(16 * 1024 * 1024)
+                .build()?
+                .block_on(async_main())
+        })?
+        .join()
+        .map_err(|_| anyhow::anyhow!("CLI thread panicked"))?
+}
+
+async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -445,6 +491,97 @@ async fn main() -> Result<()> {
                 }
             } else {
                 println!("VERIFICATION FAILED.");
+                std::process::exit(1);
+            }
+        }
+        Commands::Sign {
+            path,
+            key_dir,
+            seed_env,
+            output,
+            pubkey_out,
+        } => {
+            // Load the signing identity. Never silently generate one for signing:
+            // a throwaway key produces a signature nobody can verify.
+            let identity = match seed_env {
+                Some(var) => {
+                    // Strict: --seed-env means "use this seed". An unset or
+                    // malformed var is an error, not a cue to mint a random key.
+                    let seed_hex = std::env::var(&var)
+                        .map_err(|_| anyhow::anyhow!("--seed-env {var} is not set"))?;
+                    let raw = hex::decode(seed_hex.trim())
+                        .map_err(|_| anyhow::anyhow!("${var} is not valid hex"))?;
+                    let seed: [u8; 32] = raw
+                        .try_into()
+                        .map_err(|_| anyhow::anyhow!("${var} must decode to 32 bytes"))?;
+                    qw_crypto::GatewayIdentity::from_seed(&seed)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?
+                }
+                None => {
+                    if !key_dir.join("gateway_seed.key").exists() {
+                        anyhow::bail!(
+                            "no signing key at {}/gateway_seed.key — run `qw keygen` or pass --seed-env",
+                            key_dir.display()
+                        );
+                    }
+                    qw_crypto::GatewayIdentity::load_or_generate(&key_dir)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?
+                }
+            };
+
+            let bytes = std::fs::read(&path)?;
+            let digest = qw_crypto::sha3_256(&bytes);
+            let sig = identity
+                .sign(&digest)
+                .map_err(|e| anyhow::anyhow!("signing failed: {e}"))?;
+
+            let sig_path = output.unwrap_or_else(|| path.with_extension("sig"));
+            std::fs::write(&sig_path, hex::encode(&sig))?;
+
+            let pubkey = identity.public_key_bytes();
+            if let Some(pk_path) = pubkey_out {
+                std::fs::write(&pk_path, hex::encode(&pubkey))?;
+                println!("Public key written to {}", pk_path.display());
+            }
+
+            println!("Signed {} with ML-DSA-65 (FIPS 204).", path.display());
+            println!("  Digest (SHA3-256): {}", hex::encode(digest));
+            println!("  Signature:         {}", sig_path.display());
+            println!("  Signer public key: {}", hex::encode(&pubkey));
+            println!("  Signer fingerprint: {}", identity.fingerprint);
+        }
+        Commands::VerifyFile {
+            path,
+            signature,
+            public_key,
+        } => {
+            println!("QuantaWatch File Signature Verifier");
+            println!("===================================");
+
+            let sig_path = signature.unwrap_or_else(|| path.with_extension("sig"));
+            let sig = hex::decode(std::fs::read_to_string(&sig_path)?.trim())
+                .map_err(|_| anyhow::anyhow!("signature file is not valid hex"))?;
+
+            // Accept the public key as hex text or raw bytes.
+            let pk_raw = std::fs::read(&public_key)?;
+            let pubkey = match hex::decode(String::from_utf8_lossy(&pk_raw).trim()) {
+                Ok(b) if b.len() == 1952 => b, // ML-DSA-65 verifying key length
+                _ => pk_raw,
+            };
+
+            let bytes = std::fs::read(&path)?;
+            let digest = qw_crypto::sha3_256(&bytes);
+            let ok = qw_crypto::verify(&pubkey, &digest, &sig).unwrap_or(false);
+
+            println!("  File:        {}", path.display());
+            println!("  Signature:   {}", sig_path.display());
+            println!("  Public key:  {}", public_key.display());
+            println!("  Digest:      {}", hex::encode(digest));
+            println!();
+            if ok {
+                println!("VERIFIED — the file is authentic and unmodified (ML-DSA-65).");
+            } else {
+                println!("VERIFICATION FAILED — wrong key, or the file/signature was modified.");
                 std::process::exit(1);
             }
         }

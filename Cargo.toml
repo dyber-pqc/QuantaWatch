@@ -19,6 +19,16 @@ edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/dyber-pqc/QuantaWatch"
 
+[profile.release]
+# Toward reproducible, lean release binaries. `strip` removes symbols and debug
+# info (the main source of path-dependent, machine-specific bytes);
+# `codegen-units = 1` removes parallelism-induced nondeterminism. Combined with
+# the pinned toolchain (rust-toolchain.toml) and committed Cargo.lock, the
+# release binary is reproducible when built in the pinned environment.
+strip = true
+lto = true
+codegen-units = 1
+
 [workspace.dependencies]
 # PQC (pure Rust, no CMake needed)
 ml-dsa = "0.1.0-rc.7"

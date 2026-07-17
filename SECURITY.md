@@ -54,6 +54,10 @@ Our own cryptographic inventory — including the classical-crypto surface we
 have not yet migrated — is documented in [`docs/CRYPTOGRAPHY.md`](docs/CRYPTOGRAPHY.md)
 and published as a self-generated CBOM at `docs/quantawatch.cbom.json`.
 
+Releases are reproducible (pinned toolchain + committed `Cargo.lock`) and signed
+with both Sigstore and a post-quantum ML-DSA-65 signature. Verification and
+build-reproduction instructions are in [`docs/RELEASES.md`](docs/RELEASES.md).
+
 ### Recognition
 
 We will credit security researchers who responsibly disclose vulnerabilities (unless they prefer to remain anonymous).
