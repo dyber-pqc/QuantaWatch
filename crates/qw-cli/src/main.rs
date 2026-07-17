@@ -108,6 +108,11 @@ enum CbomAction {
         /// target/, node_modules/, .git/).
         #[arg(long)]
         recursive: bool,
+        /// Emit byte-reproducible output: stable ordering, content-derived
+        /// identifiers, pinned timestamps, and normalized paths. Use this for a
+        /// CBOM you commit, so CI can detect drift by diffing it.
+        #[arg(long)]
+        deterministic: bool,
     },
 }
 
@@ -215,12 +220,21 @@ async fn main() -> Result<()> {
                 output,
                 deps_only,
                 recursive,
+                deterministic,
             } => {
-                let results = scan_directory(&path, deps_only, recursive).await?;
+                // Dedupe before scoring so the posture summary describes exactly
+                // the components the document lists (a library used by ten
+                // crates is one library, not ten).
+                let results = qw_cbom::dedupe_scan_results(
+                    &scan_directory(&path, deps_only, recursive).await?,
+                );
                 let summary = qw_cbom::PostureEngine::summarize(&results, &[]);
                 let mut builder = qw_cbom::CbomBuilder::new();
                 builder.ingest_scan_results(&results);
-                let cbom = builder.build_with_posture("cli", summary);
+                let mut cbom = builder.build_with_posture("cli", summary);
+                if deterministic {
+                    qw_cbom::make_deterministic(&mut cbom);
+                }
                 let json = serde_json::to_string_pretty(&cbom)?;
                 match output {
                     Some(out) => {

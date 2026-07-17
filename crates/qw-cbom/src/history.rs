@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -14,7 +14,7 @@ pub struct PostureSnapshot {
     pub timestamp: DateTime<Utc>,
     pub overall_score: f64,
     pub total_assets: u32,
-    pub by_status: HashMap<String, u32>,
+    pub by_status: BTreeMap<String, u32>,
     pub trigger: String,
 }
 

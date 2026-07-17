@@ -19,25 +19,11 @@ impl CbomBuilder {
 
     /// Ingest scan results and convert findings to CBOM components.
     ///
-    /// Deduplicates crypto-library components by name so a dependency used in
-    /// many manifests (e.g. a workspace crate) appears once, not once per
-    /// manifest. Non-library components (TLS connections, certs) are keyed by
-    /// name + location so distinct endpoints are preserved.
+    /// Deduplicated via [`crate::dedupe_scan_results`], so a dependency used in
+    /// many manifests appears once rather than once per manifest.
     pub fn ingest_scan_results(&mut self, results: &[ScanResult]) {
-        use std::collections::HashSet;
-        let mut seen: HashSet<String> = HashSet::new();
-        for result in results {
+        for result in crate::dedupe_scan_results(results) {
             for finding in &result.findings {
-                let key = match finding.asset.asset_type {
-                    CryptoAssetType::CryptoLibrary => format!("lib:{}", finding.asset.name),
-                    _ => format!(
-                        "{}:{}:{}",
-                        finding.asset.name, finding.asset.location.path, finding.category
-                    ),
-                };
-                if !seen.insert(key) {
-                    continue;
-                }
                 let component = self.finding_to_component(finding, &result.scanner_id);
                 self.components.push(component);
             }

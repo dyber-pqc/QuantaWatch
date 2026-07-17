@@ -1,6 +1,6 @@
 use crate::model::*;
 use qw_scanner::{CryptoAssetType, Finding, FindingSeverity, PqcStatus, ScanResult};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 pub struct PostureEngine;
 
@@ -53,7 +53,7 @@ impl PostureEngine {
 
     /// Build a posture summary from scan results and provider info
     pub fn summarize(results: &[ScanResult], providers: &[ProviderCryptoInfo]) -> PostureSummary {
-        let mut by_status: HashMap<String, u32> = HashMap::new();
+        let mut by_status: BTreeMap<String, u32> = BTreeMap::new();
         let mut tls_scores: Vec<f64> = Vec::new();
         let mut cert_scores: Vec<f64> = Vec::new();
         let mut dep_scores: Vec<f64> = Vec::new();

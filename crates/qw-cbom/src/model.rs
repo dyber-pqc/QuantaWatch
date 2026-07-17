@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use qw_scanner::PqcStatus;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Top-level CBOM document (CycloneDX 1.6 compatible)
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,7 +333,9 @@ pub struct CryptoService {
 pub struct PostureSummary {
     pub overall_score: f64,
     pub total_assets: u32,
-    pub by_status: HashMap<String, u32>,
+    /// BTreeMap, not HashMap: Rust randomizes HashMap iteration per process, so
+    /// a HashMap here made the serialized CBOM differ on every run.
+    pub by_status: BTreeMap<String, u32>,
     pub by_category: Vec<CategoryScore>,
     pub by_provider: Vec<ProviderScore>,
     pub calculated_at: DateTime<Utc>,

@@ -626,7 +626,7 @@ mod tests {
             timestamp: Utc::now(),
             overall_score: score,
             total_assets: 3,
-            by_status: HashMap::new(),
+            by_status: std::collections::BTreeMap::new(),
             trigger: "test".into(),
         }
     }

@@ -1,10 +1,10 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:60414787-e195-4bd7-b5a8-c2aa2599b471",
+  "serialNumber": "urn:uuid:2f3c4b28-7e24-ec2d-1896-737b53259214",
   "version": 1,
   "metadata": {
-    "timestamp": "2026-07-17T11:17:35.311575400Z",
+    "timestamp": "1970-01-01T00:00:00Z",
     "tools": [
       {
         "vendor": "Dyber, Inc.",
@@ -16,7 +16,67 @@
   },
   "components": [
     {
-      "bomRef": "comp-910beaa1-5066-4fe8-9c38-4b82edc8ff7b",
+      "bomRef": "comp-3656df70b7ab6cbc",
+      "type": "library",
+      "name": "argon2",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "algorithmProperties": {
+          "primitive": "unknown",
+          "parameterSetIdentifier": ""
+        }
+      },
+      "evidence": {
+        "scannerId": "dependency",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "crates/qw-crypto/Cargo.toml",
+        "confidence": 0.9
+      },
+      "x-quantawatch-posture-score": 60.0,
+      "x-quantawatch-pqc-status": "classical_secure"
+    },
+    {
+      "bomRef": "comp-b28335d0a787e06a",
+      "type": "library",
+      "name": "hmac",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "algorithmProperties": {
+          "primitive": "unknown",
+          "parameterSetIdentifier": ""
+        }
+      },
+      "evidence": {
+        "scannerId": "dependency",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "crates/qw-gateway/Cargo.toml",
+        "confidence": 0.9
+      },
+      "x-quantawatch-posture-score": 60.0,
+      "x-quantawatch-pqc-status": "classical_secure"
+    },
+    {
+      "bomRef": "comp-0da2a5b229473ee3",
+      "type": "library",
+      "name": "jsonwebtoken",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "algorithmProperties": {
+          "primitive": "unknown",
+          "parameterSetIdentifier": ""
+        }
+      },
+      "evidence": {
+        "scannerId": "dependency",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "crates/qw-gateway/Cargo.toml",
+        "confidence": 0.9
+      },
+      "x-quantawatch-posture-score": 60.0,
+      "x-quantawatch-pqc-status": "classical_secure"
+    },
+    {
+      "bomRef": "comp-7954dc0081fee872",
       "type": "library",
       "name": "ml-dsa",
       "cryptoProperties": {
@@ -29,15 +89,15 @@
       },
       "evidence": {
         "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.307909200Z",
-        "source": ".\\Cargo.toml",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "Cargo.toml",
         "confidence": 0.9
       },
       "x-quantawatch-posture-score": 100.0,
       "x-quantawatch-pqc-status": "pqc_ready"
     },
     {
-      "bomRef": "comp-7c3a10a3-0d88-4908-b3ca-a893a526cdd9",
+      "bomRef": "comp-14e324c19119c197",
       "type": "library",
       "name": "ml-kem",
       "cryptoProperties": {
@@ -50,115 +110,15 @@
       },
       "evidence": {
         "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.307927Z",
-        "source": ".\\Cargo.toml",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "Cargo.toml",
         "confidence": 0.9
       },
       "x-quantawatch-posture-score": 100.0,
       "x-quantawatch-pqc-status": "pqc_ready"
     },
     {
-      "bomRef": "comp-59b9db8a-c8eb-4206-92aa-d5c6993fa367",
-      "type": "library",
-      "name": "sha3",
-      "cryptoProperties": {
-        "assetType": "related-crypto-material",
-        "algorithmProperties": {
-          "primitive": "unknown",
-          "parameterSetIdentifier": ""
-        }
-      },
-      "evidence": {
-        "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.307934100Z",
-        "source": ".\\Cargo.toml",
-        "confidence": 0.9
-      },
-      "x-quantawatch-posture-score": 60.0,
-      "x-quantawatch-pqc-status": "classical_secure"
-    },
-    {
-      "bomRef": "comp-13e4df62-dbdf-4f57-9c99-4e1a03b53f91",
-      "type": "library",
-      "name": "argon2",
-      "cryptoProperties": {
-        "assetType": "related-crypto-material",
-        "algorithmProperties": {
-          "primitive": "unknown",
-          "parameterSetIdentifier": ""
-        }
-      },
-      "evidence": {
-        "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.309114200Z",
-        "source": ".\\crates\\qw-crypto\\Cargo.toml",
-        "confidence": 0.9
-      },
-      "x-quantawatch-posture-score": 60.0,
-      "x-quantawatch-pqc-status": "classical_secure"
-    },
-    {
-      "bomRef": "comp-fb9cc2b6-b136-45bf-b1d0-7c7454d946f5",
-      "type": "library",
-      "name": "hmac",
-      "cryptoProperties": {
-        "assetType": "related-crypto-material",
-        "algorithmProperties": {
-          "primitive": "unknown",
-          "parameterSetIdentifier": ""
-        }
-      },
-      "evidence": {
-        "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.309619700Z",
-        "source": ".\\crates\\qw-gateway\\Cargo.toml",
-        "confidence": 0.9
-      },
-      "x-quantawatch-posture-score": 60.0,
-      "x-quantawatch-pqc-status": "classical_secure"
-    },
-    {
-      "bomRef": "comp-56a271ce-3763-4bbc-a1dc-facd8132c545",
-      "type": "library",
-      "name": "jsonwebtoken",
-      "cryptoProperties": {
-        "assetType": "related-crypto-material",
-        "algorithmProperties": {
-          "primitive": "unknown",
-          "parameterSetIdentifier": ""
-        }
-      },
-      "evidence": {
-        "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.309625800Z",
-        "source": ".\\crates\\qw-gateway\\Cargo.toml",
-        "confidence": 0.9
-      },
-      "x-quantawatch-posture-score": 60.0,
-      "x-quantawatch-pqc-status": "classical_secure"
-    },
-    {
-      "bomRef": "comp-6faf62ea-7d1d-401b-8e88-6ed6dd855c9c",
-      "type": "library",
-      "name": "sha2",
-      "cryptoProperties": {
-        "assetType": "related-crypto-material",
-        "algorithmProperties": {
-          "primitive": "unknown",
-          "parameterSetIdentifier": ""
-        }
-      },
-      "evidence": {
-        "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.309634600Z",
-        "source": ".\\crates\\qw-gateway\\Cargo.toml",
-        "confidence": 0.9
-      },
-      "x-quantawatch-posture-score": 60.0,
-      "x-quantawatch-pqc-status": "classical_secure"
-    },
-    {
-      "bomRef": "comp-3d6ac75e-fe61-4ca2-a07b-25c093791920",
+      "bomRef": "comp-b150c45b8dc9bd97",
       "type": "library",
       "name": "rustls",
       "cryptoProperties": {
@@ -170,8 +130,48 @@
       },
       "evidence": {
         "scannerId": "dependency",
-        "scanTimestamp": "2026-07-17T11:17:35.310846400Z",
-        "source": ".\\crates\\qw-scanner\\Cargo.toml",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "crates/qw-scanner/Cargo.toml",
+        "confidence": 0.9
+      },
+      "x-quantawatch-posture-score": 60.0,
+      "x-quantawatch-pqc-status": "classical_secure"
+    },
+    {
+      "bomRef": "comp-96120bd118138356",
+      "type": "library",
+      "name": "sha2",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "algorithmProperties": {
+          "primitive": "unknown",
+          "parameterSetIdentifier": ""
+        }
+      },
+      "evidence": {
+        "scannerId": "dependency",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "crates/qw-gateway/Cargo.toml",
+        "confidence": 0.9
+      },
+      "x-quantawatch-posture-score": 60.0,
+      "x-quantawatch-pqc-status": "classical_secure"
+    },
+    {
+      "bomRef": "comp-52bd0e415da50e5c",
+      "type": "library",
+      "name": "sha3",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "algorithmProperties": {
+          "primitive": "unknown",
+          "parameterSetIdentifier": ""
+        }
+      },
+      "evidence": {
+        "scannerId": "dependency",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "Cargo.toml",
         "confidence": 0.9
       },
       "x-quantawatch-posture-score": 60.0,
@@ -180,11 +180,11 @@
   ],
   "services": [],
   "x-quantawatch-posture": {
-    "overallScore": 93.6,
-    "totalAssets": 11,
+    "overallScore": 92.5,
+    "totalAssets": 8,
     "byStatus": {
-      "pqc_ready": 4,
-      "classical_secure": 7
+      "classical_secure": 6,
+      "pqc_ready": 2
     },
     "byCategory": [
       {
@@ -199,8 +199,8 @@
       },
       {
         "category": "Dependencies",
-        "score": 74.54545454545455,
-        "assetCount": 11
+        "score": 70.0,
+        "assetCount": 8
       },
       {
         "category": "Keys & Code",
@@ -209,6 +209,6 @@
       }
     ],
     "byProvider": [],
-    "calculatedAt": "2026-07-17T11:17:35.311550100Z"
+    "calculatedAt": "1970-01-01T00:00:00Z"
   }
 }

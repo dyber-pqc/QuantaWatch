@@ -110,6 +110,46 @@ jobs:
         run: npm test
         working-directory: sdk/typescript
 
+  self-cbom:
+    name: Self-CBOM drift
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Regenerate QuantaWatch's own CBOM and fail if it differs from the
+      # committed one. The artifact is byte-reproducible (--deterministic), so
+      # any diff means our own cryptographic inventory changed and the published
+      # copy — which we ask people to trust — went stale.
+      - name: Regenerate self-CBOM
+        run: |
+          cargo run -q -p qw-cli -- cbom export . \
+            --deps-only --recursive --deterministic \
+            -o docs/quantawatch.cbom.json
+
+      - name: Fail if the published CBOM is stale
+        run: |
+          if ! git diff --exit-code -- docs/quantawatch.cbom.json; then
+            echo "::error::QuantaWatch's own CBOM changed but docs/quantawatch.cbom.json was not updated."
+            echo "Regenerate it and commit:"
+            echo "  cargo run -p qw-cli -- cbom export . --deps-only --recursive --deterministic -o docs/quantawatch.cbom.json"
+            exit 1
+          fi
+          echo "Self-CBOM is current."
+
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest
