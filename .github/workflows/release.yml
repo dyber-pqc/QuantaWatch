@@ -69,10 +69,10 @@ jobs:
       matrix:
         include:
           - component: gateway
-            image: ghcr.io/dyber-inc/quantawatch
+            image: ghcr.io/dyber-pqc/quantawatch
             dockerfile: Dockerfile
           - component: dashboard
-            image: ghcr.io/dyber-inc/quantawatch-dashboard
+            image: ghcr.io/dyber-pqc/quantawatch-dashboard
             dockerfile: Dockerfile.dashboard
     steps:
       - name: Checkout repository

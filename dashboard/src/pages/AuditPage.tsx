@@ -32,7 +32,7 @@ export default function AuditPage() {
     <div className="space-y-5">
       <PageHeader
         title="Audit Log"
-        subtitle="Tamper-proof, ML-DSA-signed chain of all gateway events"
+        subtitle="Tamper-evident, ML-DSA-signed hash chain of all gateway events"
         actions={
           <>
             <select

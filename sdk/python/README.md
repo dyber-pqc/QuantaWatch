@@ -1,17 +1,18 @@
 # QuantaWatch Python SDK
 
-[![PyPI](https://img.shields.io/pypi/v/quantawatch.svg)](https://pypi.org/project/quantawatch/)
-[![Python](https://img.shields.io/pypi/pyversions/quantawatch.svg)](https://pypi.org/project/quantawatch/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](../../LICENSE)
 
-Python SDK for [QuantaWatch](https://github.com/dyber-inc/quantawatch) — the post-quantum security layer for AI agents.
+Python SDK for [QuantaWatch](https://github.com/dyber-pqc/QuantaWatch) — the post-quantum security layer for AI agents.
 
-Route your AI SDK traffic through the QuantaWatch gateway for threat detection, policy enforcement, and tamper-proof audit logging — all signed with post-quantum cryptography (ML-DSA-65).
+Route your AI SDK traffic through the QuantaWatch gateway for threat detection, policy enforcement, and tamper-evident audit logging — all signed with post-quantum cryptography (ML-DSA-65).
 
 ## Installation
 
+> Not yet published to PyPI. Install from source until the first release.
+
 ```bash
-pip install quantawatch
+git clone https://github.com/dyber-pqc/QuantaWatch.git
+pip install -e QuantaWatch/sdk/python
 ```
 
 **Requirements:** Python 3.10+
@@ -134,8 +135,8 @@ All response types are [Pydantic](https://docs.pydantic.dev/) models:
 The SDK requires a running QuantaWatch gateway. Start one with Docker:
 
 ```bash
-git clone https://github.com/dyber-inc/quantawatch.git
-cd quantawatch
+git clone https://github.com/dyber-pqc/QuantaWatch.git
+cd QuantaWatch
 cp quantawatch.yaml.example quantawatch.yaml
 export ANTHROPIC_API_KEY=sk-ant-...
 docker compose up -d
@@ -144,7 +145,7 @@ docker compose up -d
 Or build from source:
 
 ```bash
-cargo run -p qw-gateway
+cargo run -p qw-gateway -- quantawatch.yaml
 ```
 
 ## Development
@@ -166,7 +167,6 @@ mypy quantawatch/
 
 ## Links
 
-- [QuantaWatch repository](https://github.com/dyber-inc/quantawatch)
-- [Documentation](https://docs.quantawatch.dev)
-- [OpenAPI spec](https://github.com/dyber-inc/quantawatch/blob/main/docs/openapi.yaml)
-- [Examples](https://github.com/dyber-inc/quantawatch/tree/main/examples)
+- [QuantaWatch repository](https://github.com/dyber-pqc/QuantaWatch)
+- [OpenAPI spec](https://github.com/dyber-pqc/QuantaWatch/blob/main/docs/openapi.yaml)
+- [Examples](https://github.com/dyber-pqc/QuantaWatch/tree/main/examples)

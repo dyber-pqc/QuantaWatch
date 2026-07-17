@@ -14,7 +14,7 @@ info:
     url: https://www.apache.org/licenses/LICENSE-2.0
   contact:
     name: QuantaWatch
-    url: https://github.com/dyber-inc/quantawatch
+    url: https://github.com/dyber-pqc/QuantaWatch
 
 servers:
   - url: http://localhost:9091

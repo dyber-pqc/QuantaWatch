@@ -27,11 +27,15 @@ Report them via email to **security@dyber.io**. Include:
 
 The following components are in scope:
 
-- `qw-crypto` — PQC signing, key encapsulation, hashing, Merkle trees
-- `qw-gateway` — Request proxying, middleware pipeline, admin API
+- `qw-crypto` — PQC signing, key encapsulation, hashing, Merkle trees, identity seed persistence
+- `qw-gateway` — Request proxying, middleware pipeline, admin API, auth/RBAC/multi-tenancy, attestation, resilience
 - `qw-audit` — Audit chain integrity, signature verification
 - `qw-policy` — Policy evaluation logic
-- `qw-monitor` — Threat detection patterns
+- `qw-monitor` — Threat detection patterns and heuristics
+- `qw-scanner` — TLS/certificate/dependency/code scanning, OID resolution
+- `qw-cbom` — CBOM generation, posture scoring, compliance, migration planning
+- `qw-integrations` — GitHub/GitLab/Jira/Linear connectors, inbound webhooks
+- `qw-store` — Tenant-scoped persistence
 - `sdk/python/` — Python SDK
 - `sdk/typescript/` — TypeScript SDK
 - `dashboard/` — React dashboard

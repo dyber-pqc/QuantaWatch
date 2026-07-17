@@ -20,7 +20,7 @@ QuantaWatch is a **post-quantum security layer for AI agents**. It provides cryp
 ## Getting Started
 
 1. Read through this contributing guide in full.
-2. Check the [issue tracker](https://github.com/dyber-io/quantawatch/issues) for open issues or create a new one to discuss the change you wish to make.
+2. Check the [issue tracker](https://github.com/dyber-pqc/QuantaWatch/issues) for open issues or create a new one to discuss the change you wish to make.
 3. Fork the repository and create your feature branch.
 
 ## Development Setup
@@ -100,7 +100,7 @@ npm run build
 cargo test --workspace
 ```
 
-This runs unit tests and integration tests across all six crates.
+This runs unit tests and integration tests across all crates.
 
 ### Python SDK tests
 
@@ -265,33 +265,37 @@ When filing a bug report, please include:
 
 ## Architecture Overview
 
-QuantaWatch is organized as a Rust workspace with six core crates, a React dashboard, and SDKs for Python and TypeScript.
+QuantaWatch is organized as a Rust workspace with ten crates, a React dashboard, and SDKs for Python and TypeScript.
 
 ```
 quantawatch/
 +-- crates/
-|   +-- quantawatch-crypto     # PQC primitives (ML-DSA-65, ML-KEM-768)
-|   +-- quantawatch-gateway    # Reverse proxy with PQ-TLS termination
-|   +-- quantawatch-policy     # Policy engine (OPA-compatible rules)
-|   +-- quantawatch-monitor    # Prompt/response analysis and monitoring
-|   +-- quantawatch-audit      # Append-only signed audit chain
-|   +-- quantawatch-cli        # CLI tool for key management and ops
-+-- dashboard/                 # React (TypeScript) admin dashboard
+|   +-- qw-crypto          # PQC primitives (ML-DSA-65, ML-KEM-768, SHA3, Merkle)
+|   +-- qw-policy          # YAML policy engine, per-agent ACLs
+|   +-- qw-monitor         # Threat detection (regex + heuristics)
+|   +-- qw-audit           # Append-only signed, hash-chained audit log
+|   +-- qw-scanner         # TLS/cert/dependency/code scanners, OID resolution
+|   +-- qw-cbom            # CBOM, posture, compliance, migration planner
+|   +-- qw-integrations    # GitHub/GitLab/Jira/Linear connectors
+|   +-- qw-store           # SQLite persistence (tenant-scoped)
+|   +-- qw-gateway         # Axum proxy + admin API, attestation, resilience
+|   +-- qw-cli             # CLI tools (verify, scan, cbom, ...)
++-- dashboard/             # React (TypeScript) admin dashboard
 +-- sdk/
-|   +-- python/                # Python SDK for agent integration
-|   +-- typescript/            # TypeScript SDK for agent integration
-+-- deploy/                    # Helm chart + Terraform module
-+-- sidecar/                   # Dashboard nginx config
-+-- tests/                     # End-to-end integration tests
-+-- docs/                      # Documentation
+|   +-- python/            # Python SDK for agent integration
+|   +-- typescript/        # TypeScript SDK for agent integration
++-- deploy/                # Helm chart + Terraform module
++-- sidecar/               # Dashboard nginx config
++-- tests/                 # End-to-end integration tests
++-- docs/                  # Documentation
 ```
 
 ### Key Design Principles
 
-- **Post-quantum first**: All cryptographic operations use NIST FIPS 203/204 standardized algorithms.
-- **Zero-trust agent model**: Every agent request is authenticated, authorized, and audited.
-- **Minimal footprint**: The gateway adds sub-millisecond overhead to agent communications.
-- **Pluggable policies**: Security policies are expressed as declarative rules, not code changes.
+- **Post-quantum first**: cryptographic signing uses NIST FIPS 203/204 standardized algorithms.
+- **Independently verifiable**: the audit, evidence, and attestation verifiers check signatures without trusting the gateway.
+- **Zero-trust agent model**: agent requests are authenticated, authorized, and audited.
+- **Pluggable policies**: security policies are expressed as declarative YAML rules, not code changes.
 
 ## License
 
