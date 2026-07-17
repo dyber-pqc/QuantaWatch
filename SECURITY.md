@@ -50,6 +50,10 @@ QuantaWatch uses NIST-standardized post-quantum algorithms:
 
 We track updates to these standards and the underlying RustCrypto implementations. If you discover implementation issues in our usage of these algorithms, please report them through the process above.
 
+Our own cryptographic inventory — including the classical-crypto surface we
+have not yet migrated — is documented in [`docs/CRYPTOGRAPHY.md`](docs/CRYPTOGRAPHY.md)
+and published as a self-generated CBOM at `docs/quantawatch.cbom.json`.
+
 ### Recognition
 
 We will credit security researchers who responsibly disclose vulnerabilities (unless they prefer to remain anonymous).

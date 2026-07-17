@@ -165,6 +165,33 @@ const CRYPTO_LIBS: &[CryptoLib] = &[
         pqc_status: PqcStatus::ClassicalSecure,
         description: "JavaScript JOSE library",
     },
+    // Hashing / MAC / KDF — quantum-resistant symmetric primitives (secure, but
+    // not post-quantum *asymmetric* algorithms, so classified ClassicalSecure).
+    CryptoLib {
+        name: "sha3",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "SHA-3 / Keccak hashing (FIPS 202); quantum-resistant",
+    },
+    CryptoLib {
+        name: "sha2",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "SHA-2 hashing; quantum-resistant at >= 256-bit",
+    },
+    CryptoLib {
+        name: "hmac",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "HMAC message authentication; quantum-resistant",
+    },
+    CryptoLib {
+        name: "hkdf",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "HKDF key derivation; quantum-resistant",
+    },
+    CryptoLib {
+        name: "jsonwebtoken",
+        pqc_status: PqcStatus::ClassicalSecure,
+        description: "JWT signing/verification (typically RSA/ECDSA — classical asymmetric)",
+    },
     // Classical weak / deprecated
     CryptoLib {
         name: "pycrypto",
@@ -849,14 +876,18 @@ mod tests {
 
         let findings = DependencyScanner::parse_cargo_toml(toml_content, "Cargo.toml");
 
-        // Should find ml-kem (pqc ready) and ring (classical secure)
-        assert_eq!(findings.len(), 2);
+        // ml-kem (pqc ready), sha3 (classical-secure hash), ring (classical secure).
+        assert_eq!(findings.len(), 3);
 
         let ml_kem = findings
             .iter()
             .find(|f| f.title.contains("ml-kem"))
             .unwrap();
         assert_eq!(ml_kem.pqc_status, PqcStatus::PqcReady);
+
+        // sha3 must now be inventoried (it was previously missed).
+        let sha3 = findings.iter().find(|f| f.title.contains("sha3")).unwrap();
+        assert_eq!(sha3.pqc_status, PqcStatus::ClassicalSecure);
     }
 
     #[test]

@@ -98,6 +98,16 @@ enum CbomAction {
         /// Output file (defaults to stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Inventory dependency manifests only, skipping the source-code
+        /// scanner. Use this for a *self*-CBOM of a crypto project: the code
+        /// scanner would otherwise match the project's own detection patterns
+        /// and test fixtures as false positives.
+        #[arg(long)]
+        deps_only: bool,
+        /// Recurse into subdirectories to find every manifest (skips
+        /// target/, node_modules/, .git/).
+        #[arg(long)]
+        recursive: bool,
     },
 }
 
@@ -195,13 +205,18 @@ async fn main() -> Result<()> {
             print_findings(&results);
         }
         Commands::Posture { path } => {
-            let results = scan_directory(&path).await?;
+            let results = scan_directory(&path, false, false).await?;
             let summary = qw_cbom::PostureEngine::summarize(&results, &[]);
             print_posture(&summary);
         }
         Commands::Cbom { action } => match action {
-            CbomAction::Export { path, output } => {
-                let results = scan_directory(&path).await?;
+            CbomAction::Export {
+                path,
+                output,
+                deps_only,
+                recursive,
+            } => {
+                let results = scan_directory(&path, deps_only, recursive).await?;
                 let summary = qw_cbom::PostureEngine::summarize(&results, &[]);
                 let mut builder = qw_cbom::CbomBuilder::new();
                 builder.ingest_scan_results(&results);
@@ -450,27 +465,78 @@ async fn run_scan(kind: &str, target: &str) -> Result<Vec<qw_scanner::ScanResult
 }
 
 /// Scan a directory: every dependency manifest plus the source tree.
-async fn scan_directory(dir: &std::path::Path) -> Result<Vec<qw_scanner::ScanResult>> {
-    let registry = all_scanners();
-    let mut results = Vec::new();
+const MANIFESTS: &[&str] = &[
+    "Cargo.toml",
+    "package.json",
+    "requirements.txt",
+    "go.mod",
+    "pom.xml",
+    "Gemfile",
+    "composer.json",
+];
 
-    const MANIFESTS: &[&str] = &[
-        "Cargo.toml",
-        "package.json",
-        "requirements.txt",
-        "go.mod",
-        "Gemfile",
-    ];
+/// Collect dependency-manifest paths under `dir`. When `recursive`, walk the
+/// tree (bounded depth), skipping build/output/VCS directories that only
+/// contain vendored or generated files.
+fn collect_manifests(
+    dir: &std::path::Path,
+    recursive: bool,
+    depth: usize,
+    out: &mut Vec<std::path::PathBuf>,
+) {
     for name in MANIFESTS {
         let p = dir.join(name);
         if p.is_file() {
-            let t = qw_scanner::ScanTarget::dependency_file(&p.to_string_lossy());
-            results.extend(registry.scan_all(&t).await);
+            out.push(p);
         }
     }
+    if !recursive || depth == 0 {
+        return;
+    }
+    let skip = [
+        "target",
+        "node_modules",
+        ".git",
+        "dist",
+        ".vite",
+        "__pycache__",
+    ];
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if skip.contains(&base) || base.starts_with('.') {
+                    continue;
+                }
+                collect_manifests(&path, recursive, depth - 1, out);
+            }
+        }
+    }
+}
 
-    let code_target = qw_scanner::ScanTarget::code_directory(&dir.to_string_lossy());
-    results.extend(registry.scan_all(&code_target).await);
+async fn scan_directory(
+    dir: &std::path::Path,
+    deps_only: bool,
+    recursive: bool,
+) -> Result<Vec<qw_scanner::ScanResult>> {
+    let registry = all_scanners();
+    let mut results = Vec::new();
+
+    let mut manifests = Vec::new();
+    collect_manifests(dir, recursive, 8, &mut manifests);
+    for p in manifests {
+        let t = qw_scanner::ScanTarget::dependency_file(&p.to_string_lossy());
+        results.extend(registry.scan_all(&t).await);
+    }
+
+    // The code scanner matches crypto patterns in source. For a *self*-CBOM of
+    // a crypto project it produces false positives (the project's own detection
+    // regexes and test fixtures), so deps_only skips it.
+    if !deps_only {
+        let code_target = qw_scanner::ScanTarget::code_directory(&dir.to_string_lossy());
+        results.extend(registry.scan_all(&code_target).await);
+    }
 
     Ok(results)
 }
