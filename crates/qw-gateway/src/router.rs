@@ -259,6 +259,7 @@ fn admin_routes() -> Router<AppState> {
             "/api/remediations/plans",
             get(crate::admin::remediation::list_migration_plans),
         )
+        .route("/api/risk", get(crate::admin::remediation::get_risk))
         .route(
             "/api/remediations",
             get(crate::admin::remediation::list_remediations),

@@ -12,7 +12,88 @@ use qw_integrations::RemediationOpts;
 use qw_scanner::{AssetLocation, CryptoAsset, Finding, FindingRecord};
 
 use crate::auth::{tenant_of, AuthContext};
+use crate::config::AssetConfig;
 use crate::state::AppState;
+
+/// Reduce an address/location to its host: strip scheme, path, and port.
+fn host_of(s: &str) -> &str {
+    let s = s.rsplit("://").next().unwrap_or(s);
+    let s = s.split('/').next().unwrap_or(s);
+    s.split(':').next().unwrap_or(s)
+}
+
+/// Resolve the business context for a finding by matching its location against
+/// the declared assets (exact address, or same host). Unmatched findings get
+/// the default (unknown) context rather than being dropped.
+fn business_context_for(assets: &[AssetConfig], location: &str) -> qw_cbom::BusinessContext {
+    let loc_host = host_of(location);
+    for a in assets {
+        let a_host = host_of(&a.address);
+        let matched = a.address == location || (!a_host.is_empty() && a_host == loc_host);
+        if matched {
+            return qw_cbom::BusinessContext {
+                application: a.application.clone(),
+                criticality: a
+                    .criticality
+                    .as_deref()
+                    .map(qw_cbom::Criticality::parse)
+                    .unwrap_or(qw_cbom::Criticality::Unknown),
+                owner: a.owner.clone(),
+                environment: Some(a.environment.clone()),
+                data_classification: a.data_classification.clone(),
+            };
+        }
+    }
+    qw_cbom::BusinessContext::default()
+}
+
+/// Business-prioritized migration work list: every finding's plan, tagged with
+/// its business context and scored by crypto urgency × business criticality, so
+/// a P1 on the checkout service outranks a P0 on a dev sandbox.
+pub async fn get_risk(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    let assets = &state.config.assets;
+
+    let mut ranked: Vec<(u32, serde_json::Value)> = state
+        .store
+        .all_findings(&tenant)
+        .iter()
+        .filter_map(|f| {
+            let plan = qw_cbom::plan_migration(f)?;
+            let context = business_context_for(assets, &f.location);
+            let score = qw_cbom::business_risk_score(plan.priority, context.criticality);
+            Some((
+                score,
+                json!({
+                    "findingId": f.id,
+                    "title": plan.title,
+                    "priority": plan.priority,
+                    "targetAlgorithm": plan.target_algorithm,
+                    "location": f.location,
+                    "businessContext": context,
+                    "businessRiskScore": score,
+                }),
+            ))
+        })
+        .collect();
+
+    // Most business-risk first; ties keep discovery order (stable sort).
+    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    let actions: Vec<serde_json::Value> = ranked.into_iter().map(|(_, v)| v).collect();
+
+    let mapped = actions
+        .iter()
+        .filter(|a| a["businessContext"]["application"].is_string())
+        .count();
+    Json(json!({
+        "actions": actions,
+        "total": actions.len(),
+        "mappedToApplications": mapped,
+    }))
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +178,14 @@ pub async fn remediate(
     // proposed patch) instead of a generic recommendation.
     let mut finding = finding_from_record(&record);
     if let Some(plan) = qw_cbom::plan_migration(&record) {
-        finding.remediation = Some(qw_cbom::plan_to_markdown(&plan));
+        let mut body = qw_cbom::plan_to_markdown(&plan);
+        // Lead with the business context so the PR reviewer sees *what this
+        // protects* before the crypto detail.
+        let context = business_context_for(&state.config.assets, &record.location);
+        if context.application.is_some() {
+            body = format!("**Affects:** {}\n\n{}", context.summary(), body);
+        }
+        finding.remediation = Some(body);
     }
 
     let opts = RemediationOpts {

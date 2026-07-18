@@ -67,6 +67,18 @@ pub struct AssetConfig {
     pub environment: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Business context — what this asset means to the organization. Lets
+    /// findings be ranked by business impact ("a quantum-vulnerable cert on
+    /// checkout") rather than by algorithm severity alone.
+    #[serde(default)]
+    pub application: Option<String>,
+    /// critical | high | medium | low. Absent -> unknown (ranked as medium).
+    #[serde(default)]
+    pub criticality: Option<String>,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub data_classification: Option<String>,
 }
 
 /// An agentless connector. Real cloud/K8s connectors would call the platform API;

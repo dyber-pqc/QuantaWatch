@@ -1,4 +1,5 @@
 pub mod builder;
+pub mod business;
 pub mod compliance;
 pub mod deterministic;
 pub mod history;
@@ -7,6 +8,7 @@ pub mod posture;
 pub mod remediation;
 
 pub use builder::CbomBuilder;
+pub use business::{business_risk_score, BusinessContext, Criticality};
 pub use compliance::{
     ComplianceEngine, ComplianceReport, ComplianceStatus, FrameworkSummary, MigrationItem,
 };

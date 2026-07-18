@@ -194,5 +194,25 @@ auth:
       role: operator
       org: default
 
+# Declared crypto assets with BUSINESS CONTEXT. Tie an endpoint to the
+# application it serves and how critical that application is, so findings are
+# ranked by business impact (a quantum-vulnerable cert on checkout beats a weak
+# cipher on a dev sandbox) rather than by algorithm severity alone. See the
+# business-prioritized work list at GET /api/risk. A finding is matched to an
+# asset by exact address or same host; unmatched findings rank as "unknown".
+assets:
+  - id: checkout-edge
+    address: "checkout.example.com:443"
+    application: checkout-api
+    criticality: critical            # critical | high | medium | low
+    owner: payments-team
+    data_classification: pci
+    environment: production
+  - id: dev-sandbox
+    address: "sandbox.example.com:443"
+    application: dev-sandbox
+    criticality: low
+    owner: platform-team
+
 # Persistence: all stores are SQLite, written to <scanner.store_path>/quantawatch.db
 # (no separate config needed; the store_path above controls the location).
