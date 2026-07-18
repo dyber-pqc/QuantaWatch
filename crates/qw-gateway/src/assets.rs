@@ -28,20 +28,16 @@ pub fn discover(state: &AppState) -> Vec<AssetRow> {
         });
     }
 
-    // Agentless connectors that provide a host list (kubernetes/generic).
-    // aws/azure/gcp connectors call live APIs in cloud::discover instead.
+    // "generic" connectors just provide a host list to TLS-scan. API connectors
+    // (aws/azure/gcp/kubernetes) discover their own assets in cloud::discover.
     for c in &state.config.connectors {
-        if matches!(c.connector_type.as_str(), "aws" | "azure" | "gcp") {
+        if crate::cloud::is_api_connector(c.connector_type.as_str()) {
             continue;
         }
-        let kind = match c.connector_type.as_str() {
-            "kubernetes" => "k8s_ingress",
-            _ => "tls_endpoint",
-        };
         for (i, ep) in c.endpoints.iter().enumerate() {
             out.push(AssetRow {
                 id: format!("{}-{i}", c.name),
-                kind: kind.to_string(),
+                kind: "tls_endpoint".to_string(),
                 address: ep.clone(),
                 environment: c.environment.clone(),
                 tags: c.tags.clone(),
@@ -64,6 +60,8 @@ pub async fn sync_assets(state: &AppState, tenant: &str) -> (usize, usize) {
     // no-op gracefully when credentials are absent. Skipped entirely when
     // air-gapped: these reach public cloud control planes.
     if state.config.air_gapped {
+        // Note: a kubernetes connector to an *internal* API server is fine in an
+        // air-gapped site; only skip connectors that reach public cloud planes.
         let cloud_connectors = state
             .config
             .connectors
@@ -73,12 +71,18 @@ pub async fn sync_assets(state: &AppState, tenant: &str) -> (usize, usize) {
         if cloud_connectors > 0 {
             tracing::info!(
                 skipped = cloud_connectors,
-                "air-gapped: skipping cloud connector discovery"
+                "air-gapped: skipping public-cloud connector discovery"
             );
+        }
+        // Kubernetes API discovery still runs (internal control plane).
+        for c in &state.config.connectors {
+            if matches!(c.connector_type.as_str(), "kubernetes" | "k8s") {
+                assets.extend(crate::cloud::discover(&state.http_client, c).await);
+            }
         }
     } else {
         for c in &state.config.connectors {
-            if matches!(c.connector_type.as_str(), "aws" | "azure" | "gcp") {
+            if crate::cloud::is_api_connector(c.connector_type.as_str()) {
                 assets.extend(crate::cloud::discover(&state.http_client, c).await);
             }
         }

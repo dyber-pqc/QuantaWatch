@@ -214,5 +214,24 @@ assets:
     criticality: low
     owner: platform-team
 
+# Agentless, API-first discovery connectors. Unlike a network probe, these pull
+# the inventory straight from a platform API — including certs that never appear
+# on a scannable endpoint (e.g. TLS secrets sitting in a cluster).
+#   aws / azure / gcp  -> KMS keys, ACM/Key Vault/Cloud KMS certs
+#   kubernetes         -> kubernetes.io/tls secrets (classified certs) + Ingress
+#                         TLS hosts (queued for the TLS scanner)
+#   generic            -> a plain host list to TLS-scan (endpoints below)
+connectors:
+  - name: prod-cluster
+    connector_type: kubernetes
+    environment: production
+    # API server URL; omit to auto-detect the in-cluster endpoint.
+    endpoints:
+      - "https://kubernetes.default.svc"
+    # Bearer token: names the env var holding it. Omit to use the in-cluster
+    # service-account token at /var/run/secrets/.../token.
+    tags:
+      - "token_env:KUBE_TOKEN"
+
 # Persistence: all stores are SQLite, written to <scanner.store_path>/quantawatch.db
 # (no separate config needed; the store_path above controls the location).

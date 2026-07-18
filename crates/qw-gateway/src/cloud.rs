@@ -5,6 +5,7 @@
 //! unreachable the connector logs and returns an empty inventory, so a
 //! misconfigured connector never breaks a sync.
 
+use base64::Engine;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
@@ -103,7 +104,228 @@ pub async fn discover(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<Asse
         "aws" => discover_aws(client, c).await,
         "azure" => discover_azure(client, c).await,
         "gcp" => discover_gcp(client, c).await,
-        _ => Vec::new(), // generic/kubernetes handled by endpoint-list expansion
+        "kubernetes" | "k8s" => discover_kubernetes(client, c).await,
+        _ => Vec::new(), // generic handled by endpoint-list expansion
+    }
+}
+
+/// Connectors that make their own API calls (vs. an endpoint list to TLS-scan).
+pub fn is_api_connector(connector_type: &str) -> bool {
+    matches!(
+        connector_type,
+        "aws" | "azure" | "gcp" | "kubernetes" | "k8s"
+    )
+}
+
+// ---- Kubernetes: agentless, API-first discovery -------------------------------
+
+/// Parse a Kubernetes `SecretList` for `kubernetes.io/tls` secrets, returning
+/// `(namespace/name, cert-PEM-bytes)` for each.
+fn parse_tls_secrets(json: &serde_json::Value) -> Vec<(String, Vec<u8>)> {
+    let mut out = Vec::new();
+    for item in json["items"].as_array().cloned().unwrap_or_default() {
+        if item["type"].as_str() != Some("kubernetes.io/tls") {
+            continue;
+        }
+        let ns = item["metadata"]["namespace"].as_str().unwrap_or("default");
+        let name = item["metadata"]["name"].as_str().unwrap_or("tls");
+        // data["tls.crt"] is base64-encoded PEM.
+        if let Some(b64) = item["data"]["tls.crt"].as_str() {
+            if let Ok(pem) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                out.push((format!("{ns}/{name}"), pem));
+            }
+        }
+    }
+    out
+}
+
+/// Parse an `IngressList` for the TLS host names it terminates.
+fn parse_ingress_hosts(json: &serde_json::Value) -> Vec<String> {
+    let mut hosts = Vec::new();
+    for item in json["items"].as_array().cloned().unwrap_or_default() {
+        for tls in item["spec"]["tls"].as_array().cloned().unwrap_or_default() {
+            for h in tls["hosts"].as_array().cloned().unwrap_or_default() {
+                if let Some(h) = h.as_str() {
+                    hosts.push(h.to_string());
+                }
+            }
+        }
+    }
+    hosts
+}
+
+/// Resolve the API server URL and bearer token for the cluster. In-cluster,
+/// both come from the mounted service account; otherwise from config + env.
+fn k8s_credentials(c: &ConnectorConfig) -> Option<(String, String)> {
+    // API server: connector endpoint, else the in-cluster env vars.
+    let api = c.endpoints.first().cloned().or_else(|| {
+        let host = std::env::var("KUBERNETES_SERVICE_HOST").ok()?;
+        let port = std::env::var("KUBERNETES_SERVICE_PORT").unwrap_or_else(|_| "443".into());
+        Some(format!("https://{host}:{port}"))
+    })?;
+    // Token: env var (name may be given in a `token_env:<VAR>` tag), else the
+    // in-cluster service-account token file.
+    let token_env = c
+        .tags
+        .iter()
+        .find_map(|t| t.strip_prefix("token_env:"))
+        .unwrap_or("KUBE_TOKEN");
+    let token = std::env::var(token_env).ok().or_else(|| {
+        std::fs::read_to_string("/var/run/secrets/kubernetes.io/serviceaccount/token").ok()
+    })?;
+    Some((
+        api.trim_end_matches('/').to_string(),
+        token.trim().to_string(),
+    ))
+}
+
+/// Kubernetes: discover TLS certificates (from `kubernetes.io/tls` secrets) and
+/// TLS-terminating Ingress hosts, straight from the cluster API — no agent, no
+/// probe. No-ops gracefully when the cluster is unreachable or unconfigured.
+async fn discover_kubernetes(client: &reqwest::Client, c: &ConnectorConfig) -> Vec<AssetRow> {
+    let Some((api, token)) = k8s_credentials(c) else {
+        tracing::warn!(connector = %c.name, "kubernetes: no API server / token; skipping");
+        return Vec::new();
+    };
+    let get = |path: &str| {
+        client
+            .get(format!("{api}{path}"))
+            .header("Authorization", format!("Bearer {token}"))
+            .send()
+    };
+
+    let mut out = Vec::new();
+
+    // 1. TLS secrets -> classified certificates.
+    if let Ok(resp) = get("/api/v1/secrets?fieldSelector=type=kubernetes.io/tls").await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            for (name, pem) in parse_tls_secrets(&json) {
+                let (pqc, algo, address) = match qw_scanner::classify_cert(&pem) {
+                    Some(s) => (s.pqc_status.to_string(), s.algorithm, s.subject),
+                    None => ("unknown".into(), "unparsed".into(), name.clone()),
+                };
+                let mut tags = c.tags.clone();
+                tags.push(format!("secret:{name}"));
+                tags.push(format!("algo:{algo}"));
+                out.push(AssetRow {
+                    id: format!("k8s-tls-{}", name.replace('/', "-")),
+                    kind: "certificate".into(),
+                    address,
+                    environment: c.environment.clone(),
+                    tags,
+                    pqc_status: pqc,
+                    tls_version: None,
+                    last_scanned: Some(chrono::Utc::now()),
+                    source: "kubernetes".into(),
+                });
+            }
+        }
+    }
+
+    // 2. Ingress TLS hosts -> endpoints (scanned by the TLS pipeline).
+    if let Ok(resp) = get("/apis/networking.k8s.io/v1/ingresses").await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            for host in parse_ingress_hosts(&json) {
+                out.push(AssetRow {
+                    id: format!("k8s-ingress-{host}"),
+                    kind: "tls_endpoint".into(),
+                    address: format!("{host}:443"),
+                    environment: c.environment.clone(),
+                    tags: c.tags.clone(),
+                    pqc_status: "unknown".into(),
+                    tls_version: None,
+                    last_scanned: None,
+                    source: "kubernetes".into(),
+                });
+            }
+        }
+    }
+
+    tracing::info!(connector = %c.name, discovered = out.len(), "Kubernetes connector");
+    out
+}
+
+#[cfg(test)]
+mod k8s_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_tls_secrets_and_ignores_non_tls() {
+        // "aGk=" is base64("hi") — not a real cert, but exercises the decode.
+        let list = json!({
+            "items": [
+                {
+                    "type": "kubernetes.io/tls",
+                    "metadata": {"namespace": "prod", "name": "checkout-cert"},
+                    "data": {"tls.crt": "aGk=", "tls.key": "c2VjcmV0"}
+                },
+                {
+                    "type": "Opaque",
+                    "metadata": {"namespace": "prod", "name": "some-config"},
+                    "data": {"foo": "YmFy"}
+                }
+            ]
+        });
+        let secrets = parse_tls_secrets(&list);
+        assert_eq!(secrets.len(), 1, "only the kubernetes.io/tls secret");
+        assert_eq!(secrets[0].0, "prod/checkout-cert");
+        assert_eq!(secrets[0].1, b"hi");
+    }
+
+    #[test]
+    fn parses_ingress_tls_hosts() {
+        let list = json!({
+            "items": [
+                {"spec": {"tls": [
+                    {"hosts": ["checkout.example.com", "www.example.com"]},
+                    {"hosts": ["api.example.com"]}
+                ]}},
+                {"spec": {"rules": [{"host": "no-tls.example.com"}]}}
+            ]
+        });
+        let hosts = parse_ingress_hosts(&list);
+        assert_eq!(
+            hosts,
+            vec!["checkout.example.com", "www.example.com", "api.example.com"]
+        );
+    }
+
+    #[test]
+    fn empty_or_malformed_lists_yield_nothing() {
+        assert!(parse_tls_secrets(&json!({})).is_empty());
+        assert!(parse_ingress_hosts(&json!({"items": "not-an-array"})).is_empty());
+    }
+
+    #[test]
+    fn credentials_require_api_and_token() {
+        // No endpoints, no in-cluster env, no token -> None (skips gracefully).
+        std::env::remove_var("KUBERNETES_SERVICE_HOST");
+        std::env::remove_var("KUBE_TOKEN");
+        let c = ConnectorConfig {
+            name: "k".into(),
+            connector_type: "kubernetes".into(),
+            environment: "prod".into(),
+            endpoints: vec![],
+            tags: vec![],
+        };
+        assert!(k8s_credentials(&c).is_none());
+    }
+
+    #[test]
+    fn credentials_from_endpoint_and_token_env() {
+        std::env::set_var("QW_TEST_KUBE_TOKEN", "tok123");
+        let c = ConnectorConfig {
+            name: "k".into(),
+            connector_type: "kubernetes".into(),
+            environment: "prod".into(),
+            endpoints: vec!["https://10.0.0.1:6443/".into()],
+            tags: vec!["token_env:QW_TEST_KUBE_TOKEN".into()],
+        };
+        let (api, token) = k8s_credentials(&c).expect("creds");
+        std::env::remove_var("QW_TEST_KUBE_TOKEN");
+        assert_eq!(api, "https://10.0.0.1:6443", "trailing slash trimmed");
+        assert_eq!(token, "tok123");
     }
 }
 
