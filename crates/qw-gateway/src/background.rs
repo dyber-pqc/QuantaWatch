@@ -24,6 +24,21 @@ pub fn spawn(state: AppState) {
         });
     }
 
+    // Periodic cleanup of expired auth sessions / OIDC states. Validation
+    // already drops expired sessions lazily; this reaps ones never presented
+    // again so the tables don't grow unbounded. Cheap; every 15 minutes.
+    if state.config.auth.enabled {
+        let s = state.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(Duration::from_secs(900));
+            ticker.tick().await; // skip the immediate first tick
+            loop {
+                ticker.tick().await;
+                s.auth_manager.purge_expired();
+            }
+        });
+    }
+
     // Scheduled re-scan loop — runs across ALL tenants so every org gets
     // continuous monitoring, drift detection, and ticket status sync.
     let interval = state.config.schedule.scan_interval_secs;

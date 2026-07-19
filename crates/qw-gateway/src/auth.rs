@@ -6,10 +6,10 @@
 
 use std::sync::Arc;
 
-use dashmap::DashMap;
 use serde::Serialize;
 
 use qw_crypto::{random_token, sha3_256_hex, verify_password};
+use qw_store::Store;
 
 use crate::config::AuthConfig;
 
@@ -53,60 +53,53 @@ pub struct AuthContext {
     pub method: &'static str,
 }
 
-#[derive(Clone)]
-struct Session {
-    username: String,
-    role: Role,
-    org: String,
-    expires_at: chrono::DateTime<chrono::Utc>,
-}
-
 pub struct AuthManager {
     config: AuthConfig,
-    sessions: Arc<DashMap<String, Session>>,
-    /// CSRF state nonces for the OIDC flow → expiry.
-    oidc_states: Arc<DashMap<String, chrono::DateTime<chrono::Utc>>>,
+    /// Sessions and OIDC states live in the shared store, not in process memory,
+    /// so a login on one replica is valid on all of them (and survives restart).
+    store: Arc<Store>,
 }
 
 impl AuthManager {
-    pub fn new(config: AuthConfig) -> Self {
-        Self {
-            config,
-            sessions: Arc::new(DashMap::new()),
-            oidc_states: Arc::new(DashMap::new()),
-        }
+    pub fn new(config: AuthConfig, store: Arc<Store>) -> Self {
+        Self { config, store }
     }
 
-    /// Issue a session for an externally-authenticated (e.g. OIDC) principal.
-    pub fn create_external_session(&self, username: &str, role: Role, org: &str) -> (String, u64) {
+    /// Mint a token, persist the session keyed by the token's SHA3-256 hash
+    /// (never the raw token), and return the token + its TTL in seconds.
+    fn issue_session(&self, username: &str, role: Role, org: &str) -> (String, u64) {
         let token = random_token(32);
         let ttl = self.config.session_ttl_secs;
-        self.sessions.insert(
-            token.clone(),
-            Session {
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl as i64);
+        self.store.put_auth_session(
+            &sha3_256_hex(token.as_bytes()),
+            &qw_store::AuthSession {
                 username: username.to_string(),
-                role,
+                role: role.label().to_string(),
                 org: org.to_string(),
-                expires_at: chrono::Utc::now() + chrono::Duration::seconds(ttl as i64),
+                expires_at,
             },
         );
         (token, ttl)
     }
 
+    /// Issue a session for an externally-authenticated (e.g. OIDC) principal.
+    pub fn create_external_session(&self, username: &str, role: Role, org: &str) -> (String, u64) {
+        self.issue_session(username, role, org)
+    }
+
     /// Begin an OIDC flow: mint and remember a state nonce (10-min TTL).
     pub fn begin_oidc(&self) -> String {
         let state = random_token(16);
-        self.oidc_states.insert(
-            state.clone(),
-            chrono::Utc::now() + chrono::Duration::minutes(10),
-        );
+        self.store
+            .put_oidc_state(&state, chrono::Utc::now() + chrono::Duration::minutes(10));
         state
     }
 
     /// Validate and consume an OIDC state nonce.
     pub fn consume_oidc_state(&self, state: &str) -> bool {
-        match self.oidc_states.remove(state) {
-            Some((_, exp)) => exp > chrono::Utc::now(),
+        match self.store.consume_oidc_state(state) {
+            Some(exp) => exp > chrono::Utc::now(),
             None => false,
         }
     }
@@ -126,45 +119,36 @@ impl AuthManager {
             return None;
         }
         let role = Role::parse(&user.role);
-        let token = random_token(32);
-        let ttl = self.config.session_ttl_secs;
-        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl as i64);
-        self.sessions.insert(
-            token.clone(),
-            Session {
-                username: username.to_string(),
-                role,
-                org: user.org.clone(),
-                expires_at,
-            },
-        );
+        let (token, ttl) = self.issue_session(username, role, &user.org);
         Some((token, role, ttl))
     }
 
     pub fn logout(&self, token: &str) {
-        self.sessions.remove(token);
+        self.store
+            .delete_auth_session(&sha3_256_hex(token.as_bytes()));
     }
 
     /// Resolve a credential (session token or API key) to an AuthContext.
     pub fn validate(&self, credential: &str) -> Option<AuthContext> {
-        // Session token first.
-        if let Some(session) = self.sessions.get(credential) {
+        // Both session tokens and API keys are matched by their SHA3-256 hash.
+        let hash = sha3_256_hex(credential.as_bytes());
+
+        // Session token first (looked up in the shared store).
+        if let Some(session) = self.store.get_auth_session(&hash) {
             if session.expires_at > chrono::Utc::now() {
                 return Some(AuthContext {
-                    principal: session.username.clone(),
-                    role: session.role,
-                    org: session.org.clone(),
+                    principal: session.username,
+                    role: Role::parse(&session.role),
+                    org: session.org,
                     method: "session",
                 });
             }
             // Expired — drop it.
-            drop(session);
-            self.sessions.remove(credential);
+            self.store.delete_auth_session(&hash);
             return None;
         }
 
-        // API key (matched by SHA3-256 hash).
-        let hash = sha3_256_hex(credential.as_bytes());
+        // API key (config-defined; key_hash is the SHA3-256 hash of the key).
         if let Some(key) = self.config.api_keys.iter().find(|k| k.key_hash == hash) {
             return Some(AuthContext {
                 principal: format!("apikey:{}", key.name),
@@ -174,6 +158,11 @@ impl AuthManager {
             });
         }
         None
+    }
+
+    /// Best-effort removal of expired sessions/OIDC states (called periodically).
+    pub fn purge_expired(&self) {
+        self.store.purge_expired_auth(chrono::Utc::now());
     }
 }
 

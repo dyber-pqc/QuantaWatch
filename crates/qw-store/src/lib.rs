@@ -96,6 +96,21 @@ pub struct SessionRow {
     pub client_ip: String,
 }
 
+/// A persisted admin auth session (a bearer token's principal), stored so a
+/// login on one gateway replica is valid on all of them. Keyed in the DB by the
+/// SHA3-256 hash of the token — the raw token is never persisted, so a database
+/// read can't hand an attacker a live session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthSession {
+    pub username: String,
+    /// Role label ("viewer" | "auditor" | "operator" | "admin"); the gateway
+    /// owns the Role enum, so the store keeps it as a string.
+    pub role: String,
+    pub org: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// An observed agent→provider data flow, aggregated from live proxy traffic.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -203,6 +218,8 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS assets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_scans_tenant ON scans(tenant);
     CREATE INDEX IF NOT EXISTS idx_findings_tenant ON findings(tenant);
     CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
@@ -385,6 +402,12 @@ impl Store {
             CREATE TABLE IF NOT EXISTS governance_snapshots (
                 tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT
             );
+            CREATE TABLE IF NOT EXISTS auth_sessions (
+                token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS oidc_states (
+                state TEXT PRIMARY KEY, expires_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_scans_tenant ON scans(tenant);
             CREATE INDEX IF NOT EXISTS idx_findings_tenant ON findings(tenant);
             CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
@@ -412,6 +435,8 @@ impl Store {
             CREATE TABLE assets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
+            CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
+            CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
             "#,
         )?;
         Ok(Self::sqlite(conn))
@@ -592,6 +617,76 @@ impl Store {
             &format!("SELECT data FROM sessions WHERE tenant = ?1 ORDER BY session_id DESC LIMIT {limit}"),
             &[tenant],
         )
+    }
+
+    // ---- Auth sessions + OIDC state (shared across replicas for HA) ----
+    //
+    // These back the gateway's AuthManager. Persisting them means a login issued
+    // by one replica validates on any replica, and sessions survive a restart.
+    // `expires_at` is stored as a fixed-width UTC string ("…Z", second-precision)
+    // so lexicographic comparison equals chronological comparison for the SQL
+    // purge; the exact expiry lives in the JSON blob and is checked in Rust.
+
+    pub fn put_auth_session(&self, token_hash: &str, session: &AuthSession) {
+        let json = serde_json::to_string(session).unwrap_or_default();
+        let exp = session.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO auth_sessions (token_hash, data, expires_at) VALUES (?1, ?2, ?3)",
+            "INSERT INTO auth_sessions (token_hash, data, expires_at) VALUES ($1, $2, $3) ON CONFLICT (token_hash) DO UPDATE SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at",
+            &[token_hash, json.as_str(), exp.as_str()],
+        );
+    }
+
+    pub fn get_auth_session(&self, token_hash: &str) -> Option<AuthSession> {
+        self.one_de(
+            "SELECT data FROM auth_sessions WHERE token_hash = ?1",
+            &[token_hash],
+        )
+    }
+
+    pub fn delete_auth_session(&self, token_hash: &str) {
+        self.exec(
+            "DELETE FROM auth_sessions WHERE token_hash = ?1",
+            &[token_hash],
+        );
+    }
+
+    pub fn put_oidc_state(&self, state: &str, expires_at: DateTime<Utc>) {
+        let exp = expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO oidc_states (state, expires_at) VALUES (?1, ?2)",
+            "INSERT INTO oidc_states (state, expires_at) VALUES ($1, $2) ON CONFLICT (state) DO UPDATE SET expires_at = EXCLUDED.expires_at",
+            &[state, exp.as_str()],
+        );
+    }
+
+    /// Validate-and-consume a CSRF state nonce: returns its expiry (for the
+    /// caller to range-check) and deletes it so it can't be replayed.
+    pub fn consume_oidc_state(&self, state: &str) -> Option<DateTime<Utc>> {
+        let exp = self
+            .query_col(
+                "SELECT expires_at FROM oidc_states WHERE state = ?1",
+                &[state],
+            )
+            .into_iter()
+            .next()?;
+        self.exec("DELETE FROM oidc_states WHERE state = ?1", &[state]);
+        DateTime::parse_from_rfc3339(&exp)
+            .ok()
+            .map(|d| d.with_timezone(&Utc))
+    }
+
+    /// Best-effort cleanup of expired sessions and OIDC states.
+    pub fn purge_expired_auth(&self, now: DateTime<Utc>) {
+        let now_s = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        self.exec(
+            "DELETE FROM auth_sessions WHERE expires_at < ?1",
+            &[now_s.as_str()],
+        );
+        self.exec(
+            "DELETE FROM oidc_states WHERE expires_at < ?1",
+            &[now_s.as_str()],
+        );
     }
 
     // ---- Observed flows (blast radius) ----
@@ -834,9 +929,72 @@ mod tests {
         assert_eq!(flows[0].sensitive, 1);
         assert_eq!(flows[0].threats, 1);
 
+        // Auth sessions: upsert, lookup, delete, and OIDC consume-once — on
+        // Postgres, where the ON CONFLICT / delete paths differ from SQLite.
+        let th = format!("hash-{}", uuid::Uuid::new_v4());
+        let sess = AuthSession {
+            username: "carol".into(),
+            role: "operator".into(),
+            org: a.clone(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        };
+        s.put_auth_session(&th, &sess);
+        assert_eq!(s.get_auth_session(&th).unwrap().username, "carol");
+        s.delete_auth_session(&th);
+        assert!(s.get_auth_session(&th).is_none());
+
+        let st = format!("state-{}", uuid::Uuid::new_v4());
+        s.put_oidc_state(&st, Utc::now() + chrono::Duration::minutes(10));
+        assert!(s.consume_oidc_state(&st).is_some());
+        assert!(s.consume_oidc_state(&st).is_none(), "consumed once");
+
         // Cross-tenant isolation.
         assert!(s.recent_alerts(&b, 10).is_empty());
         assert!(s.list_flows(&b).is_empty());
+    }
+
+    #[test]
+    fn auth_sessions_roundtrip_and_purge() {
+        let s = Store::open_in_memory().unwrap();
+
+        // Live session round-trips; unknown hash misses.
+        let live = AuthSession {
+            username: "alice".into(),
+            role: "admin".into(),
+            org: "acme".into(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        };
+        s.put_auth_session("h-live", &live);
+        assert_eq!(s.get_auth_session("h-live").unwrap().role, "admin");
+        assert!(s.get_auth_session("h-missing").is_none());
+
+        // Logout deletes it.
+        s.delete_auth_session("h-live");
+        assert!(s.get_auth_session("h-live").is_none());
+
+        // Purge reaps an already-expired session but keeps a live one.
+        s.put_auth_session(
+            "h-expired",
+            &AuthSession {
+                username: "bob".into(),
+                role: "viewer".into(),
+                org: "acme".into(),
+                expires_at: Utc::now() - chrono::Duration::hours(1),
+            },
+        );
+        s.put_auth_session("h-live2", &live);
+        s.purge_expired_auth(Utc::now());
+        assert!(s.get_auth_session("h-expired").is_none(), "expired purged");
+        assert!(s.get_auth_session("h-live2").is_some(), "live kept");
+    }
+
+    #[test]
+    fn oidc_state_is_consumed_once() {
+        let s = Store::open_in_memory().unwrap();
+        s.put_oidc_state("csrf-1", Utc::now() + chrono::Duration::minutes(10));
+        assert!(s.consume_oidc_state("csrf-1").is_some());
+        assert!(s.consume_oidc_state("csrf-1").is_none(), "replay rejected");
+        assert!(s.consume_oidc_state("never-issued").is_none());
     }
 
     #[test]

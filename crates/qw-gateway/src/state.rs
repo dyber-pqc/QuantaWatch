@@ -153,8 +153,12 @@ impl AppState {
             }
         }
 
-        // Initialize auth manager
-        let auth_manager = Arc::new(crate::auth::AuthManager::new(config.auth.clone()));
+        // Initialize auth manager (sessions persist in the shared store, so a
+        // login is valid across replicas and survives restart).
+        let auth_manager = Arc::new(crate::auth::AuthManager::new(
+            config.auth.clone(),
+            store.clone(),
+        ));
 
         Ok(Self {
             gateway_identity,

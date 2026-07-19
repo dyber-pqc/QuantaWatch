@@ -25,18 +25,22 @@ Two pieces of the single-node story are now solvable from config:
   replica derives the *same* ML-DSA-65 identity — otherwise each pod signs with
   a different key and cross-pod signatures won't verify.
 
-Two pieces are **not yet shared**, so running >1 replica today has caveats:
+- **Shared auth sessions.** With a Postgres store, admin login sessions and
+  OIDC CSRF state live in the shared database (keyed by a hash of the token, not
+  the token itself), so a login on one replica is valid on all of them — no
+  sticky sessions required. (On SQLite this also means sessions survive a
+  restart.)
 
-- **Auth sessions** live in an in-memory map per pod, so a login is only valid
-  on the pod that issued it — front a multi-replica deployment with sticky
-  sessions, or keep auth on a single replica, until sessions move to the store.
+One piece is still **single-writer**, so running >1 replica today has a caveat:
+
 - **The audit hash-chain is single-writer** (sequential by construction). A
   multi-writer chain needs a design decision (per-replica chains + merge, or a
   single audit-writer); until then, route audited writes through one replica.
 
-In short: the **shared Postgres store + shared seed** unblock horizontal read
-scale and failover; full active/active HA still wants stateless sessions and a
-multi-writer audit strategy.
+In short: the **shared Postgres store + shared seed** give you a shared inventory,
+shared sessions, and one signing identity across replicas — enough for horizontal
+read scale and failover. The remaining item before unrestricted active/active is
+a multi-writer audit strategy.
 
 ## Images
 
