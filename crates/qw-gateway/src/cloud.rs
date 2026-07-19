@@ -154,6 +154,74 @@ fn parse_ingress_hosts(json: &serde_json::Value) -> Vec<String> {
     hosts
 }
 
+/// How to verify TLS to the Kubernetes API server. Real clusters present a
+/// self-signed cert from the cluster CA, which the default web roots reject.
+#[derive(Debug, Clone, PartialEq)]
+enum K8sTls {
+    /// Trust this CA bundle (PEM) — the correct production setting.
+    Ca(Vec<u8>),
+    /// Skip verification entirely. Opt-in via the `insecure` tag; dev only.
+    Insecure,
+    /// Use the shared client's system/web roots (e.g. a publicly-trusted API,
+    /// or the test mock over plain HTTP).
+    SystemRoots,
+}
+
+/// Decide how to verify the API server: an explicit `ca_cert:<path>` tag, the
+/// `insecure` tag, the in-cluster CA file, or (last) system roots.
+fn k8s_tls_mode(c: &ConnectorConfig) -> K8sTls {
+    if c.tags
+        .iter()
+        .any(|t| t == "insecure" || t == "insecure_skip_tls_verify")
+    {
+        return K8sTls::Insecure;
+    }
+    if let Some(path) = c.tags.iter().find_map(|t| t.strip_prefix("ca_cert:")) {
+        match std::fs::read(path) {
+            Ok(pem) => return K8sTls::Ca(pem),
+            Err(e) => {
+                tracing::warn!(path, error = %e, "kubernetes: ca_cert unreadable; trying in-cluster CA")
+            }
+        }
+    }
+    if let Ok(pem) = std::fs::read("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt") {
+        return K8sTls::Ca(pem);
+    }
+    K8sTls::SystemRoots
+}
+
+/// Build an HTTP client that trusts the cluster CA. Any failure falls back to
+/// `shared` so discovery degrades rather than breaks.
+fn build_k8s_client(mode: &K8sTls, shared: &reqwest::Client) -> reqwest::Client {
+    let builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15));
+    let built = match mode {
+        K8sTls::SystemRoots => return shared.clone(),
+        K8sTls::Insecure => {
+            tracing::warn!(
+                "kubernetes: TLS verification DISABLED (insecure tag) — use ca_cert in production"
+            );
+            builder.danger_accept_invalid_certs(true).build()
+        }
+        K8sTls::Ca(pem) => match reqwest::Certificate::from_pem_bundle(pem) {
+            Ok(certs) => {
+                let mut b = builder;
+                for cert in certs {
+                    b = b.add_root_certificate(cert);
+                }
+                b.build()
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "kubernetes: CA PEM did not parse; using system roots");
+                return shared.clone();
+            }
+        },
+    };
+    built.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "kubernetes: client build failed; using system roots");
+        shared.clone()
+    })
+}
+
 /// Resolve the API server URL and bearer token for the cluster. In-cluster,
 /// both come from the mounted service account; otherwise from config + env.
 fn k8s_credentials(c: &ConnectorConfig) -> Option<(String, String)> {
@@ -187,9 +255,11 @@ async fn discover_kubernetes(client: &reqwest::Client, c: &ConnectorConfig) -> V
         tracing::warn!(connector = %c.name, "kubernetes: no API server / token; skipping");
         return Vec::new();
     };
+    // A cluster's API server uses its own CA, which the default web roots reject;
+    // build a client that trusts it.
+    let http = build_k8s_client(&k8s_tls_mode(c), client);
     let get = |path: &str| {
-        client
-            .get(format!("{api}{path}"))
+        http.get(format!("{api}{path}"))
             .header("Authorization", format!("Bearer {token}"))
             .send()
     };
@@ -310,6 +380,78 @@ mod k8s_tests {
             tags: vec![],
         };
         assert!(k8s_credentials(&c).is_none());
+    }
+
+    // A real self-signed CA cert, for exercising the CA-trust path.
+    const TEST_CA_PEM: &str = "-----BEGIN CERTIFICATE-----\n\
+MIIDFTCCAf2gAwIBAgIUD1HRMBH5R1xtTQH47JRyk8ByGpkwDQYJKoZIhvcNAQEL\n\
+BQAwGjEYMBYGA1UEAwwPVGVzdCBDbHVzdGVyIENBMB4XDTI2MDcxOTExMzU1OFoX\n\
+DTM2MDcxNjExMzU1OFowGjEYMBYGA1UEAwwPVGVzdCBDbHVzdGVyIENBMIIBIjAN\n\
+BgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyOnlSQiFIK6DYVbyEa4TjojX0akE\n\
+z2KrdDyjhn36XWShO+C6gl/ttO/JODMzXiGh4tZJur0l48776eqwjw+YoABLfACn\n\
+lkrJZGqoqNFPCW+b9LX4tzileXlFqV1BhJw2wj2vaphpptrj8hJDUKHdFMG6eq8i\n\
+5UZkO26/aq6xvhDJjZPy4vBeaKLZ7C1AfAGVJx7esoP4eelwhNKaJLK3h6cQj4QG\n\
+gtKAjUJPEKn1fyM5/u4SjdKD4ZliyGDG3XfRxGHZBjxObXRVHDHwJMWOvqwjYROL\n\
+sSevEEdMvNjGTrNUlFWUGaGhMt7wGqPj7HF0wFD1ZdlLrf/EYVkXjwUbBwIDAQAB\n\
+o1MwUTAdBgNVHQ4EFgQUjTokHADF9rW2Ar8EP7SoFs79C10wHwYDVR0jBBgwFoAU\n\
+jTokHADF9rW2Ar8EP7SoFs79C10wDwYDVR0TAQH/BAUwAwEB/zANBgkqhkiG9w0B\n\
+AQsFAAOCAQEATomN+Gebo6XeOHbcjL4YpgzjN2H1MXA4Xn8mSvJl70//dE4Dgqjk\n\
+dPYaj6L3EXxKacoKvbv/y3OJT2JCMyj5/ThMuDTeg+5wIUQZ6q9tE5Bh4k5sCiGh\n\
+2OrYvB749o5bp+Ety8BYXVHhdLF1O53LTYq06SVSVN4plx2U0gPZFc+osvU5ZLEE\n\
+WeFl4vVkY7CSuRM73x81akfRkvcs1Ip4lngMKaAK1eDIQqQ/tM5wCnYo4wu5br3o\n\
+sJLSvYeWo4wsir4nrbyDCrhgfE5W3dGCC5enlCZxaUvZsZjFr92m99LoLJOCjfWT\n\
+O91JZXXhjXF9iyUT7C1fJoyohb8sKcEcpA==\n\
+-----END CERTIFICATE-----\n";
+
+    fn conn(tags: Vec<&str>) -> ConnectorConfig {
+        ConnectorConfig {
+            name: "k".into(),
+            connector_type: "kubernetes".into(),
+            environment: "prod".into(),
+            endpoints: vec![],
+            tags: tags.into_iter().map(String::from).collect(),
+        }
+    }
+
+    #[test]
+    fn tls_mode_insecure_tag() {
+        assert_eq!(k8s_tls_mode(&conn(vec!["insecure"])), K8sTls::Insecure);
+        assert_eq!(
+            k8s_tls_mode(&conn(vec!["insecure_skip_tls_verify"])),
+            K8sTls::Insecure
+        );
+    }
+
+    #[test]
+    fn tls_mode_ca_file_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = dir.path().join("ca.crt");
+        std::fs::write(&ca, TEST_CA_PEM).unwrap();
+        // Readable CA file -> Ca(bytes).
+        let tag = format!("ca_cert:{}", ca.display());
+        assert!(matches!(k8s_tls_mode(&conn(vec![&tag])), K8sTls::Ca(_)));
+        // Missing CA file + no in-cluster file -> falls back to system roots.
+        assert_eq!(
+            k8s_tls_mode(&conn(vec!["ca_cert:/nonexistent/ca.crt"])),
+            K8sTls::SystemRoots
+        );
+    }
+
+    #[test]
+    fn builds_a_client_that_trusts_the_cluster_ca() {
+        let shared = reqwest::Client::new();
+        // A valid CA bundle builds a dedicated client (does not fall back).
+        let _c = build_k8s_client(&K8sTls::Ca(TEST_CA_PEM.as_bytes().to_vec()), &shared);
+        // Insecure and system-roots modes also produce a usable client.
+        let _i = build_k8s_client(&K8sTls::Insecure, &shared);
+        let _s = build_k8s_client(&K8sTls::SystemRoots, &shared);
+    }
+
+    #[test]
+    fn malformed_ca_falls_back_to_shared() {
+        let shared = reqwest::Client::new();
+        // Should not panic; falls back to the shared client.
+        let _c = build_k8s_client(&K8sTls::Ca(b"not a cert".to_vec()), &shared);
     }
 
     #[test]

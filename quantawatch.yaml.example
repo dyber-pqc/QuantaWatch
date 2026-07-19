@@ -244,6 +244,11 @@ connectors:
     # service-account token at /var/run/secrets/.../token.
     tags:
       - "token_env:KUBE_TOKEN"
+      # TLS to the API server. A cluster uses its own CA, so trust it explicitly
+      # (omit to use the in-cluster CA at /var/run/secrets/.../ca.crt):
+      - "ca_cert:/etc/quantawatch/cluster-ca.crt"
+      # Dev only — skip API-server certificate verification entirely:
+      # - "insecure"
 
 # Persistence: all stores are SQLite, written to <scanner.store_path>/quantawatch.db
 # (no separate config needed; the store_path above controls the location).
