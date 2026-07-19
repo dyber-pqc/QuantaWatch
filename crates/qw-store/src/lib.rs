@@ -12,6 +12,7 @@ use chrono::{DateTime, Utc};
 use r2d2_postgres::PostgresConnectionManager;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use tokio_postgres_rustls::MakeRustlsConnect;
 
 use qw_cbom::PostureSnapshot;
 use qw_crypto::sha3_256_hex;
@@ -179,7 +180,79 @@ pub struct GraphSnapshot {
 
 // ---- Store ----
 
-type PgPool = r2d2::Pool<PostgresConnectionManager<postgres::NoTls>>;
+type PgPool = r2d2::Pool<PostgresConnectionManager<MakeRustlsConnect>>;
+
+/// TLS verifier that encrypts the connection but does NOT validate the server
+/// certificate chain — matching libpq's `sslmode=require` semantics (protect the
+/// wire, no CA/hostname check). This is what makes the PQC-hybrid key exchange
+/// (e.g. FortressQL's X25519MLKEM768) usable against an internal DB with a
+/// self-signed or non-webpki cert. The handshake signature is still checked
+/// against the presented cert, so the session isn't blindly forgeable.
+/// Full CA verification (`sslmode=verify-full`) is a separate, stricter mode we
+/// don't yet offer over this client (see `open_postgres`).
+#[derive(Debug)]
+struct EncryptOnlyVerifier(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for EncryptOnlyVerifier {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// Build a PQC-capable rustls TLS connector for Postgres/FortressQL. The
+/// aws-lc-rs provider advertises hybrid ML-KEM groups (X25519MLKEM768) by
+/// default, so a FortressQL server negotiates the post-quantum key exchange;
+/// a classical Postgres server falls back to X25519. Encrypt-only (no CA
+/// verification) — see `EncryptOnlyVerifier`.
+fn build_pg_tls() -> MakeRustlsConnect {
+    let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
+    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .expect("rustls default protocol versions are valid")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(EncryptOnlyVerifier(provider)))
+        .with_no_client_auth();
+    MakeRustlsConnect::new(config)
+}
 
 /// Storage backend. SQLite (single-node, file or in-memory) or Postgres (shared
 /// across replicas for HA). Both keep the same JSON-blob-per-row model, so the
@@ -233,15 +306,29 @@ impl Store {
     }
 
     /// Open a Postgres-backed store from a `postgres://` / `postgresql://` URL.
+    ///
+    /// The connection uses a PQC-capable rustls TLS connector, so pointing this
+    /// at a FortressQL instance with `sslmode=require` negotiates a post-quantum
+    /// hybrid key exchange (X25519MLKEM768). `sslmode=disable` stays plaintext;
+    /// `sslmode=prefer` (the default) encrypts opportunistically and falls back
+    /// to plaintext if the server has no TLS. Encrypt-only: CA verification
+    /// (`sslmode=verify-ca` / `verify-full`) isn't supported by this client yet.
     pub fn open_postgres(url: &str) -> anyhow::Result<Self> {
+        if url.contains("sslmode=verify-ca") || url.contains("sslmode=verify-full") {
+            anyhow::bail!(
+                "sslmode=verify-ca/verify-full is not yet supported by this client; use \
+                 sslmode=require for encrypted (PQC-capable) transport"
+            );
+        }
         let config: postgres::Config = url
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid postgres url: {e}"))?;
+        let connector = build_pg_tls();
         // Connect directly once to surface a clear error (r2d2 hides the cause)
         // and apply the schema.
         config
             .clone()
-            .connect(postgres::NoTls)
+            .connect(connector.clone())
             .map_err(|e| {
                 let msg = e
                     .as_db_error()
@@ -250,7 +337,7 @@ impl Store {
                 anyhow::anyhow!("postgres connect failed: {msg}")
             })?
             .batch_execute(PG_SCHEMA)?;
-        let manager = PostgresConnectionManager::new(config, postgres::NoTls);
+        let manager = PostgresConnectionManager::new(config, connector);
         let pool = r2d2::Pool::builder()
             .max_size(16)
             .connection_timeout(std::time::Duration::from_secs(10))

@@ -22,6 +22,11 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 postgres = "0.19"
 r2d2 = "0.8"
 r2d2_postgres = "0.18"
+# PQC-capable TLS for the DB link (e.g. FortressQL's X25519MLKEM768 hybrid key
+# exchange). rustls' aws-lc-rs backend offers ML-KEM hybrid groups by default;
+# tokio-postgres-rustls bridges it to the (sync) postgres client.
+rustls = "0.23"
+tokio-postgres-rustls = "0.13"
 
 [dev-dependencies]
 tempfile = "3"

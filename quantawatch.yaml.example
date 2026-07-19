@@ -134,6 +134,17 @@ scanner:
   #                         HA. Example:
   #                           postgres://qw:secret@db.internal:5432/quantawatch
   #                         The schema is created automatically on first start.
+  #
+  # POST-QUANTUM DB LINK: the connection uses a PQC-capable TLS client (rustls +
+  # aws-lc-rs, which offers the X25519MLKEM768 hybrid group by default). Point it
+  # at FortressQL (github.com/dyber-pqc/FortressQL — a PQC-hardened PostgreSQL 17)
+  # with sslmode=require and the key exchange itself is post-quantum, so the DB
+  # link resists harvest-now-decrypt-later. Don't leave it plaintext:
+  #   postgres://qw:secret@fortressql.internal:5432/quantawatch?sslmode=require
+  # sslmode: require = encrypt (no CA check; works with FortressQL's PQC certs);
+  #          prefer  = encrypt if the server supports it, else plaintext (default);
+  #          disable = plaintext. (verify-ca/verify-full not yet supported here.)
+  #
   # NOTE: pair a Postgres store with identity.seed_env (below) so every replica
   # also shares one signing identity — otherwise replicas sign with different keys.
   store_path: "./scans"

@@ -19,7 +19,13 @@ Two pieces of the single-node story are now solvable from config:
 
 - **Shared store.** Set `scanner.store_path` to a `postgres://…` URL and every
   replica reads and writes one Postgres database instead of a per-pod SQLite
-  file. The schema is created on first start.
+  file. The schema is created on first start. The DB link uses a PQC-capable
+  TLS client (rustls + aws-lc-rs, X25519MLKEM768 hybrid group by default), so
+  pointing it at **[FortressQL](https://github.com/dyber-pqc/FortressQL)** — a
+  post-quantum-hardened PostgreSQL 17 — with `?sslmode=require` makes the key
+  exchange itself post-quantum (harvest-now-decrypt-later resistant). Against a
+  classical Postgres it negotiates classical X25519; either way, set
+  `sslmode=require` so the link isn't plaintext.
 - **Shared signing identity.** Set `identity.seed_env` to an env var (backed by
   a Kubernetes Secret / KMS) holding one hex-encoded 32-byte seed, so every
   replica derives the *same* ML-DSA-65 identity — otherwise each pod signs with
