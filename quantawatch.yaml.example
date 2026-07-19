@@ -27,6 +27,18 @@ resilience:
 attestation:
   provider: software
 
+# Crypto-agility governance: the target state you're migrating TO, and by when.
+# Evaluated at GET /api/governance (verdict PASS / AT-RISK / FAIL + an agility
+# score); GET /api/governance?gate=1 returns HTTP 422 on FAIL so CI blocks a
+# regression. A snapshot is recorded on every scan, so GET /api/governance/history
+# shows whether you're converging on the target or drifting.
+crypto_policy:
+  name: "CNSA 2.0 migration"
+  forbidden: ["3DES", "RC4", "MD5", "SHA1", "RSA-1024"]  # never acceptable -> FAIL
+  deprecated: ["RSA", "ECDSA", "ECDH", "DH"]             # migrate before the deadline
+  target: ["ML-DSA", "ML-KEM"]                           # the PQC target set
+  deadline: "2030-01-01T00:00:00Z"                       # deprecated must be gone by then
+
 # Air-gapped mode: refuse ALL outbound network calls except the configured LLM
 # provider upstreams (which in an air-gapped site are themselves internal).
 # Disables alert webhooks, evidence-pack delivery, cloud connector discovery,

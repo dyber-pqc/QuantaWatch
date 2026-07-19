@@ -287,6 +287,8 @@ pub async fn recompute_and_snapshot(
     crate::admin::graph::snapshot_and_alert(state, tenant).await;
     // Evaluate posture SLOs and alert on breaches.
     crate::admin::slos::check_and_alert(state, tenant).await;
+    // Record a crypto-agility governance snapshot (drift trend).
+    crate::admin::governance::record_snapshot(state, tenant).await;
 
     summary
 }

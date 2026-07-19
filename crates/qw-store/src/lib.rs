@@ -137,6 +137,18 @@ pub struct SloSnapshot {
     pub gate_breach: bool,
 }
 
+/// A point-in-time snapshot of crypto-agility governance (for drift trends).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GovernanceSnapshot {
+    pub timestamp: DateTime<Utc>,
+    pub agility_score: f64,
+    pub compliant: u32,
+    pub deprecated: u32,
+    pub forbidden: u32,
+    pub verdict: String,
+}
+
 /// A point-in-time snapshot of the attack-path graph (for drift detection).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -204,6 +216,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS slo_snapshots (
                 tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT
             );
+            CREATE TABLE IF NOT EXISTS governance_snapshots (
+                tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT
+            );
             CREATE INDEX IF NOT EXISTS idx_scans_tenant ON scans(tenant);
             CREATE INDEX IF NOT EXISTS idx_findings_tenant ON findings(tenant);
             CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
@@ -235,6 +250,7 @@ impl Store {
             CREATE TABLE graph_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE assets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
+            CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             "#,
         )?;
         Ok(store)
@@ -535,6 +551,24 @@ impl Store {
             "INSERT INTO slo_snapshots (tenant, data) VALUES (?1, ?2)",
             params![tenant, serde_json::to_string(snap).unwrap_or_default()],
         );
+    }
+
+    pub fn record_governance_snapshot(&self, tenant: &str, snap: &GovernanceSnapshot) {
+        let conn = self.conn.lock().unwrap();
+        let _ = conn.execute(
+            "INSERT INTO governance_snapshots (tenant, data) VALUES (?1, ?2)",
+            params![tenant, serde_json::to_string(snap).unwrap_or_default()],
+        );
+    }
+
+    pub fn governance_history(&self, tenant: &str, limit: usize) -> Vec<GovernanceSnapshot> {
+        let mut v: Vec<GovernanceSnapshot> = self.list_json(
+            "SELECT data FROM governance_snapshots WHERE tenant = ?1 ORDER BY seq DESC LIMIT ?2",
+            tenant,
+            limit,
+        );
+        v.reverse();
+        v
     }
 
     pub fn slo_history(&self, tenant: &str, limit: usize) -> Vec<SloSnapshot> {

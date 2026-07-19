@@ -189,6 +189,14 @@ fn admin_routes() -> Router<AppState> {
             "/api/slos/history",
             get(crate::admin::slos::get_slo_history),
         )
+        .route(
+            "/api/governance",
+            get(crate::admin::governance::get_governance),
+        )
+        .route(
+            "/api/governance/history",
+            get(crate::admin::governance::get_governance_history),
+        )
         // Compliance & migration
         .route(
             "/api/compliance",

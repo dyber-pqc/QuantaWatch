@@ -37,6 +37,10 @@ pub struct GatewayConfig {
     /// In-path proxy resilience (timeouts, retries, circuit breaking).
     #[serde(default)]
     pub resilience: ResilienceConfig,
+    /// Crypto-agility governance policy (target state + deadline). Evaluated at
+    /// `GET /api/governance`; `?gate=1` fails CI on a policy violation.
+    #[serde(default)]
+    pub crypto_policy: qw_cbom::CryptoPolicy,
     /// CBOM attestation root of trust.
     #[serde(default)]
     pub attestation: AttestationConfig,
@@ -613,6 +617,7 @@ impl Default for GatewayConfig {
             alerts: AlertConfig::default(),
             auth: AuthConfig::default(),
             resilience: ResilienceConfig::default(),
+            crypto_policy: qw_cbom::CryptoPolicy::default(),
             attestation: AttestationConfig::default(),
             air_gapped: false,
             assets: Vec::new(),
