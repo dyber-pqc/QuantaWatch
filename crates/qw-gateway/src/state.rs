@@ -118,8 +118,18 @@ impl AppState {
         ));
 
         // Initialize the SQLite-backed, tenant-scoped store.
-        let scan_dir = std::path::PathBuf::from(&config.scanner.store_path);
-        let store = Arc::new(Store::open(&scan_dir.join("quantawatch.db"))?);
+        // A `postgres://` store_path selects the shared Postgres backend (HA,
+        // multi-replica); anything else is a local SQLite file directory.
+        let store_path = &config.scanner.store_path;
+        let store = Arc::new(
+            if store_path.starts_with("postgres://") || store_path.starts_with("postgresql://") {
+                tracing::info!("store backend: Postgres (shared, HA-capable)");
+                Store::open_postgres(store_path)?
+            } else {
+                let scan_dir = std::path::PathBuf::from(store_path);
+                Store::open(&scan_dir.join("quantawatch.db"))?
+            },
+        );
 
         // Initialize alert manager (persists to the store)
         let alert_manager = Arc::new(crate::alerts::AlertManager::new(

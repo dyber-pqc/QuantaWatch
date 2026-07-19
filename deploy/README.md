@@ -8,11 +8,35 @@ Run QuantaWatch as a real service — not a local process. Three paths:
 | Helm | Any Kubernetes cluster | `deploy/helm/quantawatch` |
 | Terraform | IaC-managed cluster (wraps the Helm chart) | `deploy/terraform` |
 
-The gateway is stateful: it holds a **SQLite store** (`/app/data`), its **ML-DSA-65
+The gateway is stateful: it holds a **store** (`/app/data`), its **ML-DSA-65
 identity keys** (`/app/keys`), and the **hash-chained audit log** (`/app/audit`).
-All three live on one `ReadWriteOnce` PVC, so the gateway runs as a **single
-replica** with a `Recreate` update strategy. For HA, move to an external DB and
-externalize key storage (roadmap).
+By default all three live on one `ReadWriteOnce` PVC, so the gateway runs as a
+**single replica** with a `Recreate` update strategy.
+
+### Toward HA / multiple replicas
+
+Two pieces of the single-node story are now solvable from config:
+
+- **Shared store.** Set `scanner.store_path` to a `postgres://…` URL and every
+  replica reads and writes one Postgres database instead of a per-pod SQLite
+  file. The schema is created on first start.
+- **Shared signing identity.** Set `identity.seed_env` to an env var (backed by
+  a Kubernetes Secret / KMS) holding one hex-encoded 32-byte seed, so every
+  replica derives the *same* ML-DSA-65 identity — otherwise each pod signs with
+  a different key and cross-pod signatures won't verify.
+
+Two pieces are **not yet shared**, so running >1 replica today has caveats:
+
+- **Auth sessions** live in an in-memory map per pod, so a login is only valid
+  on the pod that issued it — front a multi-replica deployment with sticky
+  sessions, or keep auth on a single replica, until sessions move to the store.
+- **The audit hash-chain is single-writer** (sequential by construction). A
+  multi-writer chain needs a design decision (per-replica chains + merge, or a
+  single audit-writer); until then, route audited writes through one replica.
+
+In short: the **shared Postgres store + shared seed** unblock horizontal read
+scale and failover; full active/active HA still wants stateless sessions and a
+multi-writer audit strategy.
 
 ## Images
 

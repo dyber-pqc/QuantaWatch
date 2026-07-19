@@ -126,6 +126,16 @@ policy:
 
 # Cryptographic Posture Management (CPM)
 scanner:
+  # Where persisted state lives. Two backends, selected by the value:
+  #   a filesystem path  -> local SQLite at <store_path>/quantawatch.db
+  #                         (single node; the default, zero-setup)
+  #   postgres://...      -> shared Postgres, so multiple gateway replicas read
+  #     (or postgresql://)  and write ONE store. Required for horizontal scale /
+  #                         HA. Example:
+  #                           postgres://qw:secret@db.internal:5432/quantawatch
+  #                         The schema is created automatically on first start.
+  # NOTE: pair a Postgres store with identity.seed_env (below) so every replica
+  # also shares one signing identity — otherwise replicas sign with different keys.
   store_path: "./scans"
   # Auto-scan provider endpoints + dependency files on startup
   auto_scan_on_start: true

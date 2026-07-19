@@ -17,6 +17,11 @@ uuid = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Postgres backend for HA / shared state across replicas. The `postgres` crate
+# is synchronous, matching the Store's sync API (no async refactor of callers).
+postgres = "0.19"
+r2d2 = "0.8"
+r2d2_postgres = "0.18"
 
 [dev-dependencies]
 tempfile = "3"
