@@ -106,5 +106,15 @@ pub fn build_scanner_registry(config: &ScannerConfig) -> ScannerRegistry {
             crate::scanners::data_at_rest::DataAtRestScanner::new(&config.data_at_rest),
         ));
     }
+    if config.ssh.enabled {
+        registry.register(Box::new(crate::scanners::ssh::SshScanner::new(
+            config.ssh.clone(),
+        )));
+    }
+    if config.network.enabled {
+        registry.register(Box::new(crate::scanners::network::NetworkScanner::new(
+            config.network.clone(),
+        )));
+    }
     registry
 }

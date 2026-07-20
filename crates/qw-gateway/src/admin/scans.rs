@@ -52,6 +52,8 @@ pub async fn trigger_scan(
     for input in &body.targets {
         let target = match input.target_type.as_str() {
             "tls" => ScanTarget::tls(&input.address),
+            "ssh" => ScanTarget::ssh(&input.address),
+            "network" | "host" => ScanTarget::network_host(&input.address),
             "dependency" => ScanTarget::dependency_file(&input.address),
             "code" => ScanTarget::code_directory(&input.address),
             "certificate" | "cert" => ScanTarget::certificate(&input.address),

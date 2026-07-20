@@ -35,6 +35,11 @@ pub enum TargetType {
     /// A data store evaluated for at-rest encryption posture (DB, object store,
     /// volume, KMS-wrapped dataset).
     DataStore,
+    /// An SSH server whose negotiated key-exchange, host-key, cipher and MAC
+    /// algorithms are fingerprinted for post-quantum readiness.
+    SshEndpoint,
+    /// A host to sweep for open, crypto-relevant TCP ports (network discovery).
+    NetworkHost,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +93,24 @@ impl ScanTarget {
             target_type: TargetType::DataStore,
             address: address.to_string(),
             metadata,
+        }
+    }
+
+    pub fn ssh(address: &str) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            target_type: TargetType::SshEndpoint,
+            address: address.to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn network_host(address: &str) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            target_type: TargetType::NetworkHost,
+            address: address.to_string(),
+            metadata: HashMap::new(),
         }
     }
 }
@@ -254,6 +277,10 @@ pub struct ScannerConfig {
     pub code: CodeScannerConfig,
     #[serde(default)]
     pub data_at_rest: DataAtRestScannerConfig,
+    #[serde(default)]
+    pub ssh: SshScannerConfig,
+    #[serde(default)]
+    pub network: NetworkScannerConfig,
 }
 
 impl Default for ScannerConfig {
@@ -266,8 +293,85 @@ impl Default for ScannerConfig {
             certificates: CertScannerConfig::default(),
             code: CodeScannerConfig::default(),
             data_at_rest: DataAtRestScannerConfig::default(),
+            ssh: SshScannerConfig::default(),
+            network: NetworkScannerConfig::default(),
         }
     }
+}
+
+/// SSH key-exchange fingerprinting. Only ever probes hosts explicitly listed in
+/// `targets` (or handed to `POST /api/scans`) — never a discovered range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshScannerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub targets: Vec<String>,
+}
+
+impl Default for SshScannerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout_secs: 10,
+            targets: vec![],
+        }
+    }
+}
+
+/// TCP connect-scan of crypto-relevant ports on **authorized** hosts. Active
+/// scanning is opt-in and strictly scoped: it only touches hosts in `targets`
+/// (host or host:port), never a discovered or inferred range, and it makes a
+/// plain connect (no exploitation). Open TLS/SSH ports are handed to the TLS
+/// and SSH scanners for algorithm fingerprinting.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkScannerConfig {
+    /// Off by default — active network scanning must be deliberately enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_connect_timeout")]
+    pub connect_timeout_ms: u64,
+    /// Crypto-relevant ports to probe when a target names a bare host.
+    #[serde(default = "default_crypto_ports")]
+    pub ports: Vec<u16>,
+    /// Authorized hosts (host or host:port). Empty = scan nothing.
+    #[serde(default)]
+    pub targets: Vec<String>,
+}
+
+impl Default for NetworkScannerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            connect_timeout_ms: default_connect_timeout(),
+            ports: default_crypto_ports(),
+            targets: vec![],
+        }
+    }
+}
+
+fn default_connect_timeout() -> u64 {
+    1500
+}
+
+/// Ports where a cryptographic protocol is expected — the ones worth
+/// fingerprinting for PQC readiness.
+fn default_crypto_ports() -> Vec<u16> {
+    vec![
+        22,    // SSH
+        443,   // HTTPS / TLS
+        465,   // SMTPS
+        636,   // LDAPS
+        853,   // DNS-over-TLS
+        993,   // IMAPS
+        995,   // POP3S
+        3389,  // RDP (TLS)
+        5432,  // PostgreSQL (TLS)
+        6443,  // Kubernetes API (TLS)
+        8443,  // HTTPS-alt
+    ]
 }
 
 /// A declared data store whose at-rest encryption posture we evaluate. Values
