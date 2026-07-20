@@ -457,21 +457,30 @@ export async function fetchStats(): Promise<Stats> {
     // The gateway /api/stats endpoint is intentionally thin; normalize it into the
     // full dashboard shape so the page renders with the fields it does expose and
     // safe defaults for the rest (rather than crashing on undefined arrays).
-    const raw = await fetchJSON<Record<string, unknown>>("/api/stats");
     const num = (v: unknown) => (typeof v === "number" ? v : 0);
+    // /api/stats is intentionally thin (sessions/requests/tokens); it carries no
+    // threat or audit data. Compose those from the endpoints that do, so the
+    // dashboard shows real counts instead of hardcoded zeros.
+    const [raw, threats, auditMeta] = await Promise.all([
+      fetchJSON<Record<string, unknown>>("/api/stats"),
+      fetchThreats(), // already returns [] on failure
+      fetchJSON<Record<string, unknown>>("/api/audit?limit=1").catch(() => ({} as Record<string, unknown>)),
+    ]);
+
+    const threat_counts = { low: 0, medium: 0, high: 0, critical: 0 };
+    for (const t of threats) {
+      if (t.severity in threat_counts) threat_counts[t.severity] += 1;
+    }
+
     return {
       total_sessions: num(raw.total_sessions ?? raw.active_sessions),
       total_requests: num(raw.total_requests),
-      active_threats: num(raw.active_threats),
-      audit_entries: num(raw.audit_entries),
+      active_threats: threats.length,
+      audit_entries: num(auditMeta.total),
       requests_per_minute: Array.isArray(raw.requests_per_minute) ? (raw.requests_per_minute as number[]) : [],
-      threat_counts: {
-        low: num((raw.threat_counts as Record<string, unknown>)?.low),
-        medium: num((raw.threat_counts as Record<string, unknown>)?.medium),
-        high: num((raw.threat_counts as Record<string, unknown>)?.high),
-        critical: num((raw.threat_counts as Record<string, unknown>)?.critical),
-      },
-      recent_threats: Array.isArray(raw.recent_threats) ? (raw.recent_threats as Threat[]) : [],
+      threat_counts,
+      // newest-first; the endpoint already sorts, take the top few for the panel.
+      recent_threats: threats.slice(0, 6),
     };
   } catch {
     console.warn("API unavailable, using mock stats data");
