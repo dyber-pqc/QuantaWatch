@@ -385,7 +385,9 @@ export async function openAuthed(url: string, filename?: string): Promise<void> 
 
 export async function fetchSessions(): Promise<Session[]> {
   try {
-    return await fetchJSON<Session[]>("/api/sessions");
+    // /api/sessions returns { sessions, total }; older callers expect an array.
+    const d = await fetchJSON<Session[] | { sessions?: Session[] }>("/api/sessions");
+    return Array.isArray(d) ? d : (d.sessions ?? []);
   } catch {
     console.warn("API unavailable, using mock session data");
     return MOCK_SESSIONS;

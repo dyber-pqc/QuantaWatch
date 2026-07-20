@@ -86,6 +86,18 @@ export default function IdeShell({ children }: { children: ReactNode }) {
     return next.length ? next : ["/"];
   });
 
+  const dragPath = useRef<string | null>(null);
+  const reorderTabs = (from: string, to: string) => {
+    if (from === to) return;
+    setOpenPaths((prev) => {
+      const arr = prev.filter((x) => x !== from);
+      const ti = arr.indexOf(to);
+      if (ti < 0) return prev;
+      arr.splice(ti, 0, from);
+      return arr;
+    });
+  };
+
   const push = (...lines: string[]) => setTerm((l) => [...l.slice(-300), ...lines]);
   const signOut = async () => { await logout(); qc.clear(); window.dispatchEvent(new Event("qw-unauthorized")); };
 
@@ -177,6 +189,11 @@ export default function IdeShell({ children }: { children: ReactNode }) {
               const active = p === pathname;
               return (
                 <div key={p} onClick={() => navigate(p)} title={p}
+                  draggable
+                  onDragStart={(e) => { dragPath.current = p; e.dataTransfer.effectAllowed = "move"; }}
+                  onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
+                  onDrop={(e) => { e.preventDefault(); if (dragPath.current) reorderTabs(dragPath.current, p); dragPath.current = null; }}
+                  onDragEnd={() => { dragPath.current = null; }}
                   style={{ display: "flex", alignItems: "center", gap: 7, padding: "0 10px", height: 35, cursor: "pointer", fontSize: 12.5, whiteSpace: "nowrap", userSelect: "none", color: active ? "#fff" : C.textDim, background: active ? C.editor : "transparent", borderRight: `1px solid ${C.border}`, borderTop: active ? `1.5px solid ${C.accent}` : "1.5px solid transparent" }}>
                   <span style={{ width: 14, height: 14, display: "grid", placeItems: "center", opacity: 0.9 }}>{iconFor(p)}</span>
                   {labelFor(p)}
@@ -192,7 +209,8 @@ export default function IdeShell({ children }: { children: ReactNode }) {
           <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
             <ScrollArea style={{ flex: 1, background: C.editor }} scrollbarSize={10}>
               <div style={{ padding: "20px 22px 40px", maxWidth: 1180, margin: "0 auto" }}>
-                <Boundary label={labelFor(pathname)}>{children}</Boundary>
+                {/* key on pathname so a crash on one view doesn't stick to the next */}
+                <Boundary key={pathname} label={labelFor(pathname)}>{children}</Boundary>
               </div>
             </ScrollArea>
             <Boundary label="Panel">
