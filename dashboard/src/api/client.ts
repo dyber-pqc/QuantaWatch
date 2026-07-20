@@ -29,6 +29,7 @@ import type {
   RbacReport,
   FrameworkSummary,
   FrameworkDetail,
+  MigrationPlan,
 } from "./types";
 
 // ---- Mock data for development when API is unavailable ----
@@ -645,6 +646,14 @@ export async function remediateFinding(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+export async function fetchMigrationPlans(): Promise<{ plans: MigrationPlan[]; total: number }> {
+  try {
+    return await fetchJSON<{ plans: MigrationPlan[]; total: number }>("/api/remediations/plans");
+  } catch {
+    return { plans: [], total: 0 };
+  }
 }
 
 export async function fetchRemediations(): Promise<{ remediations: RemediationTicket[]; total: number }> {

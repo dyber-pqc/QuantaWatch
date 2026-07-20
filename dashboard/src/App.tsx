@@ -15,6 +15,7 @@ import AlertsPage from "./pages/AlertsPage";
 import Soc2Page from "./pages/Soc2Page";
 import RbacPage from "./pages/RbacPage";
 import FrameworksPage from "./pages/FrameworksPage";
+import RemediationsPage from "./pages/RemediationsPage";
 
 export default function App() {
   return (
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/posture" element={<PosturePage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/attack-paths" element={<AttackPathsPage />} />
+        <Route path="/remediations" element={<RemediationsPage />} />
         <Route path="/assets" element={<AssetsPage />} />
         <Route path="/scans" element={<ScansPage />} />
         <Route path="/compliance" element={<CompliancePage />} />

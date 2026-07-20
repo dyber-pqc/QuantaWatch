@@ -526,3 +526,28 @@ export interface FrameworkDetail {
   summary: { total: number; enforced: number; partial: number; configurable: number; manual: number; gaps: number };
   controls: FrameworkControl[];
 }
+
+// ---- Remediation runbooks (migration plans) ----
+
+export type MigrationPriority = "p0" | "p1" | "p2" | "p3";
+
+export interface MigrationPatch {
+  path: string;
+  kind: string;
+  before: string;
+  after: string;
+  note: string;
+}
+
+export interface MigrationPlan {
+  findingId: string;
+  title: string;
+  currentAlgorithm: string;
+  targetAlgorithm: string;
+  strategy: string;
+  priority: MigrationPriority;
+  rationale: string;
+  steps: string[];
+  effort: string;
+  patch?: MigrationPatch;
+}
