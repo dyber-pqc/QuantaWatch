@@ -23,9 +23,11 @@ Two pieces of the single-node story are now solvable from config:
   TLS client (rustls + aws-lc-rs, X25519MLKEM768 hybrid group by default), so
   pointing it at **[FortressQL](https://github.com/dyber-pqc/FortressQL)** — a
   post-quantum-hardened PostgreSQL 17 — with `?sslmode=require` makes the key
-  exchange itself post-quantum (harvest-now-decrypt-later resistant). Against a
-  classical Postgres it negotiates classical X25519; either way, set
-  `sslmode=require` so the link isn't plaintext.
+  exchange itself post-quantum (harvest-now-decrypt-later resistant). This is
+  **verified end-to-end**: against a FortressQL server that offers *only* the PQC
+  group, QuantaWatch's client still connects — see [`fortressql/`](fortressql/)
+  to build FortressQL and reproduce. Against a classical Postgres it negotiates
+  classical X25519; either way, set `sslmode=require` so the link isn't plaintext.
 - **Shared signing identity.** Set `identity.seed_env` to an env var (backed by
   a Kubernetes Secret / KMS) holding one hex-encoded 32-byte seed, so every
   replica derives the *same* ML-DSA-65 identity — otherwise each pod signs with
