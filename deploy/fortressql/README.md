@@ -78,3 +78,28 @@ QW_TEST_PG_URL="postgres://qw_test:qw_test_pw@127.0.0.1:55433/quantawatch_test?s
 
 > Dev/verification config only: self-signed cert, `sslmode=require` (no CA check),
 > no TDE. Not a production deployment.
+
+## Upstream bug found & fixed: `liboqs available: no`
+
+Building this turned up a real FortressQL startup bug. The postmaster logged:
+
+```
+FortressQL: PQC subsystem initialized (liboqs available: no)
+```
+
+even though liboqs was linked (`ldd …/bin/postgres` shows `liboqs.so.9`) and
+fully functional — `SELECT pqc_sig_keygen('ML-DSA-65')` returns a real keypair.
+
+Root cause: `pqc_preflight_check()` (called from the postmaster) reads the
+`pqc_initialized` flag, but `pqc_init()` — which calls `OQS_init()` and sets that
+flag — was only ever invoked **lazily**, from the KEM/SIG code paths on first
+use. So at startup the status was read before init ran (false "no"), and every
+backend re-initialized liboqs independently on first PQC use.
+
+Fix: initialize once, eagerly, in the postmaster, so the status is accurate and
+forked backends inherit the initialized state. See
+[`patches/0001-eager-pqc-init-in-postmaster.patch`](patches/0001-eager-pqc-init-in-postmaster.patch).
+With it applied the postmaster logs `liboqs available: yes`. The patch is
+self-contained (one call in `src/backend/crypto/pqc/pqc_preflight.c`); it belongs
+upstream in [FortressQL](https://github.com/dyber-pqc/FortressQL), and is kept
+here as the record of what this verification turned up.

@@ -1,0 +1,28 @@
+Subject: [PATCH] pqc: initialize the PQC subsystem eagerly in the postmaster
+
+pqc_preflight_check() (called from PostmasterMain) logged
+"liboqs available: no" because pqc_init() was only ever called
+lazily from the KEM/SIG paths on first use. liboqs was linked and
+fully functional; the status flag was simply read before init ran,
+and every backend re-initialized independently. Initialize once in
+the postmaster so the status is accurate and forked backends inherit
+the initialized state.
+
+---
+--- a/src/backend/crypto/pqc/pqc_preflight.c
++++ b/src/backend/crypto/pqc/pqc_preflight.c
+@@ -137,6 +137,14 @@
+ 	}
+ #endif
+ 
++	/*
++	 * Eagerly initialize the PQC subsystem here in the postmaster so the
++	 * status logged below is accurate, and so every forked backend inherits
++	 * an initialized liboqs state instead of lazily re-initializing on first
++	 * PQC use.
++	 */
++	(void) pqc_init();
++
+ 	/* Log PQC subsystem status */
+ 	elog(LOG, "FortressQL: PQC subsystem initialized (liboqs available: %s)",
+ 		 pqc_is_available() ? "yes" : "no");
