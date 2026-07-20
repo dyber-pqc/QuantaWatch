@@ -3,6 +3,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import { fetchAttackPaths, fetchAttackPathTimeline, simulateAttackPaths, fetchIntegrations, remediateAttackPath, openAuthed, BOARD_REPORT_URL } from "../api/client";
 import type { AttackPath, GraphNode, GraphNodeType, SimulateResponse, RemediationTicket, KillChainStage } from "../api/types";
+import { Badge, Group, Box, Text } from "@mantine/core";
 import { Card, PageHeader, Stat, Spinner, EmptyState, SeverityBadge, PqcBadge } from "../components/ui";
 
 const COL_INDEX: Record<GraphNodeType, number> = {
@@ -240,72 +241,61 @@ function Graph({ nodes, edges, activeIds, focus }: { nodes: GraphNode[]; edges: 
 }
 
 const KIND_LABEL: Record<AttackPath["kind"], { label: string; color: string }> = {
-  "data-exposure": { label: "Data Exposure", color: "bg-rose-500/15 text-rose-300" },
-  "access-risk": { label: "Access Risk", color: "bg-amber-500/15 text-amber-300" },
-  "external-asset": { label: "External Asset", color: "bg-brand-500/15 text-brand-200" },
+  "data-exposure": { label: "Data Exposure", color: "red" },
+  "access-risk": { label: "Access Risk", color: "yellow" },
+  "external-asset": { label: "External Asset", color: "brand" },
 };
 
 function ScoreBox({ score }: { score: number }) {
   const c = riskColor(score);
   return (
-    <div className="flex h-12 w-12 shrink-0 flex-col items-center justify-center rounded-lg ring-1"
-      style={{ background: `${c}1f`, boxShadow: `inset 0 0 0 1px ${c}55` }}>
-      <span className="text-[15px] font-bold leading-none tabular-nums" style={{ color: c }}>{Math.round(score)}</span>
-      <span className="mt-0.5 text-[7.5px] font-semibold uppercase tracking-wide text-gray-500">risk</span>
-    </div>
+    <Box style={{ width: 46, height: 46, flexShrink: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", borderRadius: 2, background: `${c}1a`, border: `1px solid ${c}66` }}>
+      <Text ff="heading" fw={700} fz={16} lh={1} style={{ color: c, fontVariantNumeric: "tabular-nums" }}>{Math.round(score)}</Text>
+      <Text ff="monospace" fz={7.5} fw={600} tt="uppercase" c="dimmed" mt={2} style={{ letterSpacing: "0.06em" }}>risk</Text>
+    </Box>
   );
 }
 
-function Pill({ children, tone }: { children: React.ReactNode; tone: "data" | "agent" | "provider" }) {
-  const cls = tone === "data" ? "bg-quantum-500/12 text-quantum-200 ring-quantum-400/20"
-    : tone === "agent" ? "bg-brand-500/12 text-brand-200 ring-brand-400/20"
-    : "bg-white/[0.06] text-gray-200 ring-white/10";
-  return <span className={`inline-flex items-center rounded-md px-2 py-1 text-[11.5px] font-semibold ring-1 ${cls}`}>{children}</span>;
-}
 function Arrow() {
-  return <svg className="h-3 w-3 shrink-0 text-gray-600" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" /></svg>;
+  return <svg width={12} height={12} style={{ flexShrink: 0, color: "var(--mantine-color-dark-3)" }} fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" /></svg>;
 }
 
-const KC_STATUS: Record<KillChainStage["status"], { dot: string; text: string; ring: string }> = {
-  active: { dot: "bg-rose-400", text: "text-rose-300", ring: "ring-rose-400/30" },
-  feasible: { dot: "bg-amber-400", text: "text-amber-300", ring: "ring-amber-400/30" },
-  pending: { dot: "bg-violet-400", text: "text-violet-300", ring: "ring-violet-400/30" },
-  blocked: { dot: "bg-emerald-400", text: "text-emerald-300", ring: "ring-emerald-400/30" },
-  na: { dot: "bg-gray-600", text: "text-gray-500", ring: "ring-white/10" },
+// Kill-chain stage → solid bar color + light text color (bg is a tint of the bar).
+const KC: Record<KillChainStage["status"], { bar: string; text: string }> = {
+  active: { bar: "var(--mantine-color-red-5)", text: "var(--mantine-color-red-2)" },
+  feasible: { bar: "var(--mantine-color-orange-5)", text: "var(--mantine-color-orange-2)" },
+  pending: { bar: "var(--mantine-color-violet-4)", text: "var(--mantine-color-violet-2)" },
+  blocked: { bar: "var(--mantine-color-teal-5)", text: "var(--mantine-color-teal-2)" },
+  na: { bar: "var(--mantine-color-dark-3)", text: "var(--mantine-color-dark-2)" },
 };
 
 function KillChain({ stages }: { stages: KillChainStage[] }) {
   return (
-    <div className="mt-2.5 rounded-md border border-white/[0.06] bg-black/20 p-2">
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="text-[9px] font-semibold uppercase tracking-wider text-gray-500">Crypto kill-chain</span>
-      </div>
-      <div className="flex items-stretch gap-1">
-        {stages.map((s, i) => {
-          const m = KC_STATUS[s.status];
+    <Box mt="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "rgba(0,0,0,0.15)" }}>
+      <Text ff="monospace" fz={9} fw={600} tt="uppercase" c="dimmed" px={8} pt={6} style={{ letterSpacing: "0.08em" }}>Crypto kill-chain</Text>
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${stages.length}, 1fr)`, gap: 4, padding: 6 }}>
+        {stages.map((s) => {
+          const m = KC[s.status];
           return (
-            <div key={s.key} className="flex flex-1 items-center gap-1" title={`${s.label}: ${s.detail} (${s.status})`}>
-              <div className={`flex-1 rounded px-1.5 py-1 ring-1 ${m.ring} bg-white/[0.02]`}>
-                <div className="flex items-center gap-1">
-                  <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />
-                  <span className={`truncate text-[9.5px] font-semibold ${m.text}`}>{s.label}</span>
-                </div>
-              </div>
-              {i < stages.length - 1 && <span className="text-[9px] text-gray-700">→</span>}
-            </div>
+            <Box key={s.key} title={`${s.label}: ${s.detail} (${s.status})`}
+              style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, padding: "4px 6px", borderRadius: 2, borderLeft: `2px solid ${m.bar}`, background: `color-mix(in srgb, ${m.bar} 12%, transparent)` }}>
+              <Box w={6} h={6} style={{ borderRadius: "50%", background: m.bar, flexShrink: 0 }} />
+              <Text fz={9.5} fw={600} truncate style={{ color: m.text }}>{s.label}</Text>
+            </Box>
           );
         })}
       </div>
-    </div>
+    </Box>
   );
 }
 
 function ExploitChip({ value }: { value: number }) {
-  const c = value >= 60 ? "#e76a6e" : value >= 30 ? "#f7894a" : value >= 10 ? "#f2c744" : "#5bb98c";
+  const color = value >= 60 ? "red" : value >= 30 ? "orange" : value >= 10 ? "yellow" : "teal";
   return (
-    <span className="qw-chip" style={{ background: `${c}1f`, color: c }} title="Exploitability — how realistically this path can be executed (reachability × data value × channel weakness)">
+    <Badge variant="light" color={color} radius={2} size="sm" tt="none" fw={600}
+      title="Exploitability — how realistically this path can be executed (reachability × data value × channel weakness)">
       exploit {Math.round(value)}
-    </span>
+    </Badge>
   );
 }
 
@@ -328,26 +318,27 @@ function PathRow({ path, onHover, onSelect, selected, remediable }: { path: Atta
       <div className="flex items-start gap-3">
         <ScoreBox score={path.score} />
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-1.5">
+          <Group gap={6} align="center">
             <SeverityBadge severity={path.severity} />
-            <span className={`qw-chip ${kind.color}`}>{kind.label}</span>
-            {path.hndl && <span className="qw-chip bg-quantum-500/15 text-quantum-300" title="Harvest-now, decrypt-later">HNDL</span>}
+            <Badge variant="light" color={kind.color} radius={2} size="sm" tt="none" fw={600}>{kind.label}</Badge>
+            {path.hndl && <Badge variant="light" color="grape" radius={2} size="sm" tt="none" fw={600} title="Harvest-now, decrypt-later">HNDL</Badge>}
             {path.observed && (
-              <span className="qw-chip bg-[#5b8def]/15 text-[#9bc0ff] ring-1 ring-[#5b8def]/25">
-                <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-[#5b8def]" />observed · {path.requestCount}
-              </span>
+              <Badge variant="light" color="cyan" radius={2} size="sm" tt="none" fw={600}
+                leftSection={<Box w={6} h={6} style={{ borderRadius: "50%", background: "var(--mantine-color-cyan-4)" }} />}>
+                observed · {path.requestCount}
+              </Badge>
             )}
             {typeof path.exploitability === "number" && <ExploitChip value={path.exploitability} />}
-          </div>
+          </Group>
 
           {/* Chain flow */}
-          <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-            <Pill tone="data">{path.dataClass}</Pill>
+          <Group gap={6} align="center" mt="xs">
+            <Badge variant="light" color="grape" radius={2} size="sm" tt="none" fw={600}>{path.dataClass}</Badge>
             <Arrow />
-            <Pill tone="agent">{path.agent}</Pill>
-            {path.provider !== "—" && (<><Arrow /><Pill tone="provider">{path.provider}</Pill></>)}
+            <Badge variant="light" color="brand" radius={2} size="sm" tt="none" fw={600}>{path.agent}</Badge>
+            {path.provider !== "—" && (<><Arrow /><Badge variant="light" color="gray" radius={2} size="sm" tt="none" fw={600}>{path.provider}</Badge></>)}
             {path.channelPqc && path.provider !== "—" && <PqcBadge status={path.channelPqc} />}
-          </div>
+          </Group>
 
           {path.killChain && path.killChain.length > 0 && <KillChain stages={path.killChain} />}
 
@@ -362,7 +353,7 @@ function PathRow({ path, onHover, onSelect, selected, remediable }: { path: Atta
                   onClick={() => remediable.length && setOpen((v) => !v)}
                   disabled={!remediable.length || mut.isPending}
                   title={remediable.length ? "" : "Configure Jira or Linear to auto-remediate"}
-                  className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${remediable.length ? "bg-brand-500/15 text-brand-200 ring-1 ring-brand-400/30 hover:bg-brand-500/25" : "cursor-not-allowed bg-white/[0.04] text-gray-600"}`}>
+                  className={`inline-flex items-center gap-1.5 rounded-[2px] px-2.5 py-1 text-[11.5px] font-semibold transition-colors ${remediable.length ? "bg-brand-500/15 text-brand-200 ring-1 ring-brand-400/30 hover:bg-brand-500/25" : "cursor-not-allowed bg-white/[0.04] text-gray-600"}`}>
                   <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" strokeWidth={1.8} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" /></svg>
                   {mut.isPending ? "Creating…" : "Auto-remediate"}
                 </button>
