@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import { fetchAttackPaths, fetchAttackPathTimeline, simulateAttackPaths, fetchIntegrations, remediateAttackPath, openAuthed, BOARD_REPORT_URL } from "../api/client";
@@ -32,7 +32,13 @@ function nodeColor(node: GraphNode): string {
 
 function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { source: string; target: string; observed: boolean }[]; activeIds: Set<string> | null }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const [view, setView] = useState({ k: 1, tx: 0, ty: 0 });
+  // Pan/zoom is applied IMPERATIVELY (ref + setAttribute), never through React
+  // state — a wheel/trackpad can fire 100+ events/sec, and re-rendering the
+  // ~250-element SVG on each one saturates the main thread and freezes the tab.
+  // Here, zooming touches exactly one DOM attribute and triggers zero renders.
+  const gRef = useRef<SVGGElement | null>(null);
+  const labelRef = useRef<HTMLSpanElement | null>(null);
+  const viewRef = useRef({ k: 1, tx: 0, ty: 0 });
   const pan = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
 
   const layout = useMemo(() => {
@@ -48,61 +54,66 @@ function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { sourc
     return { pos, height, cols };
   }, [nodes]);
 
+  const applyView = useCallback(() => {
+    const v = viewRef.current;
+    if (gRef.current) gRef.current.setAttribute("transform", `translate(${v.tx} ${v.ty}) scale(${v.k})`);
+    if (labelRef.current) labelRef.current.textContent = `${Math.round(v.k * 100)}%`;
+  }, []);
+
   const toSvg = (clientX: number, clientY: number) => {
     const svg = svgRef.current;
-    if (!svg) return { x: 0, y: 0 };
+    if (!svg) return null;
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return null;
     const pt = svg.createSVGPoint();
     pt.x = clientX; pt.y = clientY;
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return { x: 0, y: 0 };
     const p = pt.matrixTransform(ctm.inverse());
-    return { x: p.x, y: p.y };
+    return Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: p.x, y: p.y } : null;
   };
 
-  // Native, NON-passive wheel listener. React binds onWheel as passive, so
-  // preventDefault() there is ignored and the page scrolls/zooms underneath —
-  // which reads as the page freezing/reloading. Attaching manually with
-  // { passive: false } lets us actually stop the browser's default.
+  // Native, NON-passive wheel listener so preventDefault() actually stops the
+  // page from scrolling/zooming underneath (React binds onWheel as passive).
   useEffect(() => {
     const svg = svgRef.current;
     if (!svg) return;
     const onWheelNative = (e: WheelEvent) => {
       e.preventDefault();
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return;
-      const pt = svg.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
-      const p = pt.matrixTransform(ctm.inverse());
-      if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return;
-      const factor = Math.exp(-e.deltaY * 0.0015);
-      setView((v) => {
-        const nk = clamp(v.k * factor, 0.5, 4);
-        const r = nk / v.k;
-        return { k: nk, tx: p.x - (p.x - v.tx) * r, ty: p.y - (p.y - v.ty) * r };
-      });
+      const p = toSvg(e.clientX, e.clientY);
+      if (!p) return;
+      const v = viewRef.current;
+      const nk = clamp(v.k * Math.exp(-e.deltaY * 0.0015), 0.5, 4);
+      const r = nk / v.k;
+      viewRef.current = { k: nk, tx: p.x - (p.x - v.tx) * r, ty: p.y - (p.y - v.ty) * r };
+      applyView();
     };
     svg.addEventListener("wheel", onWheelNative, { passive: false });
+    applyView(); // set the initial transform once mounted
     return () => svg.removeEventListener("wheel", onWheelNative);
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applyView]);
 
   const onPointerDown = (e: React.PointerEvent) => {
+    const p = toSvg(e.clientX, e.clientY);
+    if (!p) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
-    const { x, y } = toSvg(e.clientX, e.clientY);
-    pan.current = { x, y, tx: view.tx, ty: view.ty };
+    pan.current = { x: p.x, y: p.y, tx: viewRef.current.tx, ty: viewRef.current.ty };
   };
   const onPointerMove = (e: React.PointerEvent) => {
     if (!pan.current) return;
-    const { x, y } = toSvg(e.clientX, e.clientY);
-    setView((v) => ({ ...v, tx: pan.current!.tx + (x - pan.current!.x), ty: pan.current!.ty + (y - pan.current!.y) }));
+    const p = toSvg(e.clientX, e.clientY);
+    if (!p) return;
+    viewRef.current = { ...viewRef.current, tx: pan.current.tx + (p.x - pan.current.x), ty: pan.current.ty + (p.y - pan.current.y) };
+    applyView();
   };
   const endPan = () => { pan.current = null; };
-  const zoomBy = (f: number) => setView((v) => {
+  const zoomBy = (f: number) => {
+    const v = viewRef.current;
     const nk = clamp(v.k * f, 0.5, 4);
     const cx = VBW / 2, cy = layout.height / 2, r = nk / v.k;
-    return { k: nk, tx: cx - (cx - v.tx) * r, ty: cy - (cy - v.ty) * r };
-  });
-  const reset = () => setView({ k: 1, tx: 0, ty: 0 });
+    viewRef.current = { k: nk, tx: cx - (cx - v.tx) * r, ty: cy - (cy - v.ty) * r };
+    applyView();
+  };
+  const reset = () => { viewRef.current = { k: 1, tx: 0, ty: 0 }; applyView(); };
 
   const dim = (id: string) => (activeIds && !activeIds.has(id) ? 0.14 : 1);
 
@@ -121,7 +132,7 @@ function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { sourc
         </button>
       </div>
       <div className="pointer-events-none absolute left-3 top-3 z-10 rounded bg-surface-900/90 px-2 py-0.5 text-[10px] text-gray-500">
-        {Math.round(view.k * 100)}% · scroll to zoom · drag to pan
+        <span ref={labelRef}>100%</span> · scroll to zoom · drag to pan
       </div>
 
       <svg
@@ -148,7 +159,7 @@ function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { sourc
           </radialGradient>
         </defs>
 
-        <g transform={`translate(${view.tx} ${view.ty}) scale(${view.k})`}>
+        <g ref={gRef}>
           {/* Column bands + headers */}
           {COL_X.map((x, i) => (
             <g key={i}>
