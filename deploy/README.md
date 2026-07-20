@@ -123,6 +123,37 @@ mode, and an optional mounted cert are all env-driven (`FORTRESSQL_USER`,
 `FORTRESSQL_PASSWORD`, `FORTRESSQL_DB`, `FORTRESSQL_SSL_PQC_MODE`,
 `FORTRESSQL_CERT_DIR`).
 
+### Scaling to multiple replicas (active/active)
+
+A single gateway keeps local state (SQLite store, on-disk identity keys, audit
+files) on one `ReadWriteOnce` PVC, so it runs as one replica with a `Recreate`
+rollout. Give it a **shared store** and a **shared signing seed** and it becomes
+fully stateless — no PVC — and scales horizontally:
+
+```sh
+helm install quantawatch deploy/helm/quantawatch \
+  --set fortressql.enabled=true \
+  --set-string fortressql.auth.password=$FORTRESSQL_PASSWORD \
+  --set-string secretEnv.QW_GATEWAY_SEED=$(openssl rand -hex 32) \
+  --set replicaCount=3
+```
+
+At `replicaCount > 1` the chart **requires** both a shared store
+(`fortressql.enabled` or a `postgres://` `store.path`) and
+`secretEnv.QW_GATEWAY_SEED`, and fails the render with a specific message if
+either is missing. With both present it automatically:
+
+- drops the PVC entirely — inventory/sessions/audit live in the shared DB, and
+  the ML-DSA identity is derived from the seed (`identity.seed_env`), so every
+  replica signs as the same gateway;
+- switches the rollout to `RollingUpdate` and adds soft pod anti-affinity to
+  spread replicas across nodes;
+- gives each replica a unique, stable audit **writer id** from its pod name
+  (downward API → `QW_AUDIT_WRITER_ID`), so every pod owns its own hash-chain in
+  the sharded audit log and the periodic checkpoint Merkle-roots across them.
+
+Keep the seed in a real secrets manager — it *is* the gateway's identity.
+
 ## Terraform
 
 ```sh

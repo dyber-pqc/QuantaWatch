@@ -100,8 +100,9 @@ secretEnv:
   # The gateway's ML-DSA signing identity as a hex-encoded 32-byte seed
   # (`openssl rand -hex 32`), referenced from config via `identity.seed_env`.
   # Set this to keep the identity — and therefore the audit chain and CBOM
-  # attestation — stable across pod restarts and rescheduling. Required before
-  # any multi-replica deployment so all replicas sign as the same gateway.
+  # attestation — stable across pod restarts and rescheduling. REQUIRED for
+  # replicaCount > 1 so every replica signs as the same gateway; with it set
+  # (plus a shared store) the gateway is stateless and needs no PVC.
   # QW_GATEWAY_SEED: ""
   # GITHUB_WEBHOOK_SECRET: ""   # per-integration inbound secret
   # OIDC_CLIENT_SECRET: ""
@@ -131,6 +132,11 @@ config: |
   identity:
     session_ttl: 3600
     key_dir: "/app/keys"
+    # Derive the ML-DSA signing identity from this env var (a hex 32-byte seed)
+    # when it is set, so every replica signs as the same gateway. Falls back to
+    # key_dir when unset. Required for replicaCount > 1; supply via
+    # secretEnv.QW_GATEWAY_SEED.
+    seed_env: QW_GATEWAY_SEED
   audit:
     path: "/app/audit"
     merkle_batch_size: 64

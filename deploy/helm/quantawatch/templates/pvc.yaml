@@ -1,4 +1,5 @@
-{{- if .Values.persistence.enabled }}
+{{- /* No PVC when the gateway is stateless (shared store + shared seed). */}}
+{{- if and .Values.persistence.enabled (not (include "quantawatch.stateless" .)) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

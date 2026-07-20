@@ -1,3 +1,12 @@
+{{- /* Guardrails: horizontal scale needs a shared store + a shared identity. */}}
+{{- if gt (int .Values.replicaCount) 1 }}
+  {{- if not (include "quantawatch.sharedStore" .) }}
+    {{- fail "replicaCount > 1 requires a shared store — set fortressql.enabled=true (recommended) or point store.path at a postgres:// URL. A per-pod SQLite file cannot be shared." }}
+  {{- end }}
+  {{- if not (include "quantawatch.hasSeed" .) }}
+    {{- fail "replicaCount > 1 requires a shared signing identity — set secretEnv.QW_GATEWAY_SEED to a hex-encoded 32-byte seed (openssl rand -hex 32), so every replica signs as the same gateway." }}
+  {{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,7 +17,11 @@ metadata:
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
-    type: Recreate          # SQLite: single writer, avoid RWO multi-attach
+    {{- if include "quantawatch.stateless" . }}
+    type: RollingUpdate     # stateless (shared store + seed): rolling is safe
+    {{- else }}
+    type: Recreate          # local state on an RWO PVC: avoid multi-attach
+    {{- end }}
   selector:
     matchLabels:
       {{- include "quantawatch.selectorLabels" . | nindent 6 }}
@@ -37,6 +50,12 @@ spec:
           env:
             - name: RUST_LOG
               value: {{ .Values.gateway.logLevel | quote }}
+            # Unique, stable-per-lifetime audit writer id so each replica owns
+            # its own hash-chain in the shared, sharded audit log.
+            - name: QW_AUDIT_WRITER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             {{- if .Values.fortressql.enabled }}
             # DB password from the FortressQL Secret; referenced by $(...) in
             # QW_STORE_PATH below (so it never lands in the ConfigMap).
@@ -78,7 +97,7 @@ spec:
               mountPath: /app/quantawatch.yaml
               subPath: quantawatch.yaml
               readOnly: true
-            {{- if .Values.persistence.enabled }}
+            {{- if and .Values.persistence.enabled (not (include "quantawatch.stateless" .)) }}
             - name: data
               mountPath: /app/data
               subPath: data
@@ -93,7 +112,7 @@ spec:
         - name: config
           configMap:
             name: {{ include "quantawatch.fullname" . }}-config
-        {{- if .Values.persistence.enabled }}
+        {{- if and .Values.persistence.enabled (not (include "quantawatch.stateless" .)) }}
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "quantawatch.fullname" . }}-data
@@ -102,9 +121,20 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.affinity }}
+      {{- if .Values.affinity }}
       affinity:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.affinity | nindent 8 }}
+      {{- else if gt (int .Values.replicaCount) 1 }}
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "quantawatch.selectorLabels" . | nindent 20 }}
+                    app.kubernetes.io/component: gateway
+                topologyKey: kubernetes.io/hostname
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:

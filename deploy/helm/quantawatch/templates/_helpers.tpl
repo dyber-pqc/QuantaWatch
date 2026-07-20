@@ -65,3 +65,22 @@ postgres://{{ .Values.fortressql.auth.username }}:$(FORTRESSQL_PASSWORD)@{{ incl
 {{- .Values.store.path -}}
 {{- end -}}
 {{- end -}}
+
+{{/* True (non-empty) when the store is shared across replicas (FortressQL, or
+     a postgres:// store path) rather than a per-pod SQLite file. */}}
+{{- define "quantawatch.sharedStore" -}}
+{{- if or .Values.fortressql.enabled (hasPrefix "postgres" .Values.store.path) -}}true{{- end -}}
+{{- end -}}
+
+{{/* True (non-empty) when a shared signing seed is supplied, so every replica
+     derives the same ML-DSA identity (no per-pod key files). */}}
+{{- define "quantawatch.hasSeed" -}}
+{{- if .Values.secretEnv.QW_GATEWAY_SEED -}}true{{- end -}}
+{{- end -}}
+
+{{/* True (non-empty) when the gateway keeps NO local state: shared store (DB
+     holds inventory/sessions/audit) AND a shared seed (identity from the
+     Secret). Such a gateway needs no PVC and can run many replicas. */}}
+{{- define "quantawatch.stateless" -}}
+{{- if and (include "quantawatch.sharedStore" .) (include "quantawatch.hasSeed" .) -}}true{{- end -}}
+{{- end -}}
