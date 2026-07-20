@@ -248,6 +248,15 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/soc2", get(crate::admin::soc2::get_soc2_report))
         // RBAC role -> permission matrix (read-only introspection)
         .route("/api/rbac", get(crate::admin::rbac_api::get_rbac))
+        // Multi-framework compliance controls (CNSA 2.0, NIST 800-53, PCI, FedRAMP)
+        .route(
+            "/api/frameworks",
+            get(crate::admin::frameworks::list_frameworks),
+        )
+        .route(
+            "/api/frameworks/{id}",
+            get(crate::admin::frameworks::get_framework),
+        )
         // Alerts
         .route("/api/alerts", get(crate::admin::alerts_api::list_alerts))
         .route(

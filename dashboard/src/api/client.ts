@@ -27,6 +27,8 @@ import type {
   RemediationTicket,
   Soc2Report,
   RbacReport,
+  FrameworkSummary,
+  FrameworkDetail,
 } from "./types";
 
 // ---- Mock data for development when API is unavailable ----
@@ -316,6 +318,14 @@ export async function fetchSoc2(): Promise<Soc2Report> {
 
 export async function fetchRbac(): Promise<RbacReport> {
   return fetchJSON<RbacReport>("/api/rbac");
+}
+
+export async function fetchFrameworks(): Promise<{ frameworks: FrameworkSummary[]; note: string }> {
+  return fetchJSON("/api/frameworks");
+}
+
+export async function fetchFramework(id: string): Promise<FrameworkDetail> {
+  return fetchJSON<FrameworkDetail>(`/api/frameworks/${id}`);
 }
 
 export async function login(username: string, password: string): Promise<void> {

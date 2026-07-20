@@ -484,3 +484,34 @@ export interface RbacReport {
   actions: string[];
   roles: RbacRole[];
 }
+
+// ---- Multi-framework compliance ----
+
+export type FrameworkStatus = "enforced" | "partial" | "configurable" | "manual";
+
+export interface FrameworkControl {
+  id: string;
+  title: string;
+  required: boolean;
+  status: FrameworkStatus;
+  evidence: string;
+  verify_at: string;
+}
+
+export interface FrameworkSummary {
+  id: string;
+  name: string;
+  description: string;
+  verdict: "PASS" | "GAPS";
+  summary: { total: number; enforced: number; partial: number; configurable: number; manual: number; gaps: number };
+  gapControls: string[];
+}
+
+export interface FrameworkDetail {
+  id: string;
+  name: string;
+  description: string;
+  verdict: "PASS" | "GAPS";
+  summary: { total: number; enforced: number; partial: number; configurable: number; manual: number; gaps: number };
+  controls: FrameworkControl[];
+}

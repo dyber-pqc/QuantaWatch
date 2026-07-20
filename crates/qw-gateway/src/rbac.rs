@@ -19,6 +19,7 @@ pub const RBAC_RESOURCES: &[&str] = &[
     "cbom",
     "compliance",
     "soc2",
+    "frameworks",
     "rbac",
     "governance",
     "slos",

@@ -7,6 +7,7 @@ pub mod cbom;
 pub mod compliance;
 pub mod config_api;
 pub mod evidence;
+pub mod frameworks;
 pub mod governance;
 pub mod graph;
 pub mod integrations_api;
