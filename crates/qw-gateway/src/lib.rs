@@ -11,6 +11,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod oidc;
 pub mod providers;
+pub mod rbac;
 pub mod resilience;
 pub mod router;
 pub mod siem;

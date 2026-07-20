@@ -73,6 +73,12 @@ enum Commands {
         /// Generate a random API key and print it with its config hash
         #[arg(long)]
         api_key: bool,
+        /// Minimum password length policy (SOC2 CC6.1). Default 12.
+        #[arg(long, default_value_t = 12)]
+        min_length: usize,
+        /// Bypass the minimum-length policy (not recommended).
+        #[arg(long)]
+        allow_weak: bool,
     },
     /// Independently verify a QuantaWatch evidence pack's ML-DSA-65 signature
     VerifyEvidence {
@@ -319,7 +325,12 @@ async fn async_main() -> Result<()> {
                 }
             }
         },
-        Commands::HashPassword { password, api_key } => {
+        Commands::HashPassword {
+            password,
+            api_key,
+            min_length,
+            allow_weak,
+        } => {
             if api_key {
                 let key = format!("qw_{}", qw_crypto::random_token(24));
                 let hash = qw_crypto::sha3_256_hex(key.as_bytes());
@@ -332,6 +343,13 @@ async fn async_main() -> Result<()> {
             } else {
                 let password = password
                     .ok_or_else(|| anyhow::anyhow!("provide a password, or use --api-key"))?;
+                if !allow_weak && password.chars().count() < min_length {
+                    return Err(anyhow::anyhow!(
+                        "password is {} chars; policy requires at least {min_length} \
+                         (override with --allow-weak, or set --min-length)",
+                        password.chars().count()
+                    ));
+                }
                 let hash =
                     qw_crypto::hash_password(&password).map_err(|e| anyhow::anyhow!("{e}"))?;
                 println!("Config entry (quantawatch.yaml under auth.users):");

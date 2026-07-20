@@ -2,8 +2,11 @@
 //!
 //! Disabled unless `auth.enabled` is set. When on, every admin request must
 //! carry either a session bearer token (from `/api/auth/login`) or an API key,
-//! and the caller's role must meet the route's required role.
+//! and the caller's permission set must grant the route's required permission
+//! (see [`crate::rbac`]). Failed logins are throttled by a shared-store lockout,
+//! and sessions honor both an absolute TTL and an idle timeout.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::Serialize;
@@ -12,6 +15,7 @@ use qw_crypto::{random_token, sha3_256_hex, verify_password};
 use qw_store::Store;
 
 use crate::config::AuthConfig;
+use crate::rbac::{self, PermissionSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -42,11 +46,23 @@ impl Role {
     }
 }
 
+/// Result of a username/password login attempt.
+pub enum LoginOutcome {
+    Ok { token: String, role: Role, ttl: u64 },
+    BadCredentials,
+    LockedOut { retry_after_secs: u64 },
+}
+
 /// Injected into request extensions after successful auth.
 #[derive(Debug, Clone)]
 pub struct AuthContext {
     pub principal: String,
+    /// Legacy coarse role (custom roles parse to their nearest built-in).
     pub role: Role,
+    /// The raw role name as configured (may be a custom role).
+    pub role_name: String,
+    /// Resolved permission set for this caller (the RBAC decision surface).
+    pub permissions: Arc<PermissionSet>,
     /// Tenant/org used to isolate this caller's data.
     pub org: String,
     /// "session" or "api-key"
@@ -58,11 +74,27 @@ pub struct AuthManager {
     /// Sessions and OIDC states live in the shared store, not in process memory,
     /// so a login on one replica is valid on all of them (and survives restart).
     store: Arc<Store>,
+    /// role name -> resolved permission set (built-ins + config custom roles).
+    role_perms: HashMap<String, Arc<PermissionSet>>,
 }
 
 impl AuthManager {
     pub fn new(config: AuthConfig, store: Arc<Store>) -> Self {
-        Self { config, store }
+        let role_perms = rbac::resolve_roles(&config.roles);
+        Self {
+            config,
+            store,
+            role_perms,
+        }
+    }
+
+    /// Resolve a role name to its permission set; unknown roles get nothing
+    /// (fail closed).
+    fn perms_for(&self, role_name: &str) -> Arc<PermissionSet> {
+        self.role_perms
+            .get(&role_name.to_lowercase())
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Mint a token, persist the session keyed by the token's SHA3-256 hash
@@ -70,7 +102,8 @@ impl AuthManager {
     fn issue_session(&self, username: &str, role: Role, org: &str) -> (String, u64) {
         let token = random_token(32);
         let ttl = self.config.session_ttl_secs;
-        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl as i64);
+        let now = chrono::Utc::now();
+        let expires_at = now + chrono::Duration::seconds(ttl as i64);
         self.store.put_auth_session(
             &sha3_256_hex(token.as_bytes()),
             &qw_store::AuthSession {
@@ -78,6 +111,7 @@ impl AuthManager {
                 role: role.label().to_string(),
                 org: org.to_string(),
                 expires_at,
+                last_used: now,
             },
         );
         (token, ttl)
@@ -112,15 +146,69 @@ impl AuthManager {
         self.config.enabled
     }
 
-    /// Authenticate a username/password and issue a session token.
-    pub fn login(&self, username: &str, password: &str) -> Option<(String, Role, u64)> {
-        let user = self.config.users.iter().find(|u| u.username == username)?;
-        if !verify_password(password, &user.password_hash) {
-            return None;
+    /// Authenticate a username/password and issue a session token. Enforces the
+    /// failed-login lockout when `auth.max_failed_logins` is set.
+    pub fn login(&self, username: &str, password: &str) -> LoginOutcome {
+        let now = chrono::Utc::now();
+
+        // Refuse early if the account is currently locked.
+        if self.config.max_failed_logins > 0 {
+            if let Some(st) = self.store.get_login_lockout(username) {
+                if let Some(until) = st.locked_until {
+                    if until > now {
+                        let secs = (until - now).num_seconds().max(0) as u64;
+                        return LoginOutcome::LockedOut {
+                            retry_after_secs: secs,
+                        };
+                    }
+                }
+            }
         }
+
+        let user = self.config.users.iter().find(|u| u.username == username);
+        let ok = user
+            .map(|u| verify_password(password, &u.password_hash))
+            .unwrap_or(false);
+        if !ok {
+            self.record_login_failure(username, now);
+            return LoginOutcome::BadCredentials;
+        }
+
+        // Success — clear any accumulated failures.
+        self.store.clear_login_lockout(username);
+        let user = user.expect("user present when ok");
         let role = Role::parse(&user.role);
         let (token, ttl) = self.issue_session(username, role, &user.org);
-        Some((token, role, ttl))
+        LoginOutcome::Ok { token, role, ttl }
+    }
+
+    /// Record a failed login and lock the account once the threshold is reached.
+    fn record_login_failure(&self, username: &str, now: chrono::DateTime<chrono::Utc>) {
+        if self.config.max_failed_logins == 0 {
+            return;
+        }
+        let mut st = self
+            .store
+            .get_login_lockout(username)
+            .unwrap_or(qw_store::LockoutState {
+                failures: 0,
+                first_failure_at: now,
+                locked_until: None,
+            });
+        // A lapsed lock (or a fresh streak) resets the counter.
+        if st.locked_until.map(|u| u <= now).unwrap_or(false) {
+            st = qw_store::LockoutState {
+                failures: 0,
+                first_failure_at: now,
+                locked_until: None,
+            };
+        }
+        st.failures += 1;
+        if st.failures >= self.config.max_failed_logins {
+            st.locked_until =
+                Some(now + chrono::Duration::seconds(self.config.lockout_secs as i64));
+        }
+        self.store.put_login_lockout(username, &st);
     }
 
     pub fn logout(&self, token: &str) {
@@ -135,17 +223,36 @@ impl AuthManager {
 
         // Session token first (looked up in the shared store).
         if let Some(session) = self.store.get_auth_session(&hash) {
-            if session.expires_at > chrono::Utc::now() {
-                return Some(AuthContext {
-                    principal: session.username,
-                    role: Role::parse(&session.role),
-                    org: session.org,
-                    method: "session",
-                });
+            let now = chrono::Utc::now();
+            // Absolute TTL.
+            if session.expires_at <= now {
+                self.store.delete_auth_session(&hash);
+                return None;
             }
-            // Expired — drop it.
-            self.store.delete_auth_session(&hash);
-            return None;
+            // Idle timeout: a session unused for too long is invalidated even
+            // within its absolute TTL.
+            if self.config.idle_timeout_secs > 0
+                && (now - session.last_used)
+                    > chrono::Duration::seconds(self.config.idle_timeout_secs as i64)
+            {
+                self.store.delete_auth_session(&hash);
+                return None;
+            }
+            // Refresh last_used, but throttle the write (>60s drift) so we don't
+            // write to the store on every single request.
+            if (now - session.last_used) > chrono::Duration::seconds(60) {
+                let mut updated = session.clone();
+                updated.last_used = now;
+                self.store.touch_auth_session(&hash, &updated);
+            }
+            return Some(AuthContext {
+                principal: session.username,
+                role: Role::parse(&session.role),
+                role_name: session.role.clone(),
+                permissions: self.perms_for(&session.role),
+                org: session.org,
+                method: "session",
+            });
         }
 
         // API key (config-defined; key_hash is the SHA3-256 hash of the key).
@@ -153,6 +260,8 @@ impl AuthManager {
             return Some(AuthContext {
                 principal: format!("apikey:{}", key.name),
                 role: Role::parse(&key.role),
+                role_name: key.role.clone(),
+                permissions: self.perms_for(&key.role),
                 org: key.org.clone(),
                 method: "api-key",
             });

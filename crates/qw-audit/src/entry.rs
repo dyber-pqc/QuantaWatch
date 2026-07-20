@@ -88,6 +88,33 @@ pub enum AuditEvent {
         action: String,
         detail: String,
     },
+    // ---- Access / change events (SOC2 CC6/CC7/CC8) ----
+    LoginSucceeded {
+        principal: String,
+        auth_method: String,
+        client_ip: String,
+    },
+    LoginFailed {
+        username: String,
+        client_ip: String,
+    },
+    Logout {
+        principal: String,
+    },
+    /// An authenticated caller was refused an endpoint by RBAC.
+    AccessDenied {
+        principal: String,
+        method: String,
+        path: String,
+        required_permission: String,
+    },
+    /// A successful mutating admin action (change tracking).
+    AdminAction {
+        principal: String,
+        method: String,
+        path: String,
+        permission: String,
+    },
 }
 
 impl AuditEntry {

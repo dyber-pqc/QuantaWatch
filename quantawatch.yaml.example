@@ -229,9 +229,18 @@ alerts:
 # Roles: viewer (read), operator (+ trigger scans/remediation), admin (+ config).
 auth:
   enabled: false
-  session_ttl_secs: 28800
+  session_ttl_secs: 28800          # absolute session lifetime
+  # Auth hardening (SOC2 CC6.1). Failed-login lockout is stored in the shared
+  # store, so it holds across ALL replicas — not just the one that saw the
+  # failures. Set max_failed_logins: 0 to disable lockout.
+  max_failed_logins: 5             # lock the account after N consecutive failures
+  lockout_secs: 900               # ...for this long (15 min)
+  min_password_length: 12          # policy enforced by `qw hash-password`
+  idle_timeout_secs: 1800          # invalidate a session idle this long (0 = off)
   # Each user/key is isolated to an `org` (tenant). Data (scans, findings,
-  # posture history, remediations, alerts) is partitioned per org in SQLite.
+  # posture history, remediations, alerts) is partitioned per org in the store.
+  # `role` is a built-in role (viewer | auditor | operator | admin) OR a custom
+  # role defined under `roles:` below.
   users:
     - username: admin
       password_hash: "$argon2id$v=19$m=19456,t=2,p=1$...replace-me..."
@@ -242,6 +251,24 @@ auth:
       key_hash: "sha3-256-hex-of-the-key"
       role: operator
       org: default
+  # Fine-grained RBAC: custom roles are permission bundles for least privilege.
+  # A permission is `resource:action` (action = read | write); `*` is a wildcard.
+  # Built-in roles: viewer/auditor = all reads (except config); operator adds all
+  # writes (except config); admin = everything. Resources include scans, findings,
+  # posture, cbom, compliance, soc2, governance, slos, alerts, integrations,
+  # remediation, assets, audit, sessions, report, evidence, risk. Config is
+  # admin-only. See the live map at GET /api/auth/me ("permissions").
+  roles:
+    # A CI gate that may read posture/SLOs/governance and trigger scans — nothing else.
+    ci-gate:
+      - "posture:read"
+      - "slos:read"
+      - "governance:read"
+      - "scans:read"
+      - "scans:write"
+    # A compliance auditor: read-only across the board incl. evidence + SOC2 report.
+    compliance-auditor:
+      - "*:read"
 
 # Declared crypto assets with BUSINESS CONTEXT. Tie an endpoint to the
 # application it serves and how critical that application is, so findings are

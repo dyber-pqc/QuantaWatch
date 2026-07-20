@@ -18,26 +18,94 @@ pub struct LoginRequest {
     pub password: String,
 }
 
+/// Best-effort client IP from the standard proxy headers (the gateway usually
+/// sits behind an ingress/LB). Falls back to "unknown".
+fn client_ip(headers: &HeaderMap) -> String {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 pub async fn login(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(body): Json<LoginRequest>,
 ) -> impl IntoResponse {
+    use crate::auth::LoginOutcome;
+    let ip = client_ip(&headers);
     match state.auth_manager.login(&body.username, &body.password) {
-        Some((token, role, ttl)) => (
-            StatusCode::OK,
-            Json(json!({
-                "token": token,
-                "role": role,
-                "expiresIn": ttl,
-                "username": body.username,
-            })),
-        )
-            .into_response(),
-        None => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "invalid credentials" })),
-        )
-            .into_response(),
+        LoginOutcome::Ok { token, role, ttl } => {
+            state
+                .audit_logger
+                .log(
+                    &body.username,
+                    qw_audit::AuditEvent::LoginSucceeded {
+                        principal: body.username.clone(),
+                        auth_method: "password".to_string(),
+                        client_ip: ip,
+                    },
+                )
+                .await
+                .ok();
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "token": token,
+                    "role": role,
+                    "expiresIn": ttl,
+                    "username": body.username,
+                })),
+            )
+                .into_response()
+        }
+        LoginOutcome::LockedOut { retry_after_secs } => {
+            state
+                .audit_logger
+                .log(
+                    &body.username,
+                    qw_audit::AuditEvent::LoginFailed {
+                        username: body.username.clone(),
+                        client_ip: ip,
+                    },
+                )
+                .await
+                .ok();
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(json!({
+                    "error": "account temporarily locked",
+                    "retryAfterSecs": retry_after_secs,
+                })),
+            )
+                .into_response()
+        }
+        LoginOutcome::BadCredentials => {
+            state
+                .audit_logger
+                .log(
+                    &body.username,
+                    qw_audit::AuditEvent::LoginFailed {
+                        username: body.username.clone(),
+                        client_ip: ip,
+                    },
+                )
+                .await
+                .ok();
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid credentials" })),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -57,6 +125,19 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
 
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     if let Some(token) = bearer(&headers) {
+        // Resolve the principal (for the audit record) before invalidating.
+        if let Some(ctx) = state.auth_manager.validate(&token) {
+            state
+                .audit_logger
+                .log(
+                    &ctx.principal,
+                    qw_audit::AuditEvent::Logout {
+                        principal: ctx.principal.clone(),
+                    },
+                )
+                .await
+                .ok();
+        }
         state.auth_manager.logout(&token);
     }
     Json(json!({ "ok": true }))
@@ -114,7 +195,8 @@ pub async fn me(
         Some(axum::Extension(ctx)) => Json(json!({
             "authEnabled": true,
             "username": ctx.principal,
-            "role": ctx.role,
+            "role": ctx.role_name,
+            "permissions": ctx.permissions.sorted(),
             "via": ctx.method,
         }))
         .into_response(),

@@ -238,6 +238,92 @@ fn decode_and_verify(pk: &[u8], content_hash: &str, signature: &str) -> Result<b
     verify_signature(pk, content_hash.as_bytes(), &sig).map_err(|e| format!("verify error: {e}"))
 }
 
+/// Verify an entire audit log file.
+pub fn verify_audit_log(
+    path: &Path,
+    public_key_bytes: &[u8],
+) -> Result<VerificationResult, AuditError> {
+    let content = std::fs::read_to_string(path)?;
+    let mut result = VerificationResult {
+        valid: true,
+        entries_checked: 0,
+        signatures_valid: 0,
+        chain_intact: true,
+        merkle_roots_valid: 0,
+        errors: Vec::new(),
+        writers_checked: 0,
+        checkpoints_checked: 0,
+    };
+
+    let mut prev_hash = String::new();
+
+    for (line_num, line) in content.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let entry: AuditEntry = serde_json::from_str(line)
+            .map_err(|e| AuditError::ChainViolation(format!("line {}: {e}", line_num + 1)))?;
+
+        result.entries_checked += 1;
+
+        // Verify content hash
+        let computed_hash = sha3_256_hex(&entry.content_bytes());
+        if computed_hash != entry.content_hash {
+            result.valid = false;
+            result.chain_intact = false;
+            result.errors.push(format!(
+                "entry {}: content hash mismatch (computed: {}, stored: {})",
+                entry.sequence, computed_hash, entry.content_hash
+            ));
+            continue;
+        }
+
+        // Verify chain linkage
+        if entry.prev_hash != prev_hash {
+            result.valid = false;
+            result.chain_intact = false;
+            result.errors.push(format!(
+                "entry {}: chain broken (expected prev_hash: {}, got: {})",
+                entry.sequence, prev_hash, entry.prev_hash
+            ));
+        }
+
+        // Verify ML-DSA-65 signature
+        let sig_bytes =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &entry.signature)
+                .map_err(|e| {
+                    AuditError::ChainViolation(format!(
+                        "entry {}: invalid base64 signature: {e}",
+                        entry.sequence
+                    ))
+                })?;
+
+        match verify_signature(public_key_bytes, entry.content_hash.as_bytes(), &sig_bytes) {
+            Ok(true) => {
+                result.signatures_valid += 1;
+            }
+            Ok(false) => {
+                result.valid = false;
+                result
+                    .errors
+                    .push(format!("entry {}: signature invalid", entry.sequence));
+            }
+            Err(e) => {
+                result.valid = false;
+                result.errors.push(format!(
+                    "entry {}: signature verification error: {e}",
+                    entry.sequence
+                ));
+            }
+        }
+
+        prev_hash = entry.content_hash.clone();
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -350,90 +436,4 @@ mod tests {
         assert!(!r.chain_intact);
         assert!(r.errors.iter().any(|e| e.contains("dropped/truncated")));
     }
-}
-
-/// Verify an entire audit log file.
-pub fn verify_audit_log(
-    path: &Path,
-    public_key_bytes: &[u8],
-) -> Result<VerificationResult, AuditError> {
-    let content = std::fs::read_to_string(path)?;
-    let mut result = VerificationResult {
-        valid: true,
-        entries_checked: 0,
-        signatures_valid: 0,
-        chain_intact: true,
-        merkle_roots_valid: 0,
-        errors: Vec::new(),
-        writers_checked: 0,
-        checkpoints_checked: 0,
-    };
-
-    let mut prev_hash = String::new();
-
-    for (line_num, line) in content.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let entry: AuditEntry = serde_json::from_str(line)
-            .map_err(|e| AuditError::ChainViolation(format!("line {}: {e}", line_num + 1)))?;
-
-        result.entries_checked += 1;
-
-        // Verify content hash
-        let computed_hash = sha3_256_hex(&entry.content_bytes());
-        if computed_hash != entry.content_hash {
-            result.valid = false;
-            result.chain_intact = false;
-            result.errors.push(format!(
-                "entry {}: content hash mismatch (computed: {}, stored: {})",
-                entry.sequence, computed_hash, entry.content_hash
-            ));
-            continue;
-        }
-
-        // Verify chain linkage
-        if entry.prev_hash != prev_hash {
-            result.valid = false;
-            result.chain_intact = false;
-            result.errors.push(format!(
-                "entry {}: chain broken (expected prev_hash: {}, got: {})",
-                entry.sequence, prev_hash, entry.prev_hash
-            ));
-        }
-
-        // Verify ML-DSA-65 signature
-        let sig_bytes =
-            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &entry.signature)
-                .map_err(|e| {
-                    AuditError::ChainViolation(format!(
-                        "entry {}: invalid base64 signature: {e}",
-                        entry.sequence
-                    ))
-                })?;
-
-        match verify_signature(public_key_bytes, entry.content_hash.as_bytes(), &sig_bytes) {
-            Ok(true) => {
-                result.signatures_valid += 1;
-            }
-            Ok(false) => {
-                result.valid = false;
-                result
-                    .errors
-                    .push(format!("entry {}: signature invalid", entry.sequence));
-            }
-            Err(e) => {
-                result.valid = false;
-                result.errors.push(format!(
-                    "entry {}: signature verification error: {e}",
-                    entry.sequence
-                ));
-            }
-        }
-
-        prev_hash = entry.content_hash.clone();
-    }
-
-    Ok(result)
 }

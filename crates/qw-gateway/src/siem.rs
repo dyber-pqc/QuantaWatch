@@ -40,11 +40,11 @@ impl SiemFormat {
 fn cef_severity(event_type: &str) -> u8 {
     match event_type {
         "threat_blocked" => 8,
-        "policy_violation" => 6,
-        "finding_created" => 5,
+        "policy_violation" | "access_denied" => 6,
+        "finding_created" | "login_failed" => 5,
         "posture_changed" => 4,
-        "scan_completed" | "integration_sync" => 3,
-        _ => 2, // session lifecycle, request processed
+        "scan_completed" | "integration_sync" | "admin_action" => 3,
+        _ => 2, // session lifecycle, request processed, login/logout
     }
 }
 
@@ -60,6 +60,11 @@ fn event_name(event_type: &str) -> &str {
         "finding_created" => "Crypto finding created",
         "posture_changed" => "Posture score changed",
         "integration_sync" => "Integration sync",
+        "login_succeeded" => "Admin login succeeded",
+        "login_failed" => "Admin login failed",
+        "logout" => "Admin logout",
+        "access_denied" => "Access denied (RBAC)",
+        "admin_action" => "Admin action performed",
         _ => "QuantaWatch event",
     }
 }

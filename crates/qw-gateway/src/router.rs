@@ -94,29 +94,67 @@ async fn auth_layer(
         )
             .into_response(),
         Some(mut ctx) => {
-            let required = crate::auth::required_role(&method, &path);
-            if ctx.role < required {
+            // Identity endpoints only require a valid session (no permission).
+            let identity_only = path.contains("/api/auth/me") || path.contains("/api/auth/logout");
+            let required = crate::rbac::route_permission(&method, &path);
+
+            if !identity_only && !ctx.permissions.allows(&required) {
+                state
+                    .audit_logger
+                    .log(
+                        &ctx.principal,
+                        qw_audit::AuditEvent::AccessDenied {
+                            principal: ctx.principal.clone(),
+                            method: method.to_string(),
+                            path: path.clone(),
+                            required_permission: required.clone(),
+                        },
+                    )
+                    .await
+                    .ok();
                 return (
                     StatusCode::FORBIDDEN,
                     axum::Json(serde_json::json!({
-                        "error": "insufficient role",
-                        "required": required.label(),
-                        "have": ctx.role.label(),
+                        "error": "insufficient permissions",
+                        "required": required,
+                        "role": ctx.role_name,
                     })),
                 )
                     .into_response();
             }
-            // Multi-tenant switching: an admin may view another org's data by
-            // sending X-Tenant. Non-admins are always pinned to their own org.
-            if ctx.role == crate::auth::Role::Admin {
+
+            // Multi-tenant switching: a full admin (config:write) may view
+            // another org's data via X-Tenant. Everyone else is pinned to theirs.
+            if ctx.permissions.allows("config:write") {
                 if let Some(t) = req.headers().get("x-tenant").and_then(|v| v.to_str().ok()) {
                     if !t.is_empty() {
                         ctx.org = t.to_string();
                     }
                 }
             }
+
+            let principal = ctx.principal.clone();
+            let is_write = !identity_only && required.ends_with(":write");
             req.extensions_mut().insert(ctx);
-            next.run(req).await
+            let resp = next.run(req).await;
+
+            // Change tracking (SOC2 CC8): record every successful mutating action.
+            if is_write && resp.status().is_success() {
+                state
+                    .audit_logger
+                    .log(
+                        &principal,
+                        qw_audit::AuditEvent::AdminAction {
+                            principal: principal.clone(),
+                            method: method.to_string(),
+                            path: path.clone(),
+                            permission: required,
+                        },
+                    )
+                    .await
+                    .ok();
+            }
+            resp
         }
     }
 }
@@ -206,6 +244,8 @@ fn admin_routes() -> Router<AppState> {
             "/api/compliance/report",
             get(crate::admin::compliance::get_report),
         )
+        // SOC2 controls report (live-evaluated against config)
+        .route("/api/soc2", get(crate::admin::soc2::get_soc2_report))
         // Alerts
         .route("/api/alerts", get(crate::admin::alerts_api::list_alerts))
         .route(

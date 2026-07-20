@@ -111,6 +111,20 @@ pub struct AuthSession {
     pub role: String,
     pub org: String,
     pub expires_at: DateTime<Utc>,
+    /// Last time this session was used, for idle-timeout enforcement. Defaults to
+    /// now for sessions persisted before this field existed.
+    #[serde(default = "Utc::now")]
+    pub last_used: DateTime<Utc>,
+}
+
+/// Per-username failed-login state for lockout. Stored in the shared store so the
+/// lockout holds across every replica, not just the one that saw the failures.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LockoutState {
+    pub failures: u32,
+    pub first_failure_at: DateTime<Utc>,
+    pub locked_until: Option<DateTime<Utc>>,
 }
 
 /// An observed agent→provider data flow, aggregated from live proxy traffic.
@@ -293,6 +307,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS audit_entries (gseq BIGSERIAL PRIMARY KEY, writer_id TEXT NOT NULL, seq BIGINT NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq));
     CREATE TABLE IF NOT EXISTS audit_checkpoints (checkpoint_seq BIGINT PRIMARY KEY, content_hash TEXT NOT NULL, data TEXT NOT NULL);
@@ -496,6 +511,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS login_lockouts (
+                username TEXT PRIMARY KEY, data TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS oidc_states (
                 state TEXT PRIMARY KEY, expires_at TEXT NOT NULL
             );
@@ -535,6 +553,7 @@ impl Store {
             CREATE TABLE slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
+            CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
             CREATE TABLE audit_entries (gseq INTEGER PRIMARY KEY AUTOINCREMENT, writer_id TEXT NOT NULL, seq INTEGER NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq));
             CREATE TABLE audit_checkpoints (checkpoint_seq INTEGER PRIMARY KEY, content_hash TEXT NOT NULL, data TEXT NOT NULL);
@@ -749,6 +768,41 @@ impl Store {
         self.exec(
             "DELETE FROM auth_sessions WHERE token_hash = ?1",
             &[token_hash],
+        );
+    }
+
+    /// Update a session's `last_used` (and any other blob field) in place, for
+    /// idle-timeout tracking. Does not touch `expires_at`.
+    pub fn touch_auth_session(&self, token_hash: &str, session: &AuthSession) {
+        let json = serde_json::to_string(session).unwrap_or_default();
+        self.exec(
+            "UPDATE auth_sessions SET data = ?1 WHERE token_hash = ?2",
+            &[json.as_str(), token_hash],
+        );
+    }
+
+    // ---- Login lockout (brute-force defense, shared across replicas) ----
+
+    pub fn get_login_lockout(&self, username: &str) -> Option<LockoutState> {
+        self.one_de(
+            "SELECT data FROM login_lockouts WHERE username = ?1",
+            &[username],
+        )
+    }
+
+    pub fn put_login_lockout(&self, username: &str, state: &LockoutState) {
+        let json = serde_json::to_string(state).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO login_lockouts (username, data) VALUES (?1, ?2)",
+            "INSERT INTO login_lockouts (username, data) VALUES ($1, $2) ON CONFLICT (username) DO UPDATE SET data = EXCLUDED.data",
+            &[username, json.as_str()],
+        );
+    }
+
+    pub fn clear_login_lockout(&self, username: &str) {
+        self.exec(
+            "DELETE FROM login_lockouts WHERE username = ?1",
+            &[username],
         );
     }
 
@@ -1258,6 +1312,7 @@ mod tests {
             role: "operator".into(),
             org: a.clone(),
             expires_at: Utc::now() + chrono::Duration::hours(1),
+            last_used: Utc::now(),
         };
         s.put_auth_session(&th, &sess);
         assert_eq!(s.get_auth_session(&th).unwrap().username, "carol");
@@ -1318,6 +1373,7 @@ mod tests {
             role: "admin".into(),
             org: "acme".into(),
             expires_at: Utc::now() + chrono::Duration::hours(1),
+            last_used: Utc::now(),
         };
         s.put_auth_session("h-live", &live);
         assert_eq!(s.get_auth_session("h-live").unwrap().role, "admin");
@@ -1335,12 +1391,52 @@ mod tests {
                 role: "viewer".into(),
                 org: "acme".into(),
                 expires_at: Utc::now() - chrono::Duration::hours(1),
+                last_used: Utc::now(),
             },
         );
         s.put_auth_session("h-live2", &live);
         s.purge_expired_auth(Utc::now());
         assert!(s.get_auth_session("h-expired").is_none(), "expired purged");
         assert!(s.get_auth_session("h-live2").is_some(), "live kept");
+    }
+
+    #[test]
+    fn login_lockout_round_trips_and_clears() {
+        let s = Store::open_in_memory().unwrap();
+        assert!(s.get_login_lockout("mallory").is_none());
+        s.put_login_lockout(
+            "mallory",
+            &LockoutState {
+                failures: 5,
+                first_failure_at: Utc::now(),
+                locked_until: Some(Utc::now() + chrono::Duration::minutes(15)),
+            },
+        );
+        let got = s.get_login_lockout("mallory").expect("lockout present");
+        assert_eq!(got.failures, 5);
+        assert!(got.locked_until.is_some());
+        // A successful login clears it.
+        s.clear_login_lockout("mallory");
+        assert!(s.get_login_lockout("mallory").is_none());
+    }
+
+    #[test]
+    fn touch_updates_last_used() {
+        let s = Store::open_in_memory().unwrap();
+        let t0 = Utc::now() - chrono::Duration::hours(2);
+        let mut sess = AuthSession {
+            username: "dave".into(),
+            role: "viewer".into(),
+            org: "acme".into(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+            last_used: t0,
+        };
+        s.put_auth_session("h-touch", &sess);
+        let now = Utc::now();
+        sess.last_used = now;
+        s.touch_auth_session("h-touch", &sess);
+        let got = s.get_auth_session("h-touch").unwrap();
+        assert!(got.last_used > t0, "last_used advanced");
     }
 
     #[test]

@@ -18,5 +18,6 @@ pub mod report;
 pub mod scans;
 pub mod sessions;
 pub mod slos;
+pub mod soc2;
 pub mod stats;
 pub mod webhooks;

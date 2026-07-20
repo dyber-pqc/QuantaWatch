@@ -214,6 +214,34 @@ pub struct AuthConfig {
     /// Scheduled signed evidence-pack delivery to an external sink (S3/email/webhook).
     #[serde(default)]
     pub evidence_delivery: Option<EvidenceDeliveryConfig>,
+    /// Custom RBAC roles: role name -> permission patterns (`resource:action`,
+    /// `*` wildcards allowed). Layered on top of the built-in viewer/auditor/
+    /// operator/admin roles; a custom role may reuse a built-in name to override.
+    #[serde(default)]
+    pub roles: std::collections::HashMap<String, Vec<String>>,
+    /// Lock an account after this many consecutive failed logins (0 = disabled).
+    #[serde(default = "default_max_failed_logins")]
+    pub max_failed_logins: u32,
+    /// How long a lockout lasts, in seconds.
+    #[serde(default = "default_lockout_secs")]
+    pub lockout_secs: u64,
+    /// Minimum length enforced when hashing a password via `qw hash-password`.
+    #[serde(default = "default_min_password_len")]
+    pub min_password_length: usize,
+    /// Idle-session timeout in seconds: a session unused for this long is
+    /// invalidated even if within its absolute TTL (0 = disabled).
+    #[serde(default)]
+    pub idle_timeout_secs: u64,
+}
+
+fn default_max_failed_logins() -> u32 {
+    5
+}
+fn default_lockout_secs() -> u64 {
+    900
+}
+fn default_min_password_len() -> usize {
+    12
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
