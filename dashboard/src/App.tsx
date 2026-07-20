@@ -13,6 +13,8 @@ import AttackPathsPage from "./pages/AttackPathsPage";
 import AssetsPage from "./pages/AssetsPage";
 import CompliancePage from "./pages/CompliancePage";
 import AlertsPage from "./pages/AlertsPage";
+import Soc2Page from "./pages/Soc2Page";
+import RbacPage from "./pages/RbacPage";
 
 export default function App() {
   return (
@@ -29,6 +31,8 @@ export default function App() {
             <Route path="/assets" element={<AssetsPage />} />
             <Route path="/scans" element={<ScansPage />} />
             <Route path="/compliance" element={<CompliancePage />} />
+            <Route path="/soc2" element={<Soc2Page />} />
+            <Route path="/rbac" element={<RbacPage />} />
             <Route path="/sessions" element={<SessionsPage />} />
             <Route path="/audit" element={<AuditPage />} />
             <Route path="/threats" element={<ThreatsPage />} />

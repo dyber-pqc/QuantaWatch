@@ -97,6 +97,18 @@ impl AuthManager {
             .unwrap_or_default()
     }
 
+    /// Every configured role with its resolved permission patterns, sorted by
+    /// name — powers the RBAC matrix in the dashboard.
+    pub fn rbac_roles(&self) -> Vec<(String, Vec<String>)> {
+        let mut v: Vec<(String, Vec<String>)> = self
+            .role_perms
+            .iter()
+            .map(|(name, ps)| (name.clone(), ps.sorted()))
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+
     /// Mint a token, persist the session keyed by the token's SHA3-256 hash
     /// (never the raw token), and return the token + its TTL in seconds.
     fn issue_session(&self, username: &str, role: Role, org: &str) -> (String, u64) {

@@ -13,6 +13,7 @@ pub mod integrations_api;
 pub mod metrics_api;
 pub mod onboarding;
 pub mod posture;
+pub mod rbac_api;
 pub mod remediation;
 pub mod report;
 pub mod scans;

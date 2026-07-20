@@ -246,6 +246,8 @@ fn admin_routes() -> Router<AppState> {
         )
         // SOC2 controls report (live-evaluated against config)
         .route("/api/soc2", get(crate::admin::soc2::get_soc2_report))
+        // RBAC role -> permission matrix (read-only introspection)
+        .route("/api/rbac", get(crate::admin::rbac_api::get_rbac))
         // Alerts
         .route("/api/alerts", get(crate::admin::alerts_api::list_alerts))
         .route(

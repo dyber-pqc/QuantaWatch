@@ -445,3 +445,42 @@ export interface RemediationTicket {
   createdAt: string;
   updatedAt: string;
 }
+
+// ---- Governance: SOC2 controls report ----
+
+export type Soc2Status = "enforced" | "partial" | "configurable" | "manual";
+
+export interface Soc2Control {
+  criteria: string;
+  title: string;
+  status: Soc2Status;
+  evidence: string;
+  verify_at: string;
+}
+
+export interface Soc2Report {
+  framework: string;
+  note: string;
+  summary: {
+    total: number;
+    enforced: number;
+    partial: number;
+    configurable: number;
+    manual: number;
+  };
+  controls: Soc2Control[];
+}
+
+// ---- Governance: RBAC role -> permission matrix ----
+
+export interface RbacRole {
+  name: string;
+  builtin: boolean;
+  permissions: string[];
+}
+
+export interface RbacReport {
+  resources: string[];
+  actions: string[];
+  roles: RbacRole[];
+}

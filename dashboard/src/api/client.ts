@@ -25,6 +25,8 @@ import type {
   DiscoveredTarget,
   IntegrationScanResult,
   RemediationTicket,
+  Soc2Report,
+  RbacReport,
 } from "./types";
 
 // ---- Mock data for development when API is unavailable ----
@@ -228,6 +230,7 @@ export interface MeInfo {
   authenticated: boolean;
   username?: string;
   role?: string;
+  permissions?: string[];
 }
 
 export interface AuthConfigInfo {
@@ -296,7 +299,23 @@ export async function fetchMe(): Promise<MeInfo> {
   });
   if (res.status === 401) return { authEnabled: true, authenticated: false };
   const d = await res.json();
-  return { authEnabled: !!d.authEnabled, authenticated: !!d.username, username: d.username, role: d.role };
+  return {
+    authEnabled: !!d.authEnabled,
+    authenticated: !!d.username,
+    username: d.username,
+    role: d.role,
+    permissions: d.permissions,
+  };
+}
+
+// ---- Governance: SOC2 controls + RBAC matrix ----
+
+export async function fetchSoc2(): Promise<Soc2Report> {
+  return fetchJSON<Soc2Report>("/api/soc2");
+}
+
+export async function fetchRbac(): Promise<RbacReport> {
+  return fetchJSON<RbacReport>("/api/rbac");
 }
 
 export async function login(username: string, password: string): Promise<void> {
