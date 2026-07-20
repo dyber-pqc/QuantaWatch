@@ -211,6 +211,17 @@ export interface AttackPath {
   channelPqc: PqcStatus;
   nodeIds: string[];
   recommendation: string;
+  exploitability?: number;
+  reachability?: number;
+  killChain?: KillChainStage[];
+}
+
+export interface KillChainStage {
+  stage: number;
+  key: string;
+  label: string;
+  detail: string;
+  status: "active" | "feasible" | "pending" | "blocked" | "na";
 }
 
 export interface GraphSummary {

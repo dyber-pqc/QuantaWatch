@@ -618,15 +618,185 @@ fn summarize(paths: &[AttackPath]) -> serde_json::Value {
     })
 }
 
+// ---- Exploitability + crypto kill-chain ----
+//
+// `score` measures crypto severity; `exploitability` measures how realistically
+// an attacker can *execute* the path — reachability (observed / internet-facing)
+// × data value × channel weakness. A PQC-ready channel scores ~0 exploitability
+// even if adjacent findings look scary, because there is no crypto weakness to
+// exploit. Paths are re-ranked by exploitability so the work list reflects
+// real-world risk, not algorithm severity alone — a story a list-of-findings
+// scanner can't tell.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KillChainStage {
+    stage: u8,
+    key: &'static str,
+    label: &'static str,
+    detail: String,
+    /// active | feasible | pending | blocked | na
+    status: &'static str,
+}
+
+fn data_value_for_label(label: &str) -> f64 {
+    match label {
+        "Broad / Privileged Access" | "Financial Data" => 1.0,
+        "Customer PII" => 0.95,
+        "Production" | "production" => 0.9,
+        "Internal Data" => 0.7,
+        "Source Code" => 0.65,
+        "Codebase" => 0.6,
+        "General Data" => 0.5,
+        "Staging" | "staging" => 0.45,
+        "Public Data" => 0.2,
+        _ => 0.6,
+    }
+}
+
+/// Returns (exploitability, reachability), both 0–100.
+fn exploitability_of(p: &AttackPath) -> (f64, f64) {
+    let reach = if p.observed {
+        1.0
+    } else if p.kind == "external-asset" {
+        0.85
+    } else {
+        0.55
+    };
+    let val = data_value_for_label(&p.data_class);
+    let expl = if p.kind == "access-risk" {
+        // Identity over-privilege is directly exploitable, not channel-gated.
+        100.0 * reach * val * 0.75
+    } else {
+        100.0 * reach * val * channel_weight(&p.channel_pqc)
+    };
+    (expl.round(), (reach * 100.0).round())
+}
+
+fn kill_chain_of(p: &AttackPath) -> Vec<KillChainStage> {
+    if p.kind == "access-risk" {
+        return vec![
+            KillChainStage {
+                stage: 1,
+                key: "acquire",
+                label: "Acquire credential",
+                detail: format!("Compromise the over-privileged key driving {}.", p.agent),
+                status: "feasible",
+            },
+            KillChainStage {
+                stage: 2,
+                key: "pivot",
+                label: "Pivot through agent",
+                detail: format!("Use the agent's authority to reach {}.", p.data_class),
+                status: "feasible",
+            },
+            KillChainStage {
+                stage: 3,
+                key: "impact",
+                label: "Impact",
+                detail: format!("Misuse or exfiltrate {}.", p.data_class),
+                status: "feasible",
+            },
+        ];
+    }
+    let weak = channel_weight(&p.channel_pqc);
+    let harvestable = weak > 0.1;
+    vec![
+        KillChainStage {
+            stage: 1,
+            key: "harvest",
+            label: "Harvest",
+            detail: format!(
+                "Capture ciphertext from the {} channel ({}).",
+                p.provider, p.channel_pqc
+            ),
+            status: if p.observed {
+                "active"
+            } else if harvestable {
+                "feasible"
+            } else {
+                "blocked"
+            },
+        },
+        KillChainStage {
+            stage: 2,
+            key: "store",
+            label: "Store",
+            detail: "Archive the captured traffic for future decryption.".to_string(),
+            status: if p.hndl {
+                "active"
+            } else if harvestable {
+                "feasible"
+            } else {
+                "na"
+            },
+        },
+        KillChainStage {
+            stage: 3,
+            key: "await_crqc",
+            label: "Await CRQC",
+            detail: "Wait for a cryptographically-relevant quantum computer.".to_string(),
+            status: if harvestable { "pending" } else { "blocked" },
+        },
+        KillChainStage {
+            stage: 4,
+            key: "decrypt",
+            label: "Decrypt",
+            detail: "Recover the session key and plaintext once a CRQC exists.".to_string(),
+            status: if weak > 0.5 {
+                "feasible"
+            } else if harvestable {
+                "pending"
+            } else {
+                "blocked"
+            },
+        },
+        KillChainStage {
+            stage: 5,
+            key: "impact",
+            label: "Impact",
+            detail: format!("Exposure of {}.", p.data_class),
+            status: if harvestable { "feasible" } else { "blocked" },
+        },
+    ]
+}
+
+/// Serialize paths with exploitability + kill-chain, re-ranked by exploitability
+/// (crypto severity breaks ties).
+fn enrich_paths(paths: &[AttackPath]) -> Vec<serde_json::Value> {
+    let mut rows: Vec<(f64, f64, serde_json::Value)> = paths
+        .iter()
+        .map(|p| {
+            let (expl, reach) = exploitability_of(p);
+            let mut val = serde_json::to_value(p).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = val.as_object_mut() {
+                obj.insert("exploitability".into(), json!(expl));
+                obj.insert("reachability".into(), json!(reach));
+                obj.insert("killChain".into(), json!(kill_chain_of(p)));
+            }
+            (expl, p.score, val)
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.0.partial_cmp(&a.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    rows.into_iter().map(|(_, _, v)| v).collect()
+}
+
 pub async fn get_attack_paths(
     State(state): State<AppState>,
     ctx: Option<Extension<AuthContext>>,
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
     let g = build_graph(&state, &tenant, &HashMap::new());
-    Json(
-        json!({ "nodes": g.nodes, "edges": g.edges, "paths": g.paths, "summary": summarize(&g.paths) }),
-    )
+    Json(json!({
+        "nodes": g.nodes,
+        "edges": g.edges,
+        "paths": enrich_paths(&g.paths),
+        "summary": summarize(&g.paths),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -682,7 +852,7 @@ pub async fn simulate(
         "mitigatedPaths": mitigated,
         "nodes": sim.nodes,
         "edges": sim.edges,
-        "paths": sim.paths,
+        "paths": enrich_paths(&sim.paths),
         "summary": summarize(&sim.paths),
     }))
 }

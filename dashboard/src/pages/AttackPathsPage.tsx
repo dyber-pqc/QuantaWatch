@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import { fetchAttackPaths, fetchAttackPathTimeline, simulateAttackPaths, fetchIntegrations, remediateAttackPath, openAuthed, BOARD_REPORT_URL } from "../api/client";
-import type { AttackPath, GraphNode, GraphNodeType, SimulateResponse, RemediationTicket } from "../api/types";
+import type { AttackPath, GraphNode, GraphNodeType, SimulateResponse, RemediationTicket, KillChainStage } from "../api/types";
 import { Card, PageHeader, Stat, Spinner, EmptyState, SeverityBadge, PqcBadge } from "../components/ui";
 
 const COL_INDEX: Record<GraphNodeType, number> = {
@@ -223,6 +223,49 @@ function Arrow() {
   return <svg className="h-3 w-3 shrink-0 text-gray-600" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" /></svg>;
 }
 
+const KC_STATUS: Record<KillChainStage["status"], { dot: string; text: string; ring: string }> = {
+  active: { dot: "bg-rose-400", text: "text-rose-300", ring: "ring-rose-400/30" },
+  feasible: { dot: "bg-amber-400", text: "text-amber-300", ring: "ring-amber-400/30" },
+  pending: { dot: "bg-violet-400", text: "text-violet-300", ring: "ring-violet-400/30" },
+  blocked: { dot: "bg-emerald-400", text: "text-emerald-300", ring: "ring-emerald-400/30" },
+  na: { dot: "bg-gray-600", text: "text-gray-500", ring: "ring-white/10" },
+};
+
+function KillChain({ stages }: { stages: KillChainStage[] }) {
+  return (
+    <div className="mt-2.5 rounded-md border border-white/[0.06] bg-black/20 p-2">
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-gray-500">Crypto kill-chain</span>
+      </div>
+      <div className="flex items-stretch gap-1">
+        {stages.map((s, i) => {
+          const m = KC_STATUS[s.status];
+          return (
+            <div key={s.key} className="flex flex-1 items-center gap-1" title={`${s.label}: ${s.detail} (${s.status})`}>
+              <div className={`flex-1 rounded px-1.5 py-1 ring-1 ${m.ring} bg-white/[0.02]`}>
+                <div className="flex items-center gap-1">
+                  <span className={`h-1.5 w-1.5 rounded-full ${m.dot}`} />
+                  <span className={`truncate text-[9.5px] font-semibold ${m.text}`}>{s.label}</span>
+                </div>
+              </div>
+              {i < stages.length - 1 && <span className="text-[9px] text-gray-700">→</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ExploitChip({ value }: { value: number }) {
+  const c = value >= 60 ? "#e76a6e" : value >= 30 ? "#f7894a" : value >= 10 ? "#f2c744" : "#5bb98c";
+  return (
+    <span className="qw-chip" style={{ background: `${c}1f`, color: c }} title="Exploitability — how realistically this path can be executed (reachability × data value × channel weakness)">
+      exploit {Math.round(value)}
+    </span>
+  );
+}
+
 function PathRow({ path, onHover, remediable }: { path: AttackPath; onHover: (id: string | null) => void; remediable: { id: string; displayName: string }[] }) {
   const kind = KIND_LABEL[path.kind];
   const [open, setOpen] = useState(false);
@@ -246,6 +289,7 @@ function PathRow({ path, onHover, remediable }: { path: AttackPath; onHover: (id
                 <span className="mr-0.5 inline-block h-1.5 w-1.5 rounded-full bg-[#5b8def]" />observed · {path.requestCount}
               </span>
             )}
+            {typeof path.exploitability === "number" && <ExploitChip value={path.exploitability} />}
           </div>
 
           {/* Chain flow */}
@@ -256,6 +300,8 @@ function PathRow({ path, onHover, remediable }: { path: AttackPath; onHover: (id
             {path.provider !== "—" && (<><Arrow /><Pill tone="provider">{path.provider}</Pill></>)}
             {path.channelPqc && path.provider !== "—" && <PqcBadge status={path.channelPqc} />}
           </div>
+
+          {path.killChain && path.killChain.length > 0 && <KillChain stages={path.killChain} />}
 
           <p className="mt-2.5 text-[12px] leading-relaxed text-gray-500">{path.recommendation}</p>
 
@@ -335,7 +381,7 @@ export default function AttackPathsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Attack Paths"
-        subtitle="Crypto security graph — observed harvest-now-decrypt-later exposure across identities, agents, providers & assets"
+        subtitle="Crypto security graph — ranked by exploitability (reachability × data value × channel weakness), each with its harvest-now-decrypt-later kill-chain"
         actions={
           <button onClick={() => openAuthed(BOARD_REPORT_URL)} className="qw-btn-primary">
             Board Report (PDF)
