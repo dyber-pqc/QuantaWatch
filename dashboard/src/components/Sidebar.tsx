@@ -1,18 +1,18 @@
 import { Link as RouterLink, useLocation } from "react-router-dom";
 import { NavLink, ScrollArea, Box, Text, Stack, Group } from "@mantine/core";
 
-interface NavItem {
+export interface NavItem {
   to: string;
   label: string;
   icon: React.ReactNode;
 }
 
-interface NavSection {
+export interface NavSection {
   label?: string;
   items: NavItem[];
 }
 
-const navSections: NavSection[] = [
+export const navSections: NavSection[] = [
   {
     items: [
       {
