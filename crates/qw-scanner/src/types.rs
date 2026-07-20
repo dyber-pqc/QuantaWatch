@@ -272,9 +272,9 @@ impl Default for ScannerConfig {
 
 /// A declared data store whose at-rest encryption posture we evaluate. Values
 /// come from config or (later) from cloud connectors; the scanner classifies
-/// them without touching the data itself.
+/// them without touching the data itself. Fields use snake_case to match the
+/// rest of the YAML config (key_wrap, key_age_days, in_transit_tls).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DataStoreDecl {
     pub id: String,
     /// "database" | "object_store" | "volume" | "kms_dataset" | ...
