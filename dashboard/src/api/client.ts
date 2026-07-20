@@ -408,12 +408,44 @@ export async function fetchSessions(): Promise<Session[]> {
   }
 }
 
+// Summarize an AuditEvent's payload (every field except the discriminant
+// `type`) into a readable one-line detail string, e.g.
+// "scanner id: tls · target: api.openai.com:443 · status: Completed".
+function summarizeAuditEvent(event: Record<string, unknown>): string {
+  return Object.entries(event)
+    .filter(([k]) => k !== "type")
+    .map(([k, v]) => `${k.split("_").join(" ")}: ${v}`)
+    .join(" · ");
+}
+
+// The API returns a signed entry shaped as { sequence, timestamp, session_id,
+// content_hash, prev_hash, event: { type, ...fields } } — NOT the flat
+// AuditEntry the table renders. Normalize it here so the page (and the type)
+// stay flat and honest, and so `event_type` is never undefined.
+function normalizeAuditEntry(raw: Record<string, unknown>): AuditEntry {
+  const event = (raw.event as Record<string, unknown> | undefined) ?? {};
+  return {
+    id: (raw.sequence as number) ?? (raw.id as number) ?? 0,
+    timestamp: (raw.timestamp as string) ?? "",
+    event_type: (event.type as string) ?? (raw.event_type as string) ?? "unknown",
+    session_id: (raw.session_id as string) ?? "",
+    details: (raw.details as string) ?? summarizeAuditEvent(event),
+    hash: (raw.content_hash as string) ?? (raw.hash as string) ?? "",
+    prev_hash: (raw.prev_hash as string) ?? "",
+  };
+}
+
 export async function fetchAuditEntries(
   limit: number = 50,
 ): Promise<AuditEntry[]> {
   try {
-    // /api/audit returns { entries, total }.
-    return asArray<AuditEntry>(await fetchJSON(`/api/audit?limit=${limit}`), "entries");
+    // /api/audit returns { entries, total }, oldest-first. Normalize each
+    // signed entry to the flat shape and show newest-first.
+    const raw = asArray<Record<string, unknown>>(
+      await fetchJSON(`/api/audit?limit=${limit}`),
+      "entries",
+    );
+    return raw.map(normalizeAuditEntry).reverse();
   } catch {
     console.warn("API unavailable, using mock audit data");
     return MOCK_AUDIT_ENTRIES.slice(0, limit);
