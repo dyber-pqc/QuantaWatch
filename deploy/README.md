@@ -39,16 +39,19 @@ Two pieces of the single-node story are now solvable from config:
   sticky sessions required. (On SQLite this also means sessions survive a
   restart.)
 
-One piece is still **single-writer**, so running >1 replica today has a caveat:
+- **Sharded audit log.** The PQC-signed, tamper-evident audit trail now supports
+  many concurrent writers. Each replica owns its own hash-chain (keyed by
+  `audit.writer_id`, defaulting to the pod hostname) and appends lock-free to the
+  shared store; a periodic signed **checkpoint** Merkle-roots across every
+  replica's chain tip, giving a global tamper-evident anchor that detects a
+  writer being dropped or its history rewritten. Verify the whole trail with
+  `GET /api/audit/verify`. No single audit-writer, no leader election.
 
-- **The audit hash-chain is single-writer** (sequential by construction). A
-  multi-writer chain needs a design decision (per-replica chains + merge, or a
-  single audit-writer); until then, route audited writes through one replica.
-
-In short: the **shared Postgres store + shared seed** give you a shared inventory,
-shared sessions, and one signing identity across replicas — enough for horizontal
-read scale and failover. The remaining item before unrestricted active/active is
-a multi-writer audit strategy.
+In short: the **shared Postgres store + shared seed** give every replica a shared
+inventory, shared sessions, one signing identity, and one verifiable audit trail
+— enough for active/active horizontal scale and failover. The remaining nuance is
+operational: give each replica a stable, unique `writer_id` (automatic under a
+Kubernetes StatefulSet or Deployment, since the pod hostname is unique).
 
 ## Images
 

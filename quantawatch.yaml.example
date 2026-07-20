@@ -117,9 +117,25 @@ monitor:
   data_exfiltration: true
   pii_detection: true
 
+# PQC-signed, tamper-evident audit log. Entries live in the store (the same
+# SQLite/Postgres backend as scanner.store_path), so with a shared Postgres store
+# every replica writes to ONE verifiable audit trail. The log is SHARDED: each
+# replica owns its own hash-chain (keyed by writer_id, below), and a periodic
+# signed "checkpoint" Merkle-roots across all replicas' chain tips to give a
+# global tamper-evident anchor. Verify with GET /api/audit/verify, or export a
+# bundle (GET /api/audit/export?format=bundle) and check it offline with
+# `qw verify <bundle> --public-key <key>`.
 audit:
-  path: "./audit"
+  path: "./audit"                 # legacy; audit now lives in the store
   merkle_batch_size: 64
+  # This replica's chain id. Must be UNIQUE per replica and STABLE across its
+  # restarts. Empty = QW_AUDIT_WRITER_ID env, else HOSTNAME (the pod name in
+  # Kubernetes), else "node-0" (single node). Two replicas sharing a writer_id
+  # would corrupt each other's chain — leave blank and rely on the hostname.
+  writer_id: ""
+  # How often to commit a global checkpoint across all writers' tips (seconds).
+  # 0 disables periodic checkpoints (a final one is still written at shutdown).
+  checkpoint_interval_secs: 300
 
 policy:
   default: deny

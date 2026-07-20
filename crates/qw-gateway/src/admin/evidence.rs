@@ -76,18 +76,20 @@ pub async fn build_pack(state: &AppState, tenant: &str) -> serde_json::Value {
         .filter(|p| p.severity == "critical")
         .count();
 
-    // 5. Audit-chain verification (tamper-evidence).
+    // 5. Audit-chain verification (tamper-evidence): every per-writer chain plus
+    //    the global checkpoint chain.
     let audit = {
-        let path = std::path::Path::new(&state.config.audit.path).join("audit.jsonl");
+        use qw_audit::AuditBackend;
         let pk = state.gateway_identity.public_key_bytes();
-        match qw_audit::verify_audit_log(&path, &pk) {
-            Ok(r) => json!({
-                "valid": r.valid, "entriesChecked": r.entries_checked,
-                "signaturesValid": r.signatures_valid, "chainIntact": r.chain_intact,
-                "merkleRootsValid": r.merkle_roots_valid, "errors": r.errors,
-            }),
-            Err(e) => json!({ "valid": false, "error": e.to_string() }),
-        }
+        let entries = state.store.list_entries(1_000_000);
+        let checkpoints = state.store.list_checkpoints();
+        let r = qw_audit::verify_sharded(&entries, &checkpoints, &pk);
+        json!({
+            "valid": r.valid, "entriesChecked": r.entries_checked,
+            "writersChecked": r.writers_checked, "checkpointsChecked": r.checkpoints_checked,
+            "signaturesValid": r.signatures_valid, "chainIntact": r.chain_intact,
+            "merkleRootsValid": r.merkle_roots_valid, "errors": r.errors,
+        })
     };
 
     // The pack body (everything that is signed).

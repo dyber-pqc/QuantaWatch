@@ -451,6 +451,16 @@ pub struct AuditConfig {
     pub path: String,
     #[serde(default = "default_merkle_batch")]
     pub merkle_batch_size: usize,
+    /// Stable, per-replica id for this gateway's audit chain (sharded model).
+    /// Must be unique across replicas and stable across restarts of the same
+    /// one. Empty = resolve from `QW_AUDIT_WRITER_ID`, else `HOSTNAME`, else
+    /// `node-0`.
+    #[serde(default)]
+    pub writer_id: String,
+    /// How often to commit a global audit checkpoint (Merkle root over all
+    /// writers' tips). 0 disables periodic checkpoints.
+    #[serde(default = "default_checkpoint_interval")]
+    pub checkpoint_interval_secs: u64,
 }
 
 impl Default for AuditConfig {
@@ -458,6 +468,8 @@ impl Default for AuditConfig {
         Self {
             path: default_audit_path(),
             merkle_batch_size: default_merkle_batch(),
+            writer_id: String::new(),
+            checkpoint_interval_secs: default_checkpoint_interval(),
         }
     }
 }
@@ -467,6 +479,9 @@ fn default_audit_path() -> String {
 }
 fn default_merkle_batch() -> usize {
     64
+}
+fn default_checkpoint_interval() -> u64 {
+    300
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

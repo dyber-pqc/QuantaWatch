@@ -163,6 +163,30 @@ fn main() -> Result<()> {
         .map_err(|_| anyhow::anyhow!("CLI thread panicked"))?
 }
 
+/// Load an audit export for verification: either a JSON bundle
+/// `{"entries":[...],"checkpoints":[...]}` (from `GET /api/audit/export?format=bundle`)
+/// or a JSONL file of raw `AuditEntry` records (checkpoints empty — each
+/// per-writer chain still verifies, just without the global anchor).
+fn load_audit_export(
+    path: &std::path::Path,
+) -> Result<(Vec<qw_audit::AuditEntry>, Vec<qw_audit::AuditCheckpoint>)> {
+    let content = std::fs::read_to_string(path)?;
+    if content.trim_start().starts_with('{') {
+        let v: serde_json::Value = serde_json::from_str(&content)?;
+        let empty = serde_json::Value::Array(Vec::new());
+        let entries = serde_json::from_value(v.get("entries").cloned().unwrap_or(empty.clone()))?;
+        let checkpoints = serde_json::from_value(v.get("checkpoints").cloned().unwrap_or(empty))?;
+        Ok((entries, checkpoints))
+    } else {
+        let entries = content
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<qw_audit::AuditEntry>(l).ok())
+            .collect();
+        Ok((entries, Vec::new()))
+    }
+}
+
 async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -175,17 +199,21 @@ async fn async_main() -> Result<()> {
             println!();
 
             let pk_bytes = std::fs::read(&public_key)?;
-            let result = qw_audit::verify_audit_log(&path, &pk_bytes)?;
+            let (entries, checkpoints) = load_audit_export(&path)?;
+            let result = qw_audit::verify_sharded(&entries, &checkpoints, &pk_bytes);
 
             if result.valid {
                 println!("VERIFIED");
                 println!("  Entries checked:    {}", result.entries_checked);
+                println!("  Writers checked:    {}", result.writers_checked);
+                println!("  Checkpoints checked:{}", result.checkpoints_checked);
                 println!("  Signatures valid:   {}", result.signatures_valid);
                 println!("  Chain intact:       {}", result.chain_intact);
                 println!("  Merkle roots valid: {}", result.merkle_roots_valid);
             } else {
                 println!("VERIFICATION FAILED");
                 println!("  Entries checked:  {}", result.entries_checked);
+                println!("  Writers checked:  {}", result.writers_checked);
                 println!("  Signatures valid: {}", result.signatures_valid);
                 println!("  Chain intact:     {}", result.chain_intact);
                 for error in &result.errors {

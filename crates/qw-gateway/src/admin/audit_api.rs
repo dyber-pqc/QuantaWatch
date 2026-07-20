@@ -7,23 +7,22 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
+use qw_audit::AuditBackend;
+
 use crate::siem::{self, SiemFormat};
 use crate::state::AppState;
 
-/// Read the tail of the audit log as JSON values, newest last.
+/// Upper bound on entries pulled for a full-chain verification pass.
+const VERIFY_CAP: usize = 1_000_000;
+
+/// Read the tail of the audit log as JSON values, newest last (chronological).
 fn read_audit_entries(state: &AppState, limit: usize) -> Vec<serde_json::Value> {
-    let audit_path = std::path::PathBuf::from(&state.config.audit.path).join("audit.jsonl");
-    let Ok(content) = std::fs::read_to_string(&audit_path) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<serde_json::Value> = content
-        .lines()
-        .rev()
-        .take(limit)
-        .filter_map(|line| serde_json::from_str(line).ok())
-        .collect();
-    entries.reverse(); // chronological — SIEMs expect ascending sequence
-    entries
+    state
+        .store
+        .list_entries(limit)
+        .iter()
+        .filter_map(|e| serde_json::to_value(e).ok())
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -48,6 +47,17 @@ pub async fn export_audit(
     Query(q): Query<ExportQuery>,
 ) -> impl IntoResponse {
     let format_str = q.format.unwrap_or_else(|| "jsonl".to_string());
+
+    // `bundle` = raw entries + checkpoints, the format `qw verify` consumes for
+    // full sharded verification (per-writer chains + global checkpoint chain).
+    if format_str == "bundle" {
+        let entries = state
+            .store
+            .list_entries(q.limit.unwrap_or(10_000).min(1_000_000));
+        let checkpoints = state.store.list_checkpoints();
+        return Json(json!({ "entries": entries, "checkpoints": checkpoints })).into_response();
+    }
+
     let Some(format) = SiemFormat::parse(&format_str) else {
         return (
             StatusCode::BAD_REQUEST,
@@ -71,44 +81,30 @@ pub async fn export_audit(
 }
 
 pub async fn list_audit(State(state): State<AppState>) -> impl IntoResponse {
-    let audit_path = std::path::PathBuf::from(&state.config.audit.path).join("audit.jsonl");
-
-    let entries: Vec<serde_json::Value> = match std::fs::read_to_string(&audit_path) {
-        Ok(content) => {
-            content
-                .lines()
-                .rev()
-                .take(100) // Last 100 entries
-                .filter_map(|line| serde_json::from_str(line).ok())
-                .collect()
-        }
-        Err(_) => vec![],
-    };
-
+    let entries = read_audit_entries(&state, 100);
     Json(json!({
         "entries": entries,
         "total": entries.len(),
     }))
 }
 
+/// `POST /api/audit/verify` — verify every per-writer chain plus the global
+/// checkpoint chain that anchors them.
 pub async fn verify_audit(State(state): State<AppState>) -> impl IntoResponse {
-    let audit_path = std::path::PathBuf::from(&state.config.audit.path).join("audit.jsonl");
     let public_key = state.gateway_identity.public_key_bytes();
+    let entries = state.store.list_entries(VERIFY_CAP);
+    let checkpoints = state.store.list_checkpoints();
 
-    match qw_audit::verify_audit_log(&audit_path, &public_key) {
-        Ok(result) => Json(json!({
-            "valid": result.valid,
-            "entries_checked": result.entries_checked,
-            "signatures_valid": result.signatures_valid,
-            "chain_intact": result.chain_intact,
-            "merkle_roots_valid": result.merkle_roots_valid,
-            "errors": result.errors,
-        }))
-        .into_response(),
-        Err(e) => Json(json!({
-            "valid": false,
-            "error": format!("{e}"),
-        }))
-        .into_response(),
-    }
+    let result = qw_audit::verify_sharded(&entries, &checkpoints, &public_key);
+    Json(json!({
+        "valid": result.valid,
+        "entries_checked": result.entries_checked,
+        "writers_checked": result.writers_checked,
+        "checkpoints_checked": result.checkpoints_checked,
+        "signatures_valid": result.signatures_valid,
+        "chain_intact": result.chain_intact,
+        "merkle_roots_valid": result.merkle_roots_valid,
+        "errors": result.errors,
+    }))
+    .into_response()
 }

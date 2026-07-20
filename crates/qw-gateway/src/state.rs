@@ -82,14 +82,6 @@ impl AppState {
         };
         let security_monitor = Arc::new(SecurityMonitor::new(blocking_threshold));
 
-        // Initialize audit logger
-        let audit_dir = std::path::PathBuf::from(&config.audit.path);
-        let audit_logger = Arc::new(AuditLogger::new(
-            audit_dir,
-            gateway_identity.clone(),
-            config.audit.merkle_batch_size,
-        )?);
-
         // Initialize provider registry
         let provider_registry = Arc::new(providers::build_registry(&config));
 
@@ -130,6 +122,19 @@ impl AppState {
                 Store::open(&scan_dir.join("quantawatch.db"))?
             },
         );
+
+        // Initialize the audit logger. Entries are sharded per replica and live
+        // in the shared store, so multiple replicas write to one verifiable
+        // audit trail (anchored by periodic global checkpoints).
+        let writer_id = resolve_writer_id(&config.audit.writer_id);
+        tracing::info!(writer_id = %writer_id, "audit chain writer id");
+        let audit_logger = Arc::new(AuditLogger::new(
+            store.clone(),
+            gateway_identity.clone(),
+            config.audit.merkle_batch_size,
+            writer_id,
+            std::time::Duration::from_secs(config.audit.checkpoint_interval_secs),
+        ));
 
         // Initialize alert manager (persists to the store)
         let alert_manager = Arc::new(crate::alerts::AlertManager::new(
@@ -181,6 +186,23 @@ impl AppState {
             metrics: Arc::new(crate::metrics::Metrics::new()),
         })
     }
+}
+
+/// Resolve this replica's audit writer id (sharded audit chain). Must be unique
+/// per replica and stable across restarts of the same one. Explicit config wins,
+/// else `QW_AUDIT_WRITER_ID`, else the hostname, else `node-0` (single node).
+fn resolve_writer_id(configured: &str) -> String {
+    if !configured.trim().is_empty() {
+        return configured.trim().to_string();
+    }
+    for var in ["QW_AUDIT_WRITER_ID", "HOSTNAME", "COMPUTERNAME"] {
+        if let Ok(v) = std::env::var(var) {
+            if !v.trim().is_empty() {
+                return v.trim().to_string();
+            }
+        }
+    }
+    "node-0".to_string()
 }
 
 /// Build YAML policy string from the gateway config's agents section.

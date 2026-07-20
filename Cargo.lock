@@ -2552,8 +2552,10 @@ name = "qw-store"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "postgres",
+ "qw-audit",
  "qw-cbom",
  "qw-crypto",
  "qw-integrations",

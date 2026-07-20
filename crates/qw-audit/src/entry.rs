@@ -3,13 +3,24 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// A single audit log entry with PQC signature.
+///
+/// Entries are sharded by `writer_id`: each gateway replica owns one chain, and
+/// `sequence`/`prev_hash` are scoped to that writer. `writer_id` is committed in
+/// the content hash, so an entry cannot be re-attributed to another writer's
+/// chain without detection. Global tamper-evidence across writers comes from the
+/// periodic [`crate::AuditCheckpoint`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
     pub id: String,
     pub timestamp: DateTime<Utc>,
+    /// Which replica's chain this belongs to.
+    #[serde(default)]
+    pub writer_id: String,
+    /// Position within this writer's chain (0-based).
     pub sequence: u64,
     pub session_id: String,
     pub event: AuditEvent,
+    /// Content hash of the previous entry in THIS writer's chain.
     pub prev_hash: String,
     pub content_hash: String,
     pub signature: String,
@@ -85,6 +96,7 @@ impl AuditEntry {
         let content = serde_json::json!({
             "id": self.id,
             "timestamp": self.timestamp.to_rfc3339(),
+            "writer_id": self.writer_id,
             "sequence": self.sequence,
             "session_id": self.session_id,
             "event": self.event,
@@ -94,10 +106,17 @@ impl AuditEntry {
     }
 
     /// Create a new entry from an event (without hash/signature, which are added by the logger).
-    pub fn new(sequence: u64, session_id: &str, event: AuditEvent, prev_hash: &str) -> Self {
+    pub fn new(
+        writer_id: &str,
+        sequence: u64,
+        session_id: &str,
+        event: AuditEvent,
+        prev_hash: &str,
+    ) -> Self {
         Self {
             id: Uuid::new_v4().to_string(),
             timestamp: Utc::now(),
+            writer_id: writer_id.to_string(),
             sequence,
             session_id: session_id.to_string(),
             event,

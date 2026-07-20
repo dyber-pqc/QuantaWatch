@@ -14,6 +14,7 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
+use qw_audit::{AuditBackend, AuditCheckpoint, AuditEntry, WriterTip};
 use qw_cbom::PostureSnapshot;
 use qw_crypto::sha3_256_hex;
 use qw_integrations::RemediationTicket;
@@ -293,6 +294,9 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS audit_entries (gseq BIGSERIAL PRIMARY KEY, writer_id TEXT NOT NULL, seq BIGINT NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq));
+    CREATE TABLE IF NOT EXISTS audit_checkpoints (checkpoint_seq BIGINT PRIMARY KEY, content_hash TEXT NOT NULL, data TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS idx_audit_writer ON audit_entries(writer_id, seq);
     CREATE INDEX IF NOT EXISTS idx_scans_tenant ON scans(tenant);
     CREATE INDEX IF NOT EXISTS idx_findings_tenant ON findings(tenant);
     CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
@@ -495,6 +499,14 @@ impl Store {
             CREATE TABLE IF NOT EXISTS oidc_states (
                 state TEXT PRIMARY KEY, expires_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS audit_entries (
+                gseq INTEGER PRIMARY KEY AUTOINCREMENT, writer_id TEXT NOT NULL, seq INTEGER NOT NULL,
+                content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq)
+            );
+            CREATE TABLE IF NOT EXISTS audit_checkpoints (
+                checkpoint_seq INTEGER PRIMARY KEY, content_hash TEXT NOT NULL, data TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_audit_writer ON audit_entries(writer_id, seq);
             CREATE INDEX IF NOT EXISTS idx_scans_tenant ON scans(tenant);
             CREATE INDEX IF NOT EXISTS idx_findings_tenant ON findings(tenant);
             CREATE INDEX IF NOT EXISTS idx_findings_scan ON findings(scan_id);
@@ -524,6 +536,8 @@ impl Store {
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
+            CREATE TABLE audit_entries (gseq INTEGER PRIMARY KEY AUTOINCREMENT, writer_id TEXT NOT NULL, seq INTEGER NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq));
+            CREATE TABLE audit_checkpoints (checkpoint_seq INTEGER PRIMARY KEY, content_hash TEXT NOT NULL, data TEXT NOT NULL);
             "#,
         )?;
         Ok(Self::sqlite(conn))
@@ -961,6 +975,226 @@ impl Store {
     }
 }
 
+/// Postgres advisory-lock key that serializes global audit-checkpoint creation
+/// across replicas (arbitrary constant, unique to this use).
+const AUDIT_CHECKPOINT_LOCK: i64 = 0x5157_4155_4449_5401;
+
+/// Sharded audit backend: entry appends are lock-free (each replica writes only
+/// its own `writer_id` rows), checkpoint creation is serialized.
+impl AuditBackend for Store {
+    fn append_entry(&self, entry: &AuditEntry) {
+        let json = serde_json::to_string(entry).unwrap_or_default();
+        let seq = entry.sequence as i64;
+        match &*self.backend {
+            Backend::Sqlite(m) => {
+                let conn = m.lock().unwrap();
+                if let Err(e) = conn.execute(
+                    "INSERT INTO audit_entries (writer_id, seq, content_hash, data) VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![entry.writer_id, seq, entry.content_hash, json],
+                ) {
+                    tracing::warn!(error = %e, "audit append failed");
+                }
+            }
+            Backend::Pg(pool) => {
+                if let Ok(mut c) = pool.get() {
+                    if let Err(e) = c.execute(
+                        "INSERT INTO audit_entries (writer_id, seq, content_hash, data) VALUES ($1, $2, $3, $4)",
+                        &[&entry.writer_id, &seq, &entry.content_hash, &json],
+                    ) {
+                        tracing::warn!(error = %e, "audit append failed");
+                    }
+                }
+            }
+        }
+    }
+
+    fn writer_tip(&self, writer_id: &str) -> Option<(u64, String)> {
+        match &*self.backend {
+            Backend::Sqlite(m) => {
+                let conn = m.lock().unwrap();
+                conn.query_row(
+                    "SELECT seq, content_hash FROM audit_entries WHERE writer_id = ?1 ORDER BY seq DESC LIMIT 1",
+                    [writer_id],
+                    |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?)),
+                )
+                .ok()
+            }
+            Backend::Pg(pool) => {
+                let mut c = pool.get().ok()?;
+                let rows = c
+                    .query(
+                        "SELECT seq, content_hash FROM audit_entries WHERE writer_id = $1 ORDER BY seq DESC LIMIT 1",
+                        &[&writer_id],
+                    )
+                    .ok()?;
+                rows.first()
+                    .map(|row| (row.get::<_, i64>(0) as u64, row.get::<_, String>(1)))
+            }
+        }
+    }
+
+    fn all_writer_tips(&self) -> Vec<WriterTip> {
+        let sql = "SELECT writer_id, seq, content_hash FROM audit_entries e \
+                   WHERE seq = (SELECT MAX(seq) FROM audit_entries WHERE writer_id = e.writer_id)";
+        match &*self.backend {
+            Backend::Sqlite(m) => {
+                let conn = m.lock().unwrap();
+                let Ok(mut stmt) = conn.prepare(sql) else {
+                    return Vec::new();
+                };
+                let Ok(rows) = stmt.query_map([], |r| {
+                    Ok(WriterTip {
+                        writer_id: r.get::<_, String>(0)?,
+                        seq: r.get::<_, i64>(1)? as u64,
+                        content_hash: r.get::<_, String>(2)?,
+                    })
+                }) else {
+                    return Vec::new();
+                };
+                rows.filter_map(|r| r.ok()).collect()
+            }
+            Backend::Pg(pool) => {
+                let Ok(mut c) = pool.get() else {
+                    return Vec::new();
+                };
+                match c.query(sql, &[]) {
+                    Ok(rows) => rows
+                        .iter()
+                        .map(|row| WriterTip {
+                            writer_id: row.get::<_, String>(0),
+                            seq: row.get::<_, i64>(1) as u64,
+                            content_hash: row.get::<_, String>(2),
+                        })
+                        .collect(),
+                    Err(_) => Vec::new(),
+                }
+            }
+        }
+    }
+
+    fn list_entries(&self, limit: usize) -> Vec<AuditEntry> {
+        // Most-recent `limit` rows, returned oldest-first (newest last).
+        let sql = format!(
+            "SELECT data FROM (SELECT data, gseq FROM audit_entries ORDER BY gseq DESC LIMIT {limit}) sub ORDER BY gseq ASC"
+        );
+        self.query_col(&sql, &[])
+            .iter()
+            .filter_map(|j| serde_json::from_str(j).ok())
+            .collect()
+    }
+
+    fn list_checkpoints(&self) -> Vec<AuditCheckpoint> {
+        self.list_de(
+            "SELECT data FROM audit_checkpoints ORDER BY checkpoint_seq ASC",
+            &[],
+        )
+    }
+
+    fn latest_checkpoint(&self) -> Option<AuditCheckpoint> {
+        self.one_de(
+            "SELECT data FROM audit_checkpoints ORDER BY checkpoint_seq DESC LIMIT 1",
+            &[],
+        )
+    }
+
+    fn commit_checkpoint(
+        &self,
+        build: &dyn Fn(u64, &str, Vec<WriterTip>) -> AuditCheckpoint,
+    ) -> Option<AuditCheckpoint> {
+        match &*self.backend {
+            Backend::Sqlite(m) => {
+                // Single process: holding the connection lock makes read+insert atomic.
+                let conn = m.lock().unwrap();
+                let (next_seq, prev_hash) = conn
+                    .query_row(
+                        "SELECT checkpoint_seq, content_hash FROM audit_checkpoints ORDER BY checkpoint_seq DESC LIMIT 1",
+                        [],
+                        |r| Ok((r.get::<_, i64>(0)? as u64 + 1, r.get::<_, String>(1)?)),
+                    )
+                    .unwrap_or((0, String::new()));
+                let tips = {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT writer_id, seq, content_hash FROM audit_entries e \
+                             WHERE seq = (SELECT MAX(seq) FROM audit_entries WHERE writer_id = e.writer_id)",
+                        )
+                        .ok()?;
+                    let rows = stmt
+                        .query_map([], |r| {
+                            Ok(WriterTip {
+                                writer_id: r.get::<_, String>(0)?,
+                                seq: r.get::<_, i64>(1)? as u64,
+                                content_hash: r.get::<_, String>(2)?,
+                            })
+                        })
+                        .ok()?;
+                    rows.filter_map(|r| r.ok()).collect::<Vec<_>>()
+                };
+                if tips.is_empty() {
+                    return None;
+                }
+                let cp = build(next_seq, &prev_hash, tips);
+                let json = serde_json::to_string(&cp).unwrap_or_default();
+                conn.execute(
+                    "INSERT INTO audit_checkpoints (checkpoint_seq, content_hash, data) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![cp.checkpoint_seq as i64, cp.content_hash, json],
+                )
+                .ok()?;
+                Some(cp)
+            }
+            Backend::Pg(pool) => {
+                let mut c = pool.get().ok()?;
+                // Serialize checkpoint creation across replicas.
+                if c.execute("SELECT pg_advisory_lock($1)", &[&AUDIT_CHECKPOINT_LOCK])
+                    .is_err()
+                {
+                    return None;
+                }
+                let result = (|| {
+                    let latest = c
+                        .query(
+                            "SELECT checkpoint_seq, content_hash FROM audit_checkpoints ORDER BY checkpoint_seq DESC LIMIT 1",
+                            &[],
+                        )
+                        .ok()?;
+                    let (next_seq, prev_hash) = match latest.first() {
+                        Some(row) => (row.get::<_, i64>(0) as u64 + 1, row.get::<_, String>(1)),
+                        None => (0u64, String::new()),
+                    };
+                    let tip_rows = c
+                        .query(
+                            "SELECT writer_id, seq, content_hash FROM audit_entries e \
+                             WHERE seq = (SELECT MAX(seq) FROM audit_entries WHERE writer_id = e.writer_id)",
+                            &[],
+                        )
+                        .ok()?;
+                    let tips: Vec<WriterTip> = tip_rows
+                        .iter()
+                        .map(|row| WriterTip {
+                            writer_id: row.get::<_, String>(0),
+                            seq: row.get::<_, i64>(1) as u64,
+                            content_hash: row.get::<_, String>(2),
+                        })
+                        .collect();
+                    if tips.is_empty() {
+                        return None;
+                    }
+                    let cp = build(next_seq, &prev_hash, tips);
+                    let json = serde_json::to_string(&cp).unwrap_or_default();
+                    c.execute(
+                        "INSERT INTO audit_checkpoints (checkpoint_seq, content_hash, data) VALUES ($1, $2, $3)",
+                        &[&(cp.checkpoint_seq as i64), &cp.content_hash, &json],
+                    )
+                    .ok()?;
+                    Some(cp)
+                })();
+                let _ = c.execute("SELECT pg_advisory_unlock($1)", &[&AUDIT_CHECKPOINT_LOCK]);
+                result
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1035,6 +1269,40 @@ mod tests {
         assert!(s.consume_oidc_state(&st).is_some());
         assert!(s.consume_oidc_state(&st).is_none(), "consumed once");
 
+        // Sharded audit tables on Postgres: BIGINT per-writer seq + the
+        // advisory-locked checkpoint path (unique writer id per run).
+        {
+            use qw_audit::AuditEvent;
+            let wa = format!("wa-{}", uuid::Uuid::new_v4());
+            let ev = |n: u64| AuditEvent::SessionClosed {
+                total_requests: n,
+                total_tokens: 0,
+            };
+            let mut e0 = AuditEntry::new(&wa, 0, "s", ev(0), "");
+            e0.content_hash = sha3_256_hex(&e0.content_bytes());
+            e0.signature = "sig".into();
+            s.append_entry(&e0);
+            let mut e1 = AuditEntry::new(&wa, 1, "s", ev(1), &e0.content_hash);
+            e1.content_hash = sha3_256_hex(&e1.content_bytes());
+            e1.signature = "sig".into();
+            s.append_entry(&e1);
+
+            assert_eq!(s.writer_tip(&wa), Some((1, e1.content_hash.clone())));
+            assert!(s
+                .all_writer_tips()
+                .iter()
+                .any(|t| t.writer_id == wa && t.seq == 1));
+
+            let cp = s.commit_checkpoint(&|seq, prev, tips| {
+                let mut c = AuditCheckpoint::build(seq, prev, tips, Utc::now());
+                c.signature = "sig".into();
+                c
+            });
+            assert!(cp.is_some(), "checkpoint committed on Postgres");
+            let latest = s.latest_checkpoint().expect("latest checkpoint");
+            assert_eq!(latest.checkpoint_seq, cp.unwrap().checkpoint_seq);
+        }
+
         // Cross-tenant isolation.
         assert!(s.recent_alerts(&b, 10).is_empty());
         assert!(s.list_flows(&b).is_empty());
@@ -1107,6 +1375,79 @@ mod tests {
         s.record_posture("t", &snap(50.0));
         s.record_posture("t", &snap(50.0));
         assert_eq!(s.posture_history("t", 100).len(), 1);
+    }
+
+    fn b64(b: &[u8]) -> String {
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b)
+    }
+
+    /// Sharded audit: two writers append to one store, a global checkpoint
+    /// commits both tips, and the whole thing verifies (per-writer chains +
+    /// checkpoint chain) under the gateway's ML-DSA key.
+    #[test]
+    fn audit_sharded_roundtrip_and_verify() {
+        use qw_audit::{verify_sharded, AuditEvent};
+
+        let s = Store::open_in_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let id = qw_crypto::GatewayIdentity::load_or_generate(dir.path()).unwrap();
+        let pk = id.public_key_bytes();
+
+        let mk = |writer: &str, seq: u64, prev: &str| -> AuditEntry {
+            let ev = AuditEvent::SessionClosed {
+                total_requests: seq,
+                total_tokens: 0,
+            };
+            let mut e = AuditEntry::new(writer, seq, "s", ev, prev);
+            e.content_hash = sha3_256_hex(&e.content_bytes());
+            e.signature = b64(&id.sign(e.content_hash.as_bytes()).unwrap());
+            e
+        };
+
+        let a0 = mk("nodeA", 0, "");
+        s.append_entry(&a0);
+        let a1 = mk("nodeA", 1, &a0.content_hash);
+        s.append_entry(&a1);
+        let b0 = mk("nodeB", 0, "");
+        s.append_entry(&b0);
+
+        // Resume + tips.
+        assert_eq!(s.writer_tip("nodeA"), Some((1, a1.content_hash.clone())));
+        assert_eq!(s.writer_tip("nodeB"), Some((0, b0.content_hash.clone())));
+        assert_eq!(s.all_writer_tips().len(), 2);
+
+        // Commit a global checkpoint: the store assigns seq + prev + tips under
+        // its lock; the closure signs.
+        let cp = s
+            .commit_checkpoint(&|seq, prev, tips| {
+                let mut cp = AuditCheckpoint::build(seq, prev, tips, Utc::now());
+                cp.signature = b64(&id.sign(cp.content_hash.as_bytes()).unwrap());
+                cp
+            })
+            .expect("checkpoint committed");
+        assert_eq!(cp.checkpoint_seq, 0);
+        assert_eq!(cp.tips.len(), 2);
+
+        // Full sharded verification.
+        let entries = s.list_entries(1000);
+        let checkpoints = s.list_checkpoints();
+        assert_eq!(entries.len(), 3);
+        let r = verify_sharded(&entries, &checkpoints, &pk);
+        assert!(r.valid, "expected valid, errors: {:?}", r.errors);
+        assert_eq!(r.writers_checked, 2);
+        assert_eq!(r.checkpoints_checked, 1);
+        assert_eq!(r.signatures_valid, 3);
+
+        // A second checkpoint chains to the first.
+        let cp2 = s
+            .commit_checkpoint(&|seq, prev, tips| {
+                let mut cp = AuditCheckpoint::build(seq, prev, tips, Utc::now());
+                cp.signature = b64(&id.sign(cp.content_hash.as_bytes()).unwrap());
+                cp
+            })
+            .expect("second checkpoint");
+        assert_eq!(cp2.checkpoint_seq, 1);
+        assert_eq!(cp2.prev_checkpoint_hash, cp.content_hash);
     }
 
     #[test]
