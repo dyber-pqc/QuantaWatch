@@ -226,6 +226,21 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/**
+ * Coerce an API response to an array. List endpoints are inconsistent — some
+ * return a bare array, others `{ <key>: [...], total }`. This makes every
+ * array-typed fetcher shape-safe so a page can never call `.filter`/`.map` on
+ * an object and crash the shell.
+ */
+function asArray<T>(d: unknown, key: string): T[] {
+  if (Array.isArray(d)) return d as T[];
+  if (d && typeof d === "object") {
+    const v = (d as Record<string, unknown>)[key];
+    if (Array.isArray(v)) return v as T[];
+  }
+  return [];
+}
+
 // ---- Auth API ----
 
 export interface MeInfo {
@@ -385,9 +400,8 @@ export async function openAuthed(url: string, filename?: string): Promise<void> 
 
 export async function fetchSessions(): Promise<Session[]> {
   try {
-    // /api/sessions returns { sessions, total }; older callers expect an array.
-    const d = await fetchJSON<Session[] | { sessions?: Session[] }>("/api/sessions");
-    return Array.isArray(d) ? d : (d.sessions ?? []);
+    // /api/sessions returns { sessions, total }.
+    return asArray<Session>(await fetchJSON("/api/sessions"), "sessions");
   } catch {
     console.warn("API unavailable, using mock session data");
     return MOCK_SESSIONS;
@@ -398,7 +412,8 @@ export async function fetchAuditEntries(
   limit: number = 50,
 ): Promise<AuditEntry[]> {
   try {
-    return await fetchJSON<AuditEntry[]>(`/api/audit?limit=${limit}`);
+    // /api/audit returns { entries, total }.
+    return asArray<AuditEntry>(await fetchJSON(`/api/audit?limit=${limit}`), "entries");
   } catch {
     console.warn("API unavailable, using mock audit data");
     return MOCK_AUDIT_ENTRIES.slice(0, limit);
@@ -434,10 +449,12 @@ export async function fetchStats(): Promise<Stats> {
 
 export async function fetchThreats(): Promise<Threat[]> {
   try {
-    return await fetchJSON<Threat[]>("/api/threats");
+    // Accepts a bare array or { threats } — and returns [] on failure rather
+    // than mock data (showing fake threats in a security product is worse than
+    // showing none).
+    return asArray<Threat>(await fetchJSON("/api/threats"), "threats");
   } catch {
-    console.warn("API unavailable, using mock threat data");
-    return MOCK_THREATS;
+    return [];
   }
 }
 
@@ -575,8 +592,8 @@ export async function fetchAgents(): Promise<AgentPostureResponse> {
 
 export async function fetchPostureHistory(limit: number = 100): Promise<PostureSnapshot[]> {
   try {
-    const res = await fetchJSON<{ history: PostureSnapshot[] }>(`/api/posture/history?limit=${limit}`);
-    return res.history;
+    // /api/posture/history returns { history, total }.
+    return asArray<PostureSnapshot>(await fetchJSON(`/api/posture/history?limit=${limit}`), "history");
   } catch {
     console.warn("API unavailable, returning empty posture history");
     return [];
