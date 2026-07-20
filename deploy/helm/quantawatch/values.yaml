@@ -57,6 +57,9 @@ fortressql:
     tag: ""             # "" -> latest
     pullPolicy: IfNotPresent
   pqcMode: hybrid       # off | hybrid | pqc-only (pqc-only rejects classical clients)
+  # The image runs as the "fortress" user (uid/gid 1000). An init container
+  # chowns the mounted data volume to this uid so initdb can set permissions.
+  uid: 1000
   fsGroup: 1000
   auth:
     username: quantawatch

@@ -56,8 +56,26 @@ spec:
       {{- end }}
       securityContext:
         fsGroup: {{ .Values.fortressql.fsGroup }}
+      initContainers:
+        # The PVC mounts root-owned; the fortress user (uid 1000) can't chmod it,
+        # so initdb fails. Chown the data dir to fortress before the DB starts.
+        - name: init-perms
+          image: {{ include "quantawatch.fortressqlImage" . }}
+          imagePullPolicy: {{ .Values.fortressql.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - chown -R {{ .Values.fortressql.uid }}:{{ .Values.fortressql.fsGroup }} /var/lib/fortressql/data
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: fortressql-data
+              mountPath: /var/lib/fortressql/data
       containers:
         - name: fortressql
+          securityContext:
+            runAsUser: {{ .Values.fortressql.uid }}
+            runAsGroup: {{ .Values.fortressql.fsGroup }}
           image: {{ include "quantawatch.fortressqlImage" . }}
           imagePullPolicy: {{ .Values.fortressql.image.pullPolicy }}
           env:
