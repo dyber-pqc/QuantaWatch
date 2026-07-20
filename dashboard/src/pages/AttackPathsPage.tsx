@@ -272,15 +272,17 @@ const KC: Record<KillChainStage["status"], { bar: string; text: string }> = {
 function KillChain({ stages }: { stages: KillChainStage[] }) {
   return (
     <Box mt="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "rgba(0,0,0,0.15)" }}>
-      <Text ff="monospace" fz={9} fw={600} tt="uppercase" c="dimmed" px={8} pt={6} style={{ letterSpacing: "0.08em" }}>Crypto kill-chain</Text>
-      <div style={{ display: "grid", gridTemplateColumns: `repeat(${stages.length}, 1fr)`, gap: 4, padding: 6 }}>
-        {stages.map((s) => {
+      <Text ff="monospace" fz={9} fw={600} tt="uppercase" c="dimmed" px={8} pt={6} pb={2} style={{ letterSpacing: "0.08em" }}>Crypto kill-chain</Text>
+      <div style={{ padding: "2px 6px 6px", display: "flex", flexDirection: "column", gap: 2 }}>
+        {stages.map((s, i) => {
           const m = KC[s.status];
           return (
-            <Box key={s.key} title={`${s.label}: ${s.detail} (${s.status})`}
-              style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0, padding: "4px 6px", borderRadius: 2, borderLeft: `2px solid ${m.bar}`, background: `color-mix(in srgb, ${m.bar} 12%, transparent)` }}>
-              <Box w={6} h={6} style={{ borderRadius: "50%", background: m.bar, flexShrink: 0 }} />
-              <Text fz={9.5} fw={600} truncate style={{ color: m.text }}>{s.label}</Text>
+            <Box key={s.key} title={s.detail}
+              style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 8px", borderRadius: 2, borderLeft: `2px solid ${m.bar}`, background: `color-mix(in srgb, ${m.bar} 10%, transparent)` }}>
+              <Text ff="monospace" fz={9} c="dimmed" style={{ width: 12, flexShrink: 0 }}>{i + 1}</Text>
+              <Box w={7} h={7} style={{ borderRadius: "50%", background: m.bar, flexShrink: 0 }} />
+              <Text fz={11.5} fw={600} style={{ color: m.text }}>{s.label}</Text>
+              <Text ff="monospace" fz={9} tt="uppercase" style={{ marginLeft: "auto", color: m.bar, letterSpacing: "0.04em", flexShrink: 0 }}>{s.status === "na" ? "n/a" : s.status}</Text>
             </Box>
           );
         })}
