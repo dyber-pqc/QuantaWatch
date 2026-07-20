@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import { fetchAttackPaths, fetchAttackPathTimeline, simulateAttackPaths, fetchIntegrations, remediateAttackPath, openAuthed, BOARD_REPORT_URL } from "../api/client";
@@ -59,16 +59,40 @@ function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { sourc
     return { x: p.x, y: p.y };
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    const { x, y } = toSvg(e.clientX, e.clientY);
-    const factor = Math.exp(-e.deltaY * 0.0015);
-    setView((v) => {
-      const nk = clamp(v.k * factor, 0.5, 4);
-      const r = nk / v.k;
-      return { k: nk, tx: x - (x - v.tx) * r, ty: y - (y - v.ty) * r };
-    });
-  };
+  // Native, NON-passive wheel listener. React binds onWheel as passive, so
+  // preventDefault() there is ignored and the page scrolls/zooms underneath —
+  // which reads as the page freezing/reloading. Attaching manually with
+  // { passive: false } lets us actually stop the browser's default.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    let raf = 0;
+    const onWheelNative = (e: WheelEvent) => {
+      e.preventDefault();
+      if (raf) return; // coalesce to one update per frame
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const p = pt.matrixTransform(ctm.inverse());
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setView((v) => {
+          const nk = clamp(v.k * factor, 0.5, 4);
+          const r = nk / v.k;
+          return { k: nk, tx: p.x - (p.x - v.tx) * r, ty: p.y - (p.y - v.ty) * r };
+        });
+      });
+    };
+    svg.addEventListener("wheel", onWheelNative, { passive: false });
+    return () => {
+      svg.removeEventListener("wheel", onWheelNative);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+
   const onPointerDown = (e: React.PointerEvent) => {
     (e.target as Element).setPointerCapture?.(e.pointerId);
     const { x, y } = toSvg(e.clientX, e.clientY);
@@ -93,13 +117,13 @@ function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { sourc
     <div className="relative overflow-hidden rounded-lg border border-white/[0.06] bg-gradient-to-b from-surface-950/60 to-surface-900/30">
       {/* Zoom controls */}
       <div className="absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-lg border border-white/10 bg-surface-900/80 p-1 backdrop-blur">
-        <button onClick={() => zoomBy(1.3)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title="Zoom in">
+        <button type="button" onClick={() => zoomBy(1.3)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title="Zoom in">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" d="M12 5v14M5 12h14" /></svg>
         </button>
-        <button onClick={() => zoomBy(1 / 1.3)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title="Zoom out">
+        <button type="button" onClick={() => zoomBy(1 / 1.3)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title="Zoom out">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" d="M5 12h14" /></svg>
         </button>
-        <button onClick={reset} className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-white/10" title="Reset view">
+        <button type="button" onClick={reset} className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-white/10" title="Reset view">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M20.25 20.25v-4.5m0 4.5h-4.5m4.5 0L15 15M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75v4.5m0-4.5h-4.5m4.5 0L15 9" /></svg>
         </button>
       </div>
@@ -113,7 +137,6 @@ function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { sourc
         className="w-full cursor-grab touch-none active:cursor-grabbing"
         style={{ height: 480 }}
         preserveAspectRatio="xMidYMid meet"
-        onWheel={onWheel}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPan}
