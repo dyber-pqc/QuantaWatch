@@ -40,6 +40,9 @@ pub enum TargetType {
     SshEndpoint,
     /// A host to sweep for open, crypto-relevant TCP ports (network discovery).
     NetworkHost,
+    /// An endpoint that upgrades to TLS mid-session via STARTTLS (PostgreSQL
+    /// SSLRequest, SMTP STARTTLS). `metadata.protocol` selects the dialect.
+    StartTlsEndpoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +114,21 @@ impl ScanTarget {
             target_type: TargetType::NetworkHost,
             address: address.to_string(),
             metadata: HashMap::new(),
+        }
+    }
+
+    /// A STARTTLS target. `protocol` is "postgres" | "smtp" | "" (empty infers
+    /// from the port).
+    pub fn starttls(address: &str, protocol: &str) -> Self {
+        let mut metadata = HashMap::new();
+        if !protocol.is_empty() {
+            metadata.insert("protocol".to_string(), protocol.to_string());
+        }
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            target_type: TargetType::StartTlsEndpoint,
+            address: address.to_string(),
+            metadata,
         }
     }
 }
@@ -281,6 +299,8 @@ pub struct ScannerConfig {
     pub ssh: SshScannerConfig,
     #[serde(default)]
     pub network: NetworkScannerConfig,
+    #[serde(default)]
+    pub starttls: StartTlsScannerConfig,
 }
 
 impl Default for ScannerConfig {
@@ -295,6 +315,31 @@ impl Default for ScannerConfig {
             data_at_rest: DataAtRestScannerConfig::default(),
             ssh: SshScannerConfig::default(),
             network: NetworkScannerConfig::default(),
+            starttls: StartTlsScannerConfig::default(),
+        }
+    }
+}
+
+/// STARTTLS fingerprinting (PostgreSQL SSLRequest, SMTP STARTTLS). Only probes
+/// declared targets — negotiates the plaintext upgrade, then reads the TLS.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StartTlsScannerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    /// Declared targets as "protocol://host:port" or "host:port" (protocol
+    /// inferred from the port). e.g. "postgres://db.internal:5432".
+    #[serde(default)]
+    pub targets: Vec<String>,
+}
+
+impl Default for StartTlsScannerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            timeout_secs: 10,
+            targets: vec![],
         }
     }
 }
@@ -361,8 +406,10 @@ fn default_connect_timeout() -> u64 {
 fn default_crypto_ports() -> Vec<u16> {
     vec![
         22,    // SSH
+        25,    // SMTP (STARTTLS)
         443,   // HTTPS / TLS
         465,   // SMTPS
+        587,   // SMTP submission (STARTTLS)
         636,   // LDAPS
         853,   // DNS-over-TLS
         993,   // IMAPS

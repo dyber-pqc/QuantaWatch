@@ -14,6 +14,7 @@
 
 use crate::registry::{Scanner, ScannerError};
 use crate::scanners::ssh::SshScanner;
+use crate::scanners::starttls::StartTlsScanner;
 use crate::scanners::tls::TlsScanner;
 use crate::types::*;
 use async_trait::async_trait;
@@ -31,11 +32,23 @@ fn is_immediate_tls_port(port: u16) -> bool {
     matches!(port, 443 | 465 | 636 | 853 | 993 | 995 | 6443 | 8443)
 }
 
+/// Ports that speak a STARTTLS-style upgrade we can fingerprint. Returns the
+/// protocol dialect for the STARTTLS scanner.
+fn starttls_protocol(port: u16) -> Option<&'static str> {
+    match port {
+        5432 => Some("postgres"),
+        25 | 587 | 2525 => Some("smtp"),
+        _ => None,
+    }
+}
+
 fn service_name(port: u16) -> &'static str {
     match port {
         22 => "ssh",
+        25 => "smtp",
         443 => "https",
         465 => "smtps",
+        587 => "smtp-submission",
         636 => "ldaps",
         853 => "dns-over-tls",
         993 => "imaps",
@@ -169,6 +182,11 @@ impl Scanner for NetworkScanner {
             timeout_secs: self.config.connect_timeout_ms.div_ceil(1000).max(3),
             targets: vec![],
         });
+        let starttls = StartTlsScanner::new(StartTlsScannerConfig {
+            enabled: true,
+            timeout_secs: self.config.connect_timeout_ms.div_ceil(1000).max(3),
+            targets: vec![],
+        });
 
         for port in open_ports {
             let addr = format!("{host}:{port}");
@@ -180,6 +198,12 @@ impl Scanner for NetworkScanner {
                 match tls.scan(&ScanTarget::tls(&addr)).await {
                     Ok(r) => findings.extend(r.findings),
                     Err(e) => tracing::debug!(%addr, error = %e, "TLS fingerprint failed"),
+                }
+            } else if let Some(proto) = starttls_protocol(port) {
+                // Postgres / SMTP: upgrade via STARTTLS, then fingerprint.
+                match starttls.scan(&ScanTarget::starttls(&addr, proto)).await {
+                    Ok(r) => findings.extend(r.findings),
+                    Err(e) => tracing::debug!(%addr, error = %e, "STARTTLS fingerprint failed"),
                 }
             } else {
                 // Open, but needs protocol-specific negotiation to fingerprint.

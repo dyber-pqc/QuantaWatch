@@ -116,5 +116,10 @@ pub fn build_scanner_registry(config: &ScannerConfig) -> ScannerRegistry {
             config.network.clone(),
         )));
     }
+    if config.starttls.enabled {
+        registry.register(Box::new(crate::scanners::starttls::StartTlsScanner::new(
+            config.starttls.clone(),
+        )));
+    }
     registry
 }
