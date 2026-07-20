@@ -1,24 +1,24 @@
 @import "tailwindcss";
 
 /* ============================================================
-   QuantaWatch — Microsoft Teams (Fluent) native-app theme
-   Teams purple accent · Segoe UI · soft elevation · pill nav
+   QuantaWatch — Microsoft / Azure "Fluent" theme
+   Azure blue accent · Public Sans + Cascadia · boxy · flat tiles
    ============================================================ */
 
 @theme {
-  /* Accent: Teams purple (Fluent brand) */
-  --color-brand-50: #eeeefb;
-  --color-brand-100: #dcdcf6;
-  --color-brand-200: #c5c6f3;
-  --color-brand-300: #a6a8f0;
-  --color-brand-400: #8b8ef0;
-  --color-brand-500: #5b5fc7;
-  --color-brand-600: #4f52b2;
-  --color-brand-700: #444791;
-  --color-brand-800: #383a7c;
-  --color-brand-900: #2f3168;
+  /* Accent: Azure / Fluent 2 blue */
+  --color-brand-50: #eaf3fc;
+  --color-brand-100: #d3e6f9;
+  --color-brand-200: #a6ccf2;
+  --color-brand-300: #75b0eb;
+  --color-brand-400: #4f98e5;
+  --color-brand-500: #0f6cbd;
+  --color-brand-600: #0c5aa0;
+  --color-brand-700: #094a86;
+  --color-brand-800: #063a6b;
+  --color-brand-900: #052e54;
 
-  /* Secondary */
+  /* Secondary (quantum / HNDL accent) */
   --color-quantum-300: #c4b5fd;
   --color-quantum-400: #a78bfa;
   --color-quantum-500: #8b5cf6;
@@ -26,66 +26,66 @@
   --color-quantum-700: #6d28d9;
 
   /* primary alias = brand */
-  --color-primary-50: #eeeefb;
-  --color-primary-100: #dcdcf6;
-  --color-primary-200: #c5c6f3;
-  --color-primary-300: #a6a8f0;
-  --color-primary-400: #8b8ef0;
-  --color-primary-500: #5b5fc7;
-  --color-primary-600: #4f52b2;
-  --color-primary-700: #444791;
-  --color-primary-800: #383a7c;
-  --color-primary-900: #2f3168;
-  --color-primary-950: #23244d;
+  --color-primary-50: #eaf3fc;
+  --color-primary-100: #d3e6f9;
+  --color-primary-200: #a6ccf2;
+  --color-primary-300: #75b0eb;
+  --color-primary-400: #4f98e5;
+  --color-primary-500: #0f6cbd;
+  --color-primary-600: #0c5aa0;
+  --color-primary-700: #094a86;
+  --color-primary-800: #063a6b;
+  --color-primary-900: #052e54;
+  --color-primary-950: #041f3a;
 
-  --color-accent-400: #a78bfa;
-  --color-accent-500: #8b5cf6;
-  --color-accent-600: #7c3aed;
+  --color-accent-400: #4f98e5;
+  --color-accent-500: #0f6cbd;
+  --color-accent-600: #0c5aa0;
 
   /* Status */
-  --color-threat-low: #5bb98c;
+  --color-threat-low: #0ab86e;
   --color-threat-medium: #f2c744;
   --color-threat-high: #f7894a;
-  --color-threat-critical: #e76a6e;
+  --color-threat-critical: #e5484d;
 
-  /* Teams dark-theme neutrals */
-  --color-surface-50: #e8e8e8;
-  --color-surface-100: #d0d0d0;
-  --color-surface-700: #484646;
-  --color-surface-800: #3b3a39;
-  --color-surface-850: #333231;
-  --color-surface-900: #2d2c2c;
-  --color-surface-950: #1f1f1f;
+  /* Azure Portal dark neutrals */
+  --color-surface-50: #e8eaed;
+  --color-surface-100: #c5c8cd;
+  --color-surface-700: #4c515a;
+  --color-surface-800: #393e46;
+  --color-surface-850: #22262d;
+  --color-surface-900: #2b2f37;
+  --color-surface-950: #1a1d23;
 
-  --font-display: "Segoe UI", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-sans: "Segoe UI", "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+  --font-display: "Public Sans Variable", "Segoe UI", system-ui, sans-serif;
+  --font-sans: "Public Sans Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", ui-monospace, "Consolas", monospace;
 }
 
 /* ---- Base canvas ---- */
 html, body {
-  background-color: #1f1f1f;
+  background-color: #1a1d23;
 }
 
 body {
   font-family: var(--font-sans);
   font-size: 14px;
-  color: #e6e6e6;
+  color: #e8eaed;
 }
 
 /* ---- Component utilities (Fluent) ---- */
 @layer components {
-  /* Elevated card with soft Fluent shadow */
+  /* Flat, bordered tile (Azure/Fluent) — boxy 2px, no shadow */
   .qw-card {
-    @apply rounded-lg border border-white/[0.06] bg-surface-900;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.24), 0 0 2px rgba(0, 0, 0, 0.22);
+    @apply border border-white/[0.08] bg-surface-900;
+    border-radius: 2px;
   }
 
   .qw-card-hover {
-    @apply transition-shadow duration-150;
+    @apply transition-colors duration-150;
   }
   .qw-card-hover:hover {
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.28), 0 0 2px rgba(0, 0, 0, 0.24);
+    border-color: color-mix(in srgb, var(--color-brand-400) 45%, transparent);
   }
 
   /* Plain accent text */
@@ -93,9 +93,10 @@ body {
     color: var(--color-brand-300);
   }
 
-  /* Buttons — Fluent rounded */
+  /* Buttons — boxy Fluent */
   .qw-btn-primary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-brand-500 px-4 py-1.5 text-[14px] font-semibold text-white transition-colors duration-150;
+    @apply inline-flex items-center justify-center gap-1.5 bg-brand-500 px-4 py-1.5 text-[13px] font-semibold text-white transition-colors duration-150;
+    border-radius: 2px;
   }
   .qw-btn-primary:hover {
     @apply bg-brand-600;
@@ -104,20 +105,24 @@ body {
     @apply opacity-50;
   }
   .qw-btn-ghost {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-white/15 bg-transparent px-4 py-1.5 text-[14px] font-semibold text-gray-200 transition-colors duration-150;
+    @apply inline-flex items-center justify-center gap-1.5 border border-white/15 bg-transparent px-4 py-1.5 text-[13px] font-semibold text-gray-200 transition-colors duration-150;
+    border-radius: 2px;
   }
   .qw-btn-ghost:hover {
     @apply bg-white/5 text-white;
   }
 
-  /* Section label */
+  /* Section label — mono eyebrow */
   .qw-eyebrow {
-    @apply text-[11px] font-semibold uppercase tracking-wide text-gray-400;
+    @apply text-[11px] font-semibold uppercase text-gray-400;
+    font-family: var(--font-mono);
+    letter-spacing: 0.06em;
   }
 
-  /* Chip */
+  /* Chip — boxy */
   .qw-chip {
-    @apply inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[12px] font-semibold;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[12px] font-semibold;
+    border-radius: 2px;
   }
 }
 
@@ -125,11 +130,11 @@ body {
 ::-webkit-scrollbar { width: 12px; height: 12px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: #5a5856;
-  border-radius: 8px;
-  border: 3px solid #1f1f1f;
+  background: #4c515a;
+  border-radius: 0;
+  border: 3px solid #1a1d23;
 }
-::-webkit-scrollbar-thumb:hover { background: #6b6968; }
+::-webkit-scrollbar-thumb:hover { background: #5f6672; }
 
 /* ---- Animations ---- */
 @keyframes qw-fade-up {

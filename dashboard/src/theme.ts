@@ -1,73 +1,73 @@
 import { createTheme, type MantineColorsTuple } from "@mantine/core";
 
-// Distinctive violet primary (not default Mantine blue) + tuned charcoal dark
-// surfaces, so the app reads as a bespoke security console, not stock Mantine.
+// Microsoft / Azure "Fluent" identity: Azure blue accent, boxy 2px corners,
+// flat bordered surfaces, Public Sans UI + Cascadia Code for data.
 const brand: MantineColorsTuple = [
-  "#f2f0ff",
-  "#e0dcff",
-  "#bfb4ff",
-  "#9d8bfb",
-  "#8067f4",
-  "#6d4ef0",
-  "#5f3fe4",
-  "#4d31c4",
-  "#3d2aa0",
-  "#2c1d78",
+  "#eaf3fc",
+  "#d3e6f9",
+  "#a6ccf2",
+  "#75b0eb",
+  "#4f98e5",
+  "#2b8ae0",
+  "#0f6cbd", // Fluent 2 primary
+  "#0c5aa0",
+  "#094a86",
+  "#063a6b",
 ];
 
-// Cool signal color for "safe / PQC" accents and positive deltas.
 const signal: MantineColorsTuple = [
-  "#e6fcf5",
-  "#c7f5e6",
-  "#95ecd0",
-  "#5fe0b8",
-  "#37d6a5",
-  "#1fd099",
-  "#0dbf8a",
-  "#00a876",
-  "#009167",
-  "#007a56",
+  "#e6faf1",
+  "#c6f2df",
+  "#93e6c1",
+  "#5cd9a2",
+  "#33cf8b",
+  "#1ac97d",
+  "#0ab86e", // Fluent green
+  "#009a5b",
+  "#00814c",
+  "#00693d",
 ];
 
-// Warm near-black charcoals with a faint violet bias (index 9 = deepest bg).
+// Flat neutral grays (Azure Portal dark surfaces) — index 9 = deepest.
 const dark: MantineColorsTuple = [
-  "#e9e9f0",
-  "#c6c6d2",
-  "#9c9cae",
-  "#74748a",
-  "#52525f",
-  "#3b3b47",
-  "#2c2c37",
-  "#1f1f27",
-  "#17171d",
-  "#101014",
+  "#e8eaed",
+  "#c5c8cd",
+  "#9a9ea6",
+  "#71767f",
+  "#4c515a",
+  "#393e46",
+  "#2b2f37", // tiles/cards
+  "#22262d", // panels
+  "#1a1d23", // app bg
+  "#12141a",
 ];
 
 export const theme = createTheme({
   primaryColor: "brand",
-  primaryShade: { light: 5, dark: 5 },
+  primaryShade: { light: 6, dark: 6 },
   colors: { brand, signal, dark },
-  white: "#f4f4f8",
-  black: "#101014",
-  defaultRadius: "md",
-  fontFamily:
-    'InterVariable, "Segoe UI", system-ui, -apple-system, sans-serif',
-  fontFamilyMonospace:
-    '"IBM Plex Mono", ui-monospace, "Cascadia Code", monospace',
+  white: "#f3f4f6",
+  black: "#12141a",
+  // Boxy: crisp 2px corners everywhere.
+  defaultRadius: 2,
+  radius: { xs: "2px", sm: "2px", md: "3px", lg: "4px", xl: "6px" },
+  fontFamily: '"Public Sans Variable", "Segoe UI", system-ui, -apple-system, sans-serif',
+  fontFamilyMonospace: '"Cascadia Code", ui-monospace, "Consolas", monospace',
   headings: {
-    fontFamily: '"Space Grotesk Variable", "Segoe UI", system-ui, sans-serif',
-    fontWeight: "650",
+    fontFamily: '"Public Sans Variable", "Segoe UI", system-ui, sans-serif',
+    fontWeight: "700",
     sizes: {
-      h1: { fontSize: "1.9rem", lineHeight: "1.15" },
-      h2: { fontSize: "1.4rem", lineHeight: "1.2" },
-      h3: { fontSize: "1.1rem", lineHeight: "1.25" },
+      h1: { fontSize: "1.75rem", lineHeight: "1.2" },
+      h2: { fontSize: "1.3rem", lineHeight: "1.25" },
+      h3: { fontSize: "1.05rem", lineHeight: "1.3" },
     },
   },
+  // Flatten — Fluent tiles are bordered, not shadowed.
+  shadows: { xs: "none", sm: "none", md: "none", lg: "none", xl: "none" },
   cursorType: "pointer",
-  defaultGradient: { from: "brand.6", to: "brand.4", deg: 135 },
+  defaultGradient: { from: "brand.6", to: "brand.5", deg: 135 },
   components: {
-    Paper: {
-      defaultProps: { withBorder: true },
-    },
+    Paper: { defaultProps: { withBorder: true, shadow: undefined } },
+    Card: { defaultProps: { withBorder: true, shadow: undefined } },
   },
 });

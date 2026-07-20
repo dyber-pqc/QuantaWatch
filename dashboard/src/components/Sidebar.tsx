@@ -180,7 +180,7 @@ export default function Sidebar() {
           w={28}
           h={28}
           style={{
-            borderRadius: 8,
+            borderRadius: 2,
             display: "grid",
             placeItems: "center",
             background: "linear-gradient(135deg, var(--mantine-color-brand-5), var(--mantine-color-brand-7))",
@@ -216,7 +216,7 @@ export default function Sidebar() {
                 variant="light"
                 color="brand"
                 fw={600}
-                style={{ borderRadius: 8, marginBottom: 2, fontSize: 13 }}
+                style={{ borderRadius: 2, marginBottom: 2, fontSize: 13 }}
               />
             ))}
           </Box>

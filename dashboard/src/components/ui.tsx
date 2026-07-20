@@ -57,7 +57,7 @@ export function scoreText(score: number): string {
 // ---- Card ----
 export function Card({ children, className = "", hover = false }: { children: ReactNode; className?: string; hover?: boolean }) {
   return (
-    <Paper withBorder radius="md" bg="dark.6" className={`${hover ? "qw-hover" : ""} ${className}`} style={{ borderColor: "var(--mantine-color-dark-4)" }}>
+    <Paper withBorder radius="xs" bg="dark.6" className={`${hover ? "qw-hover" : ""} ${className}`} style={{ borderColor: "var(--mantine-color-dark-4)" }}>
       {children}
     </Paper>
   );
@@ -86,7 +86,7 @@ const ACCENT: Record<string, string> = {
 };
 export function Stat({ label, value, accent = "brand", sub }: { label: string; value: ReactNode; accent?: "brand" | "violet" | "emerald" | "rose" | "amber"; sub?: ReactNode }) {
   return (
-    <Paper withBorder radius="md" bg="dark.6" px="md" py="sm" style={{ borderColor: "var(--mantine-color-dark-4)" }}>
+    <Paper withBorder radius="xs" bg="dark.6" px="md" py="sm" style={{ borderColor: "var(--mantine-color-dark-4)" }}>
       <Text ff="monospace" size="10px" fw={600} c="dimmed" tt="uppercase" style={{ letterSpacing: "0.08em" }}>{label}</Text>
       <Text fz="1.6rem" fw={700} ff="heading" style={{ color: ACCENT[accent], fontVariantNumeric: "tabular-nums", lineHeight: 1.1 }} mt={4}>{value}</Text>
       {sub && <Text size="11px" c="dimmed" mt={2}>{sub}</Text>}
@@ -98,7 +98,7 @@ export function Stat({ label, value, accent = "brand", sub }: { label: string; v
 export function PqcBadge({ status }: { status: PqcStatus }) {
   const m = PQC_COLOR[status] ?? PQC_COLOR.unknown;
   return (
-    <Badge variant="light" color={m.color} radius="sm" size="sm" tt="none" fw={600}
+    <Badge variant="light" color={m.color} radius="xs" size="sm" tt="none" fw={600}
       leftSection={<Box w={6} h={6} style={{ borderRadius: "50%", background: m.dot }} />}>
       {m.label}
     </Badge>
@@ -106,7 +106,7 @@ export function PqcBadge({ status }: { status: PqcStatus }) {
 }
 export function SeverityBadge({ severity }: { severity: FindingSeverity }) {
   const m = SEVERITY_COLOR[severity] ?? SEVERITY_COLOR.info;
-  return <Badge variant="light" color={m.color} radius="sm" size="sm" tt="none" fw={600}>{m.label}</Badge>;
+  return <Badge variant="light" color={m.color} radius="xs" size="sm" tt="none" fw={600}>{m.label}</Badge>;
 }
 
 // ---- Score ring ----
