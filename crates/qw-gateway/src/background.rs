@@ -195,6 +195,21 @@ pub async fn run_full_scan(state: &AppState, tenant: &str, trigger: &str) {
         }
     }
 
+    // Declared data stores (at-rest posture).
+    if state.config.scanner.data_at_rest.enabled {
+        for s in &state.config.scanner.data_at_rest.stores {
+            let meta = std::collections::HashMap::from([
+                ("kind".to_string(), s.kind.clone()),
+                ("encryption".to_string(), s.encryption.clone()),
+                ("key_wrap".to_string(), s.key_wrap.clone()),
+                ("key_age_days".to_string(), s.key_age_days.to_string()),
+                ("in_transit_tls".to_string(), s.in_transit_tls.to_string()),
+                ("environment".to_string(), s.environment.clone()),
+            ]);
+            targets.push(ScanTarget::data_store(&s.address, meta));
+        }
+    }
+
     let mut all_results = Vec::new();
     for target in &targets {
         let results = state.scanner_registry.scan_all(target).await;

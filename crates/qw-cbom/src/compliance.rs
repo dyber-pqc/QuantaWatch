@@ -45,7 +45,10 @@ fn classify(f: &FindingRecord) -> CryptoClass {
         PqcStatus::PqcReady | PqcStatus::Hybrid => CryptoClass::Pqc,
         PqcStatus::ClassicalWeak => CryptoClass::Weak,
         PqcStatus::ClassicalSecure => match f.asset_type {
-            CryptoAssetType::HashFunction => CryptoClass::SafeSymmetric,
+            // Symmetric at-rest encryption and hashes are quantum-safe.
+            CryptoAssetType::HashFunction | CryptoAssetType::DataStore => {
+                CryptoClass::SafeSymmetric
+            }
             _ => CryptoClass::QuantumVulnerable,
         },
         PqcStatus::Unknown => CryptoClass::Unknown,
@@ -339,7 +342,8 @@ impl ComplianceEngine {
                     }
                     CryptoAssetType::Certificate
                     | CryptoAssetType::SigningKey
-                    | CryptoAssetType::EncryptionKey => bump(&mut sigs, f),
+                    | CryptoAssetType::EncryptionKey
+                    | CryptoAssetType::DataStore => bump(&mut sigs, f),
                     CryptoAssetType::CryptoLibrary => bump(&mut deps, f),
                     CryptoAssetType::HashFunction => {}
                 },

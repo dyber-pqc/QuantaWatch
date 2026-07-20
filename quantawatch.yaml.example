@@ -184,6 +184,35 @@ scanner:
       - "./src"
     exclude:
       - "vendor"
+  # Data-at-rest posture. Declares the data stores to evaluate (no data is ever
+  # read). The KEY insight vs. a plain "is it encrypted?" check: a store can use
+  # AES-256 at rest and STILL be harvest-now-decrypt-later exposed if the data
+  # key is wrapped by a quantum-vulnerable KEK (RSA/ECDH) — flagged as MissingPqc.
+  data_at_rest:
+    enabled: true
+    max_key_age_days: 365          # older data-encryption keys are flagged
+    stores:
+      - id: prod-postgres
+        kind: database
+        address: "orders-db.internal:5432"
+        encryption: "aes-256-gcm"
+        key_wrap: "rsa-2048"       # <- AES-256 data, but RSA-wrapped key = HNDL exposed
+        key_age_days: 120
+        in_transit_tls: true
+        environment: production
+      - id: analytics-bucket
+        kind: object_store
+        address: "s3://acme-analytics"
+        encryption: "aes-256-gcm"
+        key_wrap: "ml-kem-768"     # PQC-wrapped -> clean
+        in_transit_tls: true
+        environment: production
+      - id: legacy-backups
+        kind: volume
+        address: "backup-vol-07"
+        encryption: "none"         # <- unencrypted at rest = critical
+        in_transit_tls: false
+        environment: production
 
 # Background scheduled re-scanning (0 disables)
 schedule:

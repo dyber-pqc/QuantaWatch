@@ -124,7 +124,7 @@ fn classify(f: &FindingRecord) -> (MigrationStrategy, &'static str) {
             (MigrationStrategy::UpgradeLibrary, "PQC-capable library")
         }
         CryptoAssetType::HashFunction => (MigrationStrategy::ReplaceHash, "SHA-384"),
-        CryptoAssetType::EncryptionKey => (
+        CryptoAssetType::EncryptionKey | CryptoAssetType::DataStore => (
             MigrationStrategy::HybridKeyExchange,
             "X25519 + ML-KEM-768 (hybrid)",
         ),

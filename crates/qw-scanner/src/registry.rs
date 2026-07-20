@@ -101,5 +101,10 @@ pub fn build_scanner_registry(config: &ScannerConfig) -> ScannerRegistry {
             config.code.clone(),
         )));
     }
+    if config.data_at_rest.enabled {
+        registry.register(Box::new(
+            crate::scanners::data_at_rest::DataAtRestScanner::new(&config.data_at_rest),
+        ));
+    }
     registry
 }

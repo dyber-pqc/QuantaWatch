@@ -32,6 +32,9 @@ pub enum TargetType {
     Certificate,
     CodeDirectory,
     CloudKeyStore,
+    /// A data store evaluated for at-rest encryption posture (DB, object store,
+    /// volume, KMS-wrapped dataset).
+    DataStore,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,6 +81,15 @@ impl ScanTarget {
             metadata: HashMap::new(),
         }
     }
+
+    pub fn data_store(address: &str, metadata: HashMap<String, String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            target_type: TargetType::DataStore,
+            address: address.to_string(),
+            metadata,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +105,10 @@ pub enum FindingCategory {
     PqcReady,
     VulnerableLibrary,
     ClassicalCrypto,
+    /// Data at rest with no encryption at all.
+    UnencryptedAtRest,
+    /// At-rest data encryption keys not rotated within policy.
+    StaleKeyRotation,
 }
 
 impl std::fmt::Display for FindingCategory {
@@ -108,6 +124,8 @@ impl std::fmt::Display for FindingCategory {
             Self::PqcReady => write!(f, "pqc_ready"),
             Self::VulnerableLibrary => write!(f, "vulnerable_library"),
             Self::ClassicalCrypto => write!(f, "classical_crypto"),
+            Self::UnencryptedAtRest => write!(f, "unencrypted_at_rest"),
+            Self::StaleKeyRotation => write!(f, "stale_key_rotation"),
         }
     }
 }
@@ -132,6 +150,8 @@ pub enum CryptoAssetType {
     HashFunction,
     CryptoLibrary,
     ProtocolEndpoint,
+    /// A data store (database, object store, volume) evaluated at rest.
+    DataStore,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,6 +252,8 @@ pub struct ScannerConfig {
     pub certificates: CertScannerConfig,
     #[serde(default)]
     pub code: CodeScannerConfig,
+    #[serde(default)]
+    pub data_at_rest: DataAtRestScannerConfig,
 }
 
 impl Default for ScannerConfig {
@@ -243,8 +265,63 @@ impl Default for ScannerConfig {
             dependencies: DependencyScannerConfig::default(),
             certificates: CertScannerConfig::default(),
             code: CodeScannerConfig::default(),
+            data_at_rest: DataAtRestScannerConfig::default(),
         }
     }
+}
+
+/// A declared data store whose at-rest encryption posture we evaluate. Values
+/// come from config or (later) from cloud connectors; the scanner classifies
+/// them without touching the data itself.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataStoreDecl {
+    pub id: String,
+    /// "database" | "object_store" | "volume" | "kms_dataset" | ...
+    pub kind: String,
+    /// host:port, bucket URI, or logical name.
+    pub address: String,
+    /// At-rest cipher, e.g. "aes-256-gcm", "aes-128", "none", "chacha20".
+    #[serde(default)]
+    pub encryption: String,
+    /// How the data-encryption key is protected: "aes-256" (symmetric envelope),
+    /// "rsa-2048" / "ecdh-p256" (quantum-vulnerable envelope), "ml-kem-768"
+    /// (PQC), "hsm", or "" if unknown. This is the HNDL-critical field.
+    #[serde(default)]
+    pub key_wrap: String,
+    /// Age of the current data key in days (0 = unknown).
+    #[serde(default)]
+    pub key_age_days: u32,
+    /// Whether connections to the store are encrypted in transit (TLS).
+    #[serde(default)]
+    pub in_transit_tls: bool,
+    #[serde(default)]
+    pub environment: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DataAtRestScannerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Rotate at-rest keys at least this often; older keys are flagged.
+    #[serde(default = "default_rotation_days")]
+    pub max_key_age_days: u32,
+    #[serde(default)]
+    pub stores: Vec<DataStoreDecl>,
+}
+
+impl Default for DataAtRestScannerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_key_age_days: default_rotation_days(),
+            stores: vec![],
+        }
+    }
+}
+
+fn default_rotation_days() -> u32 {
+    365
 }
 
 fn default_store_path() -> String {

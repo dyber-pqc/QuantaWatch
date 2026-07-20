@@ -30,6 +30,8 @@ impl PostureEngine {
             FindingCategory::VulnerableLibrary => score -= 30.0,
             FindingCategory::HardcodedKey => score -= 25.0,
             FindingCategory::WeakAlgorithm => score -= 15.0,
+            FindingCategory::UnencryptedAtRest => score -= 45.0,
+            FindingCategory::StaleKeyRotation => score -= 8.0,
             _ => {}
         }
 
@@ -81,7 +83,8 @@ impl PostureEngine {
                     }
                     CryptoAssetType::SigningKey
                     | CryptoAssetType::EncryptionKey
-                    | CryptoAssetType::HashFunction => {
+                    | CryptoAssetType::HashFunction
+                    | CryptoAssetType::DataStore => {
                         key_scores.push(score);
                     }
                 }
