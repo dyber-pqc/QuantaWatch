@@ -1,4 +1,5 @@
 import { Routes, Route } from "react-router-dom";
+import { AppShell, Box } from "@mantine/core";
 import Sidebar from "./components/Sidebar";
 import TopBar from "./components/TopBar";
 import DashboardPage from "./pages/DashboardPage";
@@ -19,11 +20,20 @@ import FrameworksPage from "./pages/FrameworksPage";
 
 export default function App() {
   return (
-    <div className="flex min-h-screen">
-      <Sidebar />
-      <TopBar />
-      <main className="ml-56 flex-1 px-6 pb-6 pt-[4.5rem]">
-        <div className="qw-fade-up mx-auto max-w-6xl">
+    <AppShell
+      layout="alt"
+      navbar={{ width: 236, breakpoint: "sm" }}
+      header={{ height: 52 }}
+      padding="lg"
+    >
+      <AppShell.Navbar bg="dark.9" style={{ borderColor: "var(--mantine-color-dark-5)" }}>
+        <Sidebar />
+      </AppShell.Navbar>
+      <AppShell.Header bg="dark.9" style={{ borderColor: "var(--mantine-color-dark-5)" }}>
+        <TopBar />
+      </AppShell.Header>
+      <AppShell.Main bg="dark.8">
+        <Box maw={1200} mx="auto">
           <Routes>
             <Route path="/" element={<DashboardPage />} />
             <Route path="/posture" element={<PosturePage />} />
@@ -41,8 +51,8 @@ export default function App() {
             <Route path="/alerts" element={<AlertsPage />} />
             <Route path="/integrations" element={<IntegrationsPage />} />
           </Routes>
-        </div>
-      </main>
-    </div>
+        </Box>
+      </AppShell.Main>
+    </AppShell>
   );
 }

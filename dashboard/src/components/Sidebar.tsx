@@ -1,4 +1,5 @@
-import { NavLink } from "react-router-dom";
+import { Link as RouterLink, useLocation } from "react-router-dom";
+import { NavLink, ScrollArea, Box, Text, Stack, Group } from "@mantine/core";
 
 interface NavItem {
   to: string;
@@ -169,66 +170,64 @@ const navSections: NavSection[] = [
 ];
 
 export default function Sidebar() {
+  const { pathname } = useLocation();
+  const isActive = (to: string) => (to === "/" ? pathname === "/" : pathname.startsWith(to));
   return (
-    <aside className="fixed left-0 top-0 z-50 flex h-screen w-56 flex-col border-r border-white/10 bg-surface-950">
-      {/* Logo / Brand */}
-      <div className="flex h-12 items-center gap-2.5 border-b border-white/10 px-4">
-        <div className="flex h-7 w-7 items-center justify-center rounded bg-brand-600">
-          <svg className="h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" strokeWidth={2.2} stroke="currentColor">
+    <Stack h="100%" gap={0}>
+      {/* Brand */}
+      <Group h={52} px="md" gap="sm" wrap="nowrap" style={{ borderBottom: "1px solid var(--mantine-color-dark-5)" }}>
+        <Box
+          w={28}
+          h={28}
+          style={{
+            borderRadius: 8,
+            display: "grid",
+            placeItems: "center",
+            background: "linear-gradient(135deg, var(--mantine-color-brand-5), var(--mantine-color-brand-7))",
+          }}
+        >
+          <svg width={16} height={16} fill="none" viewBox="0 0 24 24" strokeWidth={2.3} stroke="#fff">
             <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
           </svg>
+        </Box>
+        <div style={{ lineHeight: 1.1 }}>
+          <Text ff="heading" fw={700} size="sm" c="white">QuantaWatch</Text>
+          <Text size="9px" tt="uppercase" c="dimmed" style={{ letterSpacing: "0.12em" }}>Posture Management</Text>
         </div>
-        <div className="leading-tight">
-          <h1 className="text-sm font-semibold tracking-tight text-white">QuantaWatch</h1>
-          <p className="text-[10px] uppercase tracking-wider text-gray-500">Posture Management</p>
-        </div>
-      </div>
+      </Group>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
+      <ScrollArea style={{ flex: 1 }} px={8} py="sm" scrollbarSize={6}>
         {navSections.map((section, si) => (
-          <div key={si} className="mb-1">
+          <Box key={si} mb={4}>
             {section.label && (
-              <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wider text-gray-600">
+              <Text px="xs" pt="sm" pb={4} size="10px" fw={700} tt="uppercase" c="dark.3" style={{ letterSpacing: "0.1em" }}>
                 {section.label}
-              </div>
+              </Text>
             )}
             {section.items.map((item) => (
               <NavLink
                 key={item.to}
+                component={RouterLink}
                 to={item.to}
-                end={item.to === "/"}
-                className={({ isActive }) =>
-                  `group relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] font-semibold transition-colors duration-100 ${
-                    isActive
-                      ? "bg-brand-500/15 text-brand-200"
-                      : "font-medium text-gray-300 hover:bg-white/[0.06] hover:text-white"
-                  }`
-                }
-              >
-                {({ isActive }) => (
-                  <>
-                    {isActive && <span className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-r bg-brand-400" />}
-                    {item.icon}
-                    {item.label}
-                  </>
-                )}
-              </NavLink>
+                label={item.label}
+                leftSection={<Box w={16} h={16}>{item.icon}</Box>}
+                active={isActive(item.to)}
+                variant="light"
+                color="brand"
+                fw={600}
+                style={{ borderRadius: 8, marginBottom: 2, fontSize: 13 }}
+              />
             ))}
-          </div>
+          </Box>
         ))}
-      </nav>
+      </ScrollArea>
 
       {/* Status footer */}
-      <div className="border-t border-white/10 px-3 py-2.5">
-        <div className="flex items-center gap-2 text-[11px] text-gray-500">
-          <span className="relative flex h-2.5 w-2.5">
-            <span className="qw-pulse-glow absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-            <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-          </span>
-          Gateway Online
-        </div>
-      </div>
-    </aside>
+      <Group px="md" py="xs" gap={8} wrap="nowrap" style={{ borderTop: "1px solid var(--mantine-color-dark-5)" }}>
+        <Box w={8} h={8} style={{ borderRadius: "50%", background: "var(--mantine-color-signal-5)", boxShadow: "0 0 8px var(--mantine-color-signal-6)" }} />
+        <Text size="11px" c="dimmed">Gateway online</Text>
+      </Group>
+    </Stack>
   );
 }

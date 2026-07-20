@@ -2,9 +2,13 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MantineProvider } from "@mantine/core";
+import "@mantine/core/styles.css";
+import "@fontsource-variable/space-grotesk";
 import App from "./App";
 import AuthGate from "./components/AuthGate";
 import { setToken } from "./api/client";
+import { theme } from "./theme";
 import "./index.css";
 
 // SSO callback: the gateway redirects here with ?sso=<session token>.
@@ -28,12 +32,14 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <AuthGate>
-          <App />
-        </AuthGate>
-      </BrowserRouter>
-    </QueryClientProvider>
+    <MantineProvider theme={theme} forceColorScheme="dark">
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <AuthGate>
+            <App />
+          </AuthGate>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </MantineProvider>
   </StrictMode>,
 );
