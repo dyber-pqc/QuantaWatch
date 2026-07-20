@@ -193,6 +193,7 @@ fn admin_routes() -> Router<AppState> {
         )
         .route("/api/config", get(crate::admin::config_api::get_config))
         .route("/api/stats", get(crate::admin::stats::get_stats))
+        .route("/api/threats", get(crate::admin::threats::get_threats))
         // Agent-aware posture
         .route("/api/agents", get(crate::admin::agents::list_agents))
         // Quantum attack-path engine (crypto security graph)

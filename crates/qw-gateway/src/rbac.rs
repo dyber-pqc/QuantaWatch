@@ -29,6 +29,7 @@ pub const RBAC_RESOURCES: &[&str] = &[
     "assets",
     "audit",
     "sessions",
+    "threats",
     "agents",
     "attack_paths",
     "report",
