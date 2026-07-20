@@ -1,0 +1,104 @@
+{{- if .Values.fortressql.enabled }}
+# FortressQL — Dyber's post-quantum-hardened PostgreSQL 17. Deployed in-cluster
+# as the gateway's shared store so the DB link's key exchange is post-quantum
+# (harvest-now-decrypt-later resistant). See deploy/fortressql for the image.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "quantawatch.fortressqlName" . }}
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fortressql
+type: Opaque
+stringData:
+  password: {{ required "fortressql.auth.password is required when fortressql.enabled=true" .Values.fortressql.auth.password | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "quantawatch.fortressqlName" . }}
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fortressql
+spec:
+  clusterIP: None          # headless: stable DNS for the StatefulSet pod
+  selector:
+    {{- include "quantawatch.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: fortressql
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "quantawatch.fortressqlName" . }}
+  labels:
+    {{- include "quantawatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: fortressql
+spec:
+  serviceName: {{ include "quantawatch.fortressqlName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "quantawatch.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: fortressql
+  template:
+    metadata:
+      labels:
+        {{- include "quantawatch.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: fortressql
+    spec:
+      {{- with .Values.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: {{ .Values.fortressql.fsGroup }}
+      containers:
+        - name: fortressql
+          image: {{ include "quantawatch.fortressqlImage" . }}
+          imagePullPolicy: {{ .Values.fortressql.image.pullPolicy }}
+          env:
+            - name: FORTRESSQL_USER
+              value: {{ .Values.fortressql.auth.username | quote }}
+            - name: FORTRESSQL_DB
+              value: {{ .Values.fortressql.auth.database | quote }}
+            - name: FORTRESSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "quantawatch.fortressqlName" . }}
+                  key: password
+            - name: FORTRESSQL_SSL_PQC_MODE
+              value: {{ .Values.fortressql.pqcMode | quote }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - {{ .Values.fortressql.auth.username | quote }}
+                - -d
+                - {{ .Values.fortressql.auth.database | quote }}
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.fortressql.resources | nindent 12 }}
+          volumeMounts:
+            - name: fortressql-data
+              mountPath: /var/lib/fortressql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: fortressql-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.fortressql.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.fortressql.persistence.size }}
+{{- end }}

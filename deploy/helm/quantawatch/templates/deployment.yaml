@@ -37,6 +37,18 @@ spec:
           env:
             - name: RUST_LOG
               value: {{ .Values.gateway.logLevel | quote }}
+            {{- if .Values.fortressql.enabled }}
+            # DB password from the FortressQL Secret; referenced by $(...) in
+            # QW_STORE_PATH below (so it never lands in the ConfigMap).
+            - name: FORTRESSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "quantawatch.fortressqlName" . }}
+                  key: password
+            {{- end }}
+            # Store location, expanded from the config's ${QW_STORE_PATH}.
+            - name: QW_STORE_PATH
+              value: {{ include "quantawatch.storePath" . | quote }}
           {{- if .Values.secretEnv }}
           envFrom:
             - secretRef:

@@ -40,3 +40,28 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "quantawatch.dashboardImage" -}}
 {{- printf "%s:%s" .Values.dashboard.image.repository (default .Chart.AppVersion .Values.dashboard.image.tag) -}}
 {{- end -}}
+
+{{/* FortressQL resource name (StatefulSet, Service, Secret) */}}
+{{- define "quantawatch.fortressqlName" -}}
+{{- printf "%s-fortressql" (include "quantawatch.fullname" .) | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{/* FortressQL image ref (repository:tag, tag defaults to "latest") */}}
+{{- define "quantawatch.fortressqlImage" -}}
+{{- printf "%s:%s" .Values.fortressql.image.repository (default "latest" .Values.fortressql.image.tag) -}}
+{{- end -}}
+
+{{/*
+Store path handed to the gateway via the QW_STORE_PATH env var. When FortressQL
+is enabled, this is a postgres:// URL to the in-cluster StatefulSet over
+PQC-capable TLS; the password is injected by Kubernetes via $(FORTRESSQL_PASSWORD)
+(a secretKeyRef defined earlier in the container's env), so it never appears in
+the ConfigMap. Otherwise it's the local SQLite directory.
+*/}}
+{{- define "quantawatch.storePath" -}}
+{{- if .Values.fortressql.enabled -}}
+postgres://{{ .Values.fortressql.auth.username }}:$(FORTRESSQL_PASSWORD)@{{ include "quantawatch.fortressqlName" . }}:5432/{{ .Values.fortressql.auth.database }}?sslmode=require
+{{- else -}}
+{{- .Values.store.path -}}
+{{- end -}}
+{{- end -}}

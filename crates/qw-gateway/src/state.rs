@@ -112,13 +112,15 @@ impl AppState {
         // Initialize the SQLite-backed, tenant-scoped store.
         // A `postgres://` store_path selects the shared Postgres backend (HA,
         // multi-replica); anything else is a local SQLite file directory.
-        let store_path = &config.scanner.store_path;
+        // Expand `${VAR}` from the environment so a DB password (e.g. for
+        // FortressQL) can live in a Secret/env var, not inline in the config.
+        let store_path = expand_env_vars(&config.scanner.store_path);
         let store = Arc::new(
             if store_path.starts_with("postgres://") || store_path.starts_with("postgresql://") {
                 tracing::info!("store backend: Postgres (shared, HA-capable)");
-                Store::open_postgres(store_path)?
+                Store::open_postgres(&store_path)?
             } else {
-                let scan_dir = std::path::PathBuf::from(store_path);
+                let scan_dir = std::path::PathBuf::from(&store_path);
                 Store::open(&scan_dir.join("quantawatch.db"))?
             },
         );
@@ -188,6 +190,38 @@ impl AppState {
     }
 }
 
+/// Expand `${VAR}` references in a config string from the environment. Lets a
+/// secret — most importantly a Postgres/FortressQL password — stay in a
+/// Kubernetes Secret (exposed as an env var) instead of being written inline in
+/// the mounted config. Unknown vars expand to empty (with a warning); a `${`
+/// without a closing `}` is left literal.
+fn expand_env_vars(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find("${") {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        match after.find('}') {
+            Some(end) => {
+                let var = &after[..end];
+                match std::env::var(var) {
+                    Ok(v) => out.push_str(&v),
+                    Err(_) => {
+                        tracing::warn!(var, "config references an unset env var; expanding to empty")
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str("${");
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Resolve this replica's audit writer id (sharded audit chain). Must be unique
 /// per replica and stable across restarts of the same one. Explicit config wins,
 /// else `QW_AUDIT_WRITER_ID`, else the hostname, else `node-0` (single node).
@@ -239,4 +273,29 @@ fn build_policy_yaml(config: &GatewayConfig) -> String {
         }
     }
     yaml
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_env_vars;
+
+    #[test]
+    fn expands_known_and_unknown_vars() {
+        // Uniquely-named var to avoid clashing with other tests in the process.
+        std::env::set_var("QW_TEST_DB_PW", "s3cr3t");
+        let url = "postgres://qw:${QW_TEST_DB_PW}@db:5432/qw?sslmode=require";
+        assert_eq!(
+            expand_env_vars(url),
+            "postgres://qw:s3cr3t@db:5432/qw?sslmode=require"
+        );
+        std::env::remove_var("QW_TEST_DB_PW");
+
+        // Unset var expands to empty (never leaves the literal ${...}).
+        std::env::remove_var("QW_TEST_ABSENT");
+        assert_eq!(expand_env_vars("a${QW_TEST_ABSENT}b"), "ab");
+
+        // No placeholders -> unchanged; a dangling ${ is left literal.
+        assert_eq!(expand_env_vars("/app/data"), "/app/data");
+        assert_eq!(expand_env_vars("x${unclosed"), "x${unclosed");
+    }
 }

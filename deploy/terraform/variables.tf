@@ -82,3 +82,16 @@ variable "secret_env" {
   default     = {}
   sensitive   = true
 }
+
+variable "fortressql_enabled" {
+  description = "Deploy FortressQL (PQC PostgreSQL) in-cluster and point the gateway's store at it over PQC TLS."
+  type        = bool
+  default     = false
+}
+
+variable "fortressql_password" {
+  description = "Password for the FortressQL role QuantaWatch connects as. Supply via -var-file / secrets manager; kept in a Kubernetes Secret."
+  type        = string
+  default     = ""
+  sensitive   = true
+}

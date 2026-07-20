@@ -105,4 +105,18 @@ resource "helm_release" "quantawatch" {
       type  = "string"
     }
   }
+
+  # FortressQL: deploy Dyber's post-quantum PostgreSQL as the in-cluster store.
+  set {
+    name  = "fortressql.enabled"
+    value = var.fortressql_enabled
+  }
+
+  dynamic "set_sensitive" {
+    for_each = var.fortressql_enabled && var.fortressql_password != "" ? [1] : []
+    content {
+      name  = "fortressql.auth.password"
+      value = var.fortressql_password
+    }
+  }
 }

@@ -13,7 +13,7 @@ image:
   pullPolicy: IfNotPresent
 pullSecrets: []
 
-replicaCount: 1       # SQLite-backed: keep at 1 unless using an external DB
+replicaCount: 1       # keep at 1 on SQLite; with fortressql + identity.seed_env you can scale out
 
 # --- Gateway process -------------------------------------------------------
 gateway:
@@ -35,6 +35,43 @@ persistence:
   size: 10Gi
   accessMode: ReadWriteOnce
   # Mounted at /app/data (SQLite), /app/keys (identity), /app/audit (log chain)
+
+# --- Store location --------------------------------------------------------
+# Where the gateway keeps its inventory/sessions/audit. Injected into the
+# config as ${QW_STORE_PATH}. Left as a directory for SQLite; automatically
+# overridden with the FortressQL postgres:// URL when fortressql.enabled=true.
+store:
+  path: "/app/data"
+
+# --- FortressQL (optional in-cluster post-quantum PostgreSQL) ---------------
+# When enabled, the chart deploys FortressQL (Dyber's PQC-hardened PostgreSQL 17)
+# as a StatefulSet and points the gateway's store at it over PQC-capable TLS
+# (postgres://…?sslmode=require, X25519MLKEM768 hybrid key exchange). The DB
+# password lives only in a Secret and is injected via env — never the ConfigMap.
+# Build/push the image from deploy/fortressql first. Enables replicaCount > 1
+# once identity.seed_env is also set (shared signing identity).
+fortressql:
+  enabled: false
+  image:
+    repository: ghcr.io/dyber-pqc/fortressql
+    tag: ""             # "" -> latest
+    pullPolicy: IfNotPresent
+  pqcMode: hybrid       # off | hybrid | pqc-only (pqc-only rejects classical clients)
+  fsGroup: 1000
+  auth:
+    username: quantawatch
+    database: quantawatch
+    password: ""        # REQUIRED when enabled — set via your own values/secret
+  persistence:
+    size: 10Gi
+    storageClass: ""    # "" = cluster default
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
 
 # --- Dashboard (static SPA served by nginx) --------------------------------
 dashboard:
@@ -100,7 +137,9 @@ config: |
   policy:
     default: deny
   scanner:
-    store_path: "/app/data"
+    # Expanded from the QW_STORE_PATH env at startup: the SQLite dir by default,
+    # or the FortressQL postgres:// URL when fortressql.enabled=true.
+    store_path: "${QW_STORE_PATH}"
     auto_scan_on_start: true
   auth:
     enabled: true

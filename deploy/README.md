@@ -88,6 +88,41 @@ helm lint deploy/helm/quantawatch
 helm template quantawatch deploy/helm/quantawatch --set ingress.enabled=true | kubectl apply --dry-run=client -f -
 ```
 
+### FortressQL as the in-cluster store (post-quantum DB link)
+
+Set `fortressql.enabled=true` and the chart deploys **FortressQL** (Dyber's
+PQC-hardened PostgreSQL 17) as a StatefulSet, then points the gateway's store at
+it over PQC-capable TLS — no external database to run. Build and push the image
+from [`fortressql/`](fortressql/) first (`ghcr.io/dyber-pqc/fortressql`).
+
+```sh
+helm install quantawatch deploy/helm/quantawatch \
+  --namespace quantawatch --create-namespace \
+  --set fortressql.enabled=true \
+  --set-string fortressql.auth.password=$FORTRESSQL_PASSWORD
+```
+
+What this wires automatically:
+
+- The gateway config's `scanner.store_path` is `${QW_STORE_PATH}`, which the
+  chart sets to
+  `postgres://quantawatch:$(FORTRESSQL_PASSWORD)@<release>-fortressql:5432/quantawatch?sslmode=require`.
+  The password comes from the FortressQL **Secret** via a `secretKeyRef` env and
+  is substituted by Kubernetes — it never appears in the ConfigMap. The gateway
+  expands `${QW_STORE_PATH}` at startup.
+- `sslmode=require` forces TLS; the rustls + aws-lc-rs client offers the
+  **X25519MLKEM768** hybrid group, so against FortressQL the key exchange itself
+  is post-quantum. `fortressql.pqcMode` (`hybrid` / `pqc-only`) tunes the server.
+- Because the store is now shared, you can run **replicaCount > 1** — set
+  `identity.seed_env` (a Secret-backed hex seed) so every replica signs as the
+  same gateway. See "Toward HA" above.
+
+The same image also runs standalone for local verification (self-signed cert,
+default `qw_test` creds) — see [`fortressql/`](fortressql/). Credentials, TLS
+mode, and an optional mounted cert are all env-driven (`FORTRESSQL_USER`,
+`FORTRESSQL_PASSWORD`, `FORTRESSQL_DB`, `FORTRESSQL_SSL_PQC_MODE`,
+`FORTRESSQL_CERT_DIR`).
+
 ## Terraform
 
 ```sh
@@ -100,6 +135,9 @@ terraform apply
 The module renders the Helm chart via `helm_release`. Keep the sensitive
 `secret_env` map out of VCS — use a `*.tfvars` file (git-ignored), `TF_VAR_*`
 env vars, or a secrets manager.
+
+To deploy FortressQL as the store, set `fortressql_enabled = true` and
+`fortressql_password` (sensitive — supply via `*.tfvars`/`TF_VAR_fortressql_password`).
 
 ## Post-deploy
 
