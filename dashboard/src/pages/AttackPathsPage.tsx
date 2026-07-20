@@ -30,7 +30,7 @@ function nodeColor(node: GraphNode): string {
   return riskColor(node.risk);
 }
 
-function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { source: string; target: string; observed: boolean }[]; activeIds: Set<string> | null }) {
+function Graph({ nodes, edges, activeIds, focus }: { nodes: GraphNode[]; edges: { source: string; target: string; observed: boolean }[]; activeIds: Set<string> | null; focus: { id: string; nodeIds: string[] } | null }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Pan/zoom is applied IMPERATIVELY (ref + setAttribute), never through React
   // state — a wheel/trackpad can fire 100+ events/sec, and re-rendering the
@@ -91,6 +91,22 @@ function Graph({ nodes, edges, activeIds }: { nodes: GraphNode[]; edges: { sourc
     return () => svg.removeEventListener("wheel", onWheelNative);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [applyView]);
+
+  // Zoom-to-fit the selected path's nodes when a toxic combination is clicked.
+  useEffect(() => {
+    if (!focus || focus.nodeIds.length === 0) return;
+    const pts = focus.nodeIds.map((id) => layout.pos[id]).filter(Boolean) as { x: number; y: number }[];
+    if (!pts.length) return;
+    const pad = 70;
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const x0 = Math.min(...xs) - pad, x1 = Math.max(...xs) + pad;
+    const y0 = Math.min(...ys) - pad, y1 = Math.max(...ys) + pad;
+    const bw = Math.max(1, x1 - x0), bh = Math.max(1, y1 - y0);
+    const k = clamp(Math.min(VBW / bw, layout.height / bh), 0.6, 3.2);
+    viewRef.current = { k, tx: VBW / 2 - k * ((x0 + x1) / 2), ty: layout.height / 2 - k * ((y0 + y1) / 2) };
+    applyView();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.id]);
 
   const onPointerDown = (e: React.PointerEvent) => {
     const p = toSvg(e.clientX, e.clientY);
@@ -293,7 +309,7 @@ function ExploitChip({ value }: { value: number }) {
   );
 }
 
-function PathRow({ path, onHover, remediable }: { path: AttackPath; onHover: (id: string | null) => void; remediable: { id: string; displayName: string }[] }) {
+function PathRow({ path, onHover, onSelect, selected, remediable }: { path: AttackPath; onHover: (id: string | null) => void; onSelect: (id: string) => void; selected: boolean; remediable: { id: string; displayName: string }[] }) {
   const kind = KIND_LABEL[path.kind];
   const [open, setOpen] = useState(false);
   const [ticket, setTicket] = useState<RemediationTicket | null>(null);
@@ -302,8 +318,13 @@ function PathRow({ path, onHover, remediable }: { path: AttackPath; onHover: (id
     onSuccess: (t) => { setTicket(t); setOpen(false); },
   });
   return (
-    <div onMouseEnter={() => onHover(path.id)} onMouseLeave={() => onHover(null)}
-      className="cursor-default border-l-2 px-4 py-3.5 transition-colors hover:bg-white/[0.025]" style={{ borderLeftColor: riskColor(path.score) }}>
+    <div
+      onMouseEnter={() => onHover(path.id)}
+      onMouseLeave={() => onHover(null)}
+      onClick={(e) => { if (!(e.target as Element).closest("button,a")) onSelect(path.id); }}
+      className={`cursor-pointer border-l-2 px-4 py-3.5 transition-colors ${selected ? "bg-brand-500/[0.08]" : "hover:bg-white/[0.025]"}`}
+      style={{ borderLeftColor: riskColor(path.score), borderLeftWidth: selected ? 3 : 2 }}
+    >
       <div className="flex items-start gap-3">
         <ScoreBox score={path.score} />
         <div className="min-w-0 flex-1">
@@ -367,6 +388,7 @@ export default function AttackPathsPage() {
   const { data: timeline } = useQuery({ queryKey: ["attack-path-timeline"], queryFn: fetchAttackPathTimeline });
   const { data: integrationsData } = useQuery({ queryKey: ["integrations"], queryFn: fetchIntegrations });
   const [hovered, setHovered] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [sim, setSim] = useState<SimulateResponse | null>(null);
   const [hardened, setHardened] = useState<Set<string>>(new Set());
   const [simBusy, setSimBusy] = useState(false);
@@ -376,8 +398,12 @@ export default function AttackPathsPage() {
   const live = sim ?? data;
   const paths = live?.paths ?? [];
   const s = live?.summary;
-  const activePath = paths.find((p) => p.id === hovered);
+  // Highlight follows hover, but falls back to the pinned (clicked) path.
+  const activePath = paths.find((p) => p.id === (hovered ?? selected));
   const activeIds = activePath ? new Set(activePath.nodeIds) : null;
+  const selectedPath = paths.find((p) => p.id === selected);
+  const focus = selectedPath ? { id: selectedPath.id, nodeIds: selectedPath.nodeIds } : null;
+  const toggleSelect = (id: string) => setSelected((cur) => (cur === id ? null : id));
 
   const vulnProviders = Array.from(
     new Set((data?.nodes ?? []).filter((n) => n.type === "provider" && n.risk > 20).map((n) => n.label)),
@@ -457,7 +483,7 @@ export default function AttackPathsPage() {
                 <div className="qw-eyebrow">Cryptographic Security Graph {sim && <span className="text-quantum-300">(simulated)</span>}</div>
                 {activePath && <div className="max-w-[55%] truncate text-[11px] text-gray-500">{activePath.title}</div>}
               </div>
-              <Graph nodes={live?.nodes ?? []} edges={live?.edges ?? []} activeIds={activeIds} />
+              <Graph nodes={live?.nodes ?? []} edges={live?.edges ?? []} activeIds={activeIds} focus={focus} />
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[10px] text-gray-500">
                 <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#5b8def]" /> observed in live traffic</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-0 w-4 border-t-2 border-[#5b8def]" /> observed flow</span>
@@ -487,11 +513,11 @@ export default function AttackPathsPage() {
 
           <Card>
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
-              <div className="qw-eyebrow">Toxic Combinations</div>
+              <div className="qw-eyebrow">Toxic Combinations <span className="ml-1 font-normal normal-case tracking-normal text-gray-600">· click to focus the graph</span></div>
               <span className="text-[11px] text-gray-500">{paths.length}</span>
             </div>
             <div className="max-h-[640px] divide-y divide-white/5 overflow-y-auto">
-              {paths.map((p) => <PathRow key={p.id} path={p} onHover={setHovered} remediable={remediable} />)}
+              {paths.map((p) => <PathRow key={p.id} path={p} onHover={setHovered} onSelect={toggleSelect} selected={p.id === selected} remediable={remediable} />)}
             </div>
           </Card>
         </div>
