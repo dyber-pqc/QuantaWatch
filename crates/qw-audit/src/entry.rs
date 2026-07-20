@@ -115,6 +115,14 @@ pub enum AuditEvent {
         path: String,
         permission: String,
     },
+    /// In-path crypto enforcement acted on a flow (flagged or blocked).
+    CryptoPolicyEnforced {
+        provider: String,
+        agent: String,
+        action: String,
+        channel_status: String,
+        required: String,
+    },
 }
 
 impl AuditEntry {

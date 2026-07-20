@@ -48,6 +48,19 @@ crypto_policy:
 # audit log is exported pull-based via GET /api/audit/export.
 air_gapped: false
 
+# In-path PQC enforcement — the moat a passive/agentless scanner can't follow.
+# For every agent→provider request, the gateway checks the upstream channel's
+# scanned PQC posture against `require` and either FLAGS it (monitor: allow +
+# an `x-quantawatch-crypto` response header) or BLOCKS it (enforce: HTTP 403
+# before the request ever leaves the enclave). Decisions are audit-logged
+# (crypto_policy_enforced) and counted at quantawatch_crypto_enforcement_total.
+crypto_enforcement:
+  enabled: false
+  mode: monitor                 # "monitor" (flag) | "enforce" (block)
+  require: hybrid               # minimum channel: "pqc" | "hybrid" | "classical_secure"
+  exempt_providers: []          # providers accepted as-is for now, e.g. ["anthropic"]
+  block_unknown: false          # enforce: block providers not yet fingerprinted
+
 providers:
   anthropic:
     upstream: "https://api.anthropic.com"

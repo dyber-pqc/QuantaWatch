@@ -393,6 +393,71 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
         }
     };
 
+    // In-path PQC enforcement: hold this agent→provider flow to the required
+    // crypto standard, using the provider's last-scanned channel posture. This
+    // is the moat a passive scanner cannot follow — a decision in the live path.
+    let channel_status = state
+        .provider_crypto
+        .get(provider_name)
+        .map(|c| c.pqc_status.clone());
+    let mut crypto_flag: Option<(String, String)> = None;
+    match crate::crypto_policy::evaluate(
+        &state.config.crypto_enforcement,
+        provider_name,
+        channel_status.as_ref(),
+    ) {
+        crate::crypto_policy::CryptoVerdict::Allow => {}
+        crate::crypto_policy::CryptoVerdict::Flag { channel, required } => {
+            state
+                .metrics
+                .record_crypto_enforcement(provider_name, "flagged");
+            let _ = state
+                .audit_logger
+                .log(
+                    &session_ctx.session_id,
+                    qw_audit::AuditEvent::CryptoPolicyEnforced {
+                        provider: provider_name.to_string(),
+                        agent: session_ctx.agent_name.clone(),
+                        action: "flagged".into(),
+                        channel_status: channel.clone(),
+                        required: required.clone(),
+                    },
+                )
+                .await;
+            crypto_flag = Some((channel, required));
+        }
+        crate::crypto_policy::CryptoVerdict::Block { channel, required } => {
+            state
+                .metrics
+                .record_crypto_enforcement(provider_name, "blocked");
+            let _ = state
+                .audit_logger
+                .log(
+                    &session_ctx.session_id,
+                    qw_audit::AuditEvent::CryptoPolicyEnforced {
+                        provider: provider_name.to_string(),
+                        agent: session_ctx.agent_name.clone(),
+                        action: "blocked".into(),
+                        channel_status: channel.clone(),
+                        required: required.clone(),
+                    },
+                )
+                .await;
+            tracing::warn!(provider = %provider_name, channel = %channel, required = %required,
+                "crypto policy: blocked a quantum-unsafe flow");
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "error": "blocked by crypto policy: upstream channel is below the required post-quantum standard",
+                    "provider": provider_name,
+                    "channel": channel,
+                    "required": required,
+                })),
+            )
+                .into_response();
+        }
+    }
+
     // Get the request body
     let body = match body_bytes {
         Some(b) => b,
@@ -566,6 +631,14 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
         if key != "transfer-encoding" {
             response = response.header(key, value);
         }
+    }
+
+    // Surface a monitor-mode crypto flag on the response so callers can see it.
+    if let Some((channel, required)) = &crypto_flag {
+        response = response.header(
+            "x-quantawatch-crypto",
+            format!("flagged; channel={channel}; required={required}"),
+        );
     }
 
     response

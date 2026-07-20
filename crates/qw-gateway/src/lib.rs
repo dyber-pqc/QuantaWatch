@@ -6,6 +6,7 @@ pub mod auth;
 pub mod background;
 pub mod cloud;
 pub mod config;
+pub mod crypto_policy;
 pub mod error;
 pub mod metrics;
 pub mod middleware;

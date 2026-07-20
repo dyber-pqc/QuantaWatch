@@ -58,6 +58,50 @@ pub struct GatewayConfig {
     /// Agentless connectors that discover assets from cloud/K8s environments.
     #[serde(default)]
     pub connectors: Vec<ConnectorConfig>,
+    /// In-path PQC enforcement: hold agent→provider flows to a crypto standard.
+    #[serde(default)]
+    pub crypto_enforcement: CryptoEnforcementConfig,
+}
+
+/// In-path crypto enforcement policy. The gateway evaluates each request's
+/// upstream channel PQC posture and either flags (monitor) or blocks (enforce)
+/// flows whose channel is below the required standard. This is the moat a
+/// passive, agentless scanner cannot follow — enforcement in the live data path.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CryptoEnforcementConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// "monitor" (flag + header, allow) or "enforce" (block below the bar).
+    #[serde(default = "default_enf_mode")]
+    pub mode: String,
+    /// Minimum acceptable channel posture: "pqc" | "hybrid" | "classical_secure".
+    #[serde(default = "default_enf_require")]
+    pub require: String,
+    /// Providers exempt from enforcement (accepted as-is for now).
+    #[serde(default)]
+    pub exempt_providers: Vec<String>,
+    /// In enforce mode, block providers whose channel hasn't been scanned yet.
+    #[serde(default)]
+    pub block_unknown: bool,
+}
+
+impl Default for CryptoEnforcementConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: default_enf_mode(),
+            require: default_enf_require(),
+            exempt_providers: vec![],
+            block_unknown: false,
+        }
+    }
+}
+
+fn default_enf_mode() -> String {
+    "monitor".to_string()
+}
+fn default_enf_require() -> String {
+    "hybrid".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -665,6 +709,7 @@ impl Default for GatewayConfig {
             air_gapped: false,
             assets: Vec::new(),
             connectors: Vec::new(),
+            crypto_enforcement: CryptoEnforcementConfig::default(),
         }
     }
 }

@@ -32,6 +32,8 @@ pub struct Metrics {
     upstream_errors: DashMap<String, u64>,
     /// threat category -> count
     threats: DashMap<String, u64>,
+    /// (provider, action) -> count of crypto-enforcement decisions (flag/block)
+    crypto_enforcement: DashMap<(String, String), u64>,
     /// Cumulative histogram buckets (+1 slot for +Inf).
     latency_buckets: Vec<AtomicU64>,
     latency_sum_millis: AtomicU64,
@@ -50,6 +52,7 @@ impl Metrics {
             proxy_requests: DashMap::new(),
             upstream_errors: DashMap::new(),
             threats: DashMap::new(),
+            crypto_enforcement: DashMap::new(),
             latency_buckets: (0..=LATENCY_BUCKETS_SECS.len())
                 .map(|_| AtomicU64::new(0))
                 .collect(),
@@ -104,6 +107,15 @@ impl Metrics {
         *self.threats.entry(category.to_string()).or_insert(0) += 1;
     }
 
+    /// Record an in-path crypto-enforcement decision. `action` is "flagged" or
+    /// "blocked".
+    pub fn record_crypto_enforcement(&self, provider: &str, action: &str) {
+        *self
+            .crypto_enforcement
+            .entry((provider.to_string(), action.to_string()))
+            .or_insert(0) += 1;
+    }
+
     fn observe_latency(&self, ms: u64) {
         let secs = ms as f64 / 1000.0;
         // Cumulative: every bucket whose upper bound covers this observation.
@@ -154,6 +166,20 @@ impl Metrics {
             out.push_str(&format!(
                 "quantawatch_threats_detected_total{{category=\"{}\"}} {}\n",
                 escape(e.key()),
+                e.value()
+            ));
+        }
+
+        out.push_str(
+            "# HELP quantawatch_crypto_enforcement_total In-path crypto-enforcement decisions.\n",
+        );
+        out.push_str("# TYPE quantawatch_crypto_enforcement_total counter\n");
+        for e in self.crypto_enforcement.iter() {
+            let (provider, action) = e.key();
+            out.push_str(&format!(
+                "quantawatch_crypto_enforcement_total{{provider=\"{}\",action=\"{}\"}} {}\n",
+                escape(provider),
+                escape(action),
                 e.value()
             ));
         }
