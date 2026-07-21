@@ -54,7 +54,18 @@ function CertRow({ c, onChange }: { c: Certificate; onChange: () => void }) {
         <Box style={{ minWidth: 0 }}>
           <Group gap={8} wrap="wrap">
             <Text size="14px" fw={700} c="gray.1" truncate>{c.subject}</Text>
-            <Badge color={isHybrid ? "cyan" : "gray"} radius={2} size="xs" variant="light">{c.keyType}</Badge>
+            {isHybrid ? (
+              <Tooltip withArrow multiline w={300}
+                label="Hybrid = a classical Ed25519 X.509 leaf PLUS a detached ML-DSA-65 signature over the cert, made by the CA's quantum-safe key. The leaf is Ed25519 because standards-track ML-DSA-in-X.509 isn't available yet; the post-quantum protection is the binding, which 'Verify ML-DSA binding' checks.">
+                <Group gap={4} wrap="nowrap" style={{ cursor: "help" }}>
+                  <Badge color="gray" radius={2} size="xs" variant="light">Ed25519 X.509</Badge>
+                  <Text size="11px" c="dark.2" fw={700}>+</Text>
+                  <Badge color="cyan" radius={2} size="xs" variant="light">ML-DSA-65 binding</Badge>
+                </Group>
+              </Tooltip>
+            ) : (
+              <Badge color="gray" radius={2} size="xs" variant="light">Ed25519 X.509 (classical)</Badge>
+            )}
             {revoked ? (
               <Badge color="red" radius={2} size="xs" variant="filled">revoked</Badge>
             ) : expired ? (
