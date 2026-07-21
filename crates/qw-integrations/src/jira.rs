@@ -15,7 +15,10 @@ pub struct JiraIntegration {
 
 impl JiraIntegration {
     pub fn from_config(config: &IntegrationConfig) -> Option<Self> {
-        let token = std::env::var(&config.api_token_env).ok()?;
+        let token = config
+            .token
+            .clone()
+            .or_else(|| std::env::var(&config.api_token_env).ok())?;
         let email = config.settings.get("email").cloned()?;
         Some(Self {
             id: config.id.clone(),

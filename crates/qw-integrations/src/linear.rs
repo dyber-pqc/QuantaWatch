@@ -13,7 +13,10 @@ pub struct LinearIntegration {
 
 impl LinearIntegration {
     pub fn from_config(config: &IntegrationConfig) -> Option<Self> {
-        let token = std::env::var(&config.api_token_env).ok()?;
+        let token = config
+            .token
+            .clone()
+            .or_else(|| std::env::var(&config.api_token_env).ok())?;
         Some(Self {
             id: config.id.clone(),
             token,

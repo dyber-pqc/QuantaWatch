@@ -7,6 +7,7 @@ pub mod cbom;
 pub mod compliance;
 pub mod config_api;
 pub mod connectors_api;
+pub mod connections_api;
 pub mod crypto_policies;
 pub mod pki_api;
 pub mod targets_api;

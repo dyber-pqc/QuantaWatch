@@ -69,6 +69,10 @@ pub struct IntegrationConfig {
     pub base_url: Option<String>,
     #[serde(default)]
     pub api_token_env: String,
+    /// Secret supplied directly by a UI-managed connection. Takes precedence
+    /// over `api_token_env`. Never serialized back out (kept off YAML/JSON).
+    #[serde(default, skip_serializing)]
+    pub token: Option<String>,
     #[serde(default)]
     pub default_project: Option<String>,
     /// ENV var holding this integration's own inbound-webhook secret (overrides the global).

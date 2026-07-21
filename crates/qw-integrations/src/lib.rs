@@ -7,7 +7,7 @@ pub mod store;
 pub mod types;
 
 pub use registry::{
-    build_integration_registry, Integration, IntegrationError, IntegrationRegistry,
+    build_integration_registry, build_one, Integration, IntegrationError, IntegrationRegistry,
 };
 pub use store::RemediationStore;
 pub use types::*;

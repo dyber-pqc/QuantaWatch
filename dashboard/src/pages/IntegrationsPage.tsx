@@ -1,6 +1,10 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
+  Badge, Box, Group, Stack, Text, Button, TextInput, PasswordInput, Select,
+  Modal, Divider, Alert, ActionIcon, Tooltip,
+} from "@mantine/core";
+import {
   fetchIntegrations,
   testIntegration,
   syncIntegration,
@@ -8,9 +12,23 @@ import {
   fetchRemediations,
   syncRemediations,
   registerIntegrationWebhook,
+  fetchConnections,
+  createConnection,
+  testConnection,
+  scanConnection,
+  deleteConnection,
 } from "../api/client";
-import type { IntegrationInfo, DiscoveredTarget, TicketStatus } from "../api/types";
+import type { IntegrationInfo, DiscoveredTarget, TicketStatus, Connection, ConnectionScanResult, MigrationStep } from "../api/types";
 import { Card, PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
+import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
+
+const SOURCE_META: Record<string, { label: string; hint: string; needs: ("org" | "repo" | "baseUrl" | "project")[] }> = {
+  github: { label: "GitHub", hint: "Personal access token (repo scope). Scans repos for quantum-vulnerable crypto in code & dependencies.", needs: ["org", "repo"] },
+  gitlab: { label: "GitLab", hint: "Personal/project access token (read_api). Set a base URL for self-hosted.", needs: ["org", "baseUrl"] },
+  jira: { label: "Jira", hint: "API token — opens migration tickets from findings. Base URL is your Atlassian site.", needs: ["baseUrl", "project"] },
+  linear: { label: "Linear", hint: "API key — opens migration issues from findings.", needs: ["project"] },
+};
+const SEV_COLOR: Record<string, string> = { critical: "red", high: "orange", medium: "yellow", low: "gray" };
 
 const capabilityLabels: Record<string, { label: string; color: string }> = {
   discover_targets: { label: "Discovery", color: "bg-brand-400/10 text-brand-200" },
@@ -220,17 +238,196 @@ function RemediationHistory() {
   );
 }
 
+function MigrationPlanView({ plan }: { plan: MigrationStep[] }) {
+  if (!plan || plan.length === 0) return null;
+  return (
+    <Stack gap={6} mt={8}>
+      <Text size="11px" fw={700} tt="uppercase" c="dark.2" style={{ letterSpacing: "0.08em" }}>PQC migration plan</Text>
+      {plan.map((m) => (
+        <Box key={m.algorithm} px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
+          <Group justify="space-between" gap={8} wrap="nowrap">
+            <Group gap={8} wrap="nowrap">
+              <Badge color={SEV_COLOR[m.severity] ?? "gray"} radius={2} size="xs" variant="filled">{m.severity}</Badge>
+              <Text ff="monospace" size="12px" fw={600} c="gray.2">{m.algorithm}</Text>
+              <Text size="11px" c="dimmed">×{m.occurrences}</Text>
+            </Group>
+          </Group>
+          <Text size="11px" c="teal.4" mt={4}>→ {m.migrateTo}</Text>
+          {m.locations.length > 0 && (
+            <Text ff="monospace" size="10px" c="dark.3" mt={2} lineClamp={2}>{m.locations.join("  ·  ")}</Text>
+          )}
+        </Box>
+      ))}
+    </Stack>
+  );
+}
+
+function ConnectionCard({ c, openMenu }: { c: Connection; openMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void }) {
+  const qc = useQueryClient();
+  const [scan, setScan] = useState<ConnectionScanResult | null>(null);
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["connections"] });
+    qc.invalidateQueries({ queryKey: ["posture"] });
+    qc.invalidateQueries({ queryKey: ["attack-paths"] });
+  };
+  const test = useMutation({ mutationFn: () => testConnection(c.id), onSuccess: invalidate });
+  const scanM = useMutation({ mutationFn: () => scanConnection(c.id), onSuccess: (d) => { setScan(d); invalidate(); } });
+  const del = useMutation({ mutationFn: () => deleteConnection(c.id), onSuccess: invalidate });
+
+  const status = c.lastStatus ?? "untested";
+  const statusColor = status === "connected" ? "signal" : status === "failed" ? "red" : "gray";
+  const meta = SOURCE_META[c.integrationType];
+
+  const menuItems: ContextMenuItem[] = [
+    { label: "Test connection", onClick: () => test.mutate() },
+    { label: "Scan for PQC issues", onClick: () => scanM.mutate() },
+    { label: "Delete connection", color: "red", divider: true, onClick: () => del.mutate() },
+  ];
+
+  return (
+    <Box
+      onContextMenu={(e) => openMenu(e, menuItems)}
+      p="md"
+      style={{ border: "1px solid var(--mantine-color-dark-4)", borderLeft: `3px solid var(--mantine-color-${statusColor}-6)`, borderRadius: 2, background: "var(--mantine-color-dark-6)" }}
+    >
+      <Group justify="space-between" wrap="nowrap" align="flex-start">
+        <Group gap={10} wrap="nowrap">
+          <Box w={30} h={30} style={{ borderRadius: 2, display: "grid", placeItems: "center", background: "var(--mantine-color-brand-6)", color: "#fff", fontWeight: 700, fontSize: 13 }}>
+            {(meta?.label ?? c.integrationType).charAt(0)}
+          </Box>
+          <Box>
+            <Text size="13px" fw={600} c="gray.1">{c.displayName}</Text>
+            <Text ff="monospace" size="11px" c="dimmed">{c.integrationType}{c.org ? ` · ${c.org}` : ""}{c.repo ? ` · ${c.repo}` : ""}</Text>
+          </Box>
+        </Group>
+        <Group gap={4} wrap="nowrap">
+          <Tooltip label="Test" withArrow><ActionIcon size="sm" radius={2} variant="light" color="gray" loading={test.isPending} onClick={() => test.mutate()}>✓</ActionIcon></Tooltip>
+          <ActionIcon size="sm" radius={2} variant="subtle" color="gray" onClick={(e) => openMenu(e, menuItems)}>⋯</ActionIcon>
+        </Group>
+      </Group>
+
+      <Group gap={6} mt={8} wrap="wrap">
+        <Badge color={statusColor} radius={2} size="xs" variant={status === "connected" ? "light" : "filled"}>{status}</Badge>
+        {c.lastUser && <Badge color="gray" radius={2} size="xs" variant="outline">{c.lastUser}</Badge>}
+        {typeof c.findingsCount === "number" && <Badge color="violet" radius={2} size="xs" variant="light">{c.findingsCount} findings</Badge>}
+        {!c.hasToken && <Badge color="red" radius={2} size="xs" variant="light">no token</Badge>}
+      </Group>
+
+      <Group gap="xs" mt={10}>
+        <Button size="xs" radius={2} variant="default" loading={test.isPending} onClick={() => test.mutate()}>Test</Button>
+        <Button size="xs" radius={2} color="brand" loading={scanM.isPending} onClick={() => scanM.mutate()}>Scan for PQC issues</Button>
+      </Group>
+
+      {test.isSuccess && (
+        <Text size="11px" c={test.data.status.connected ? "signal.4" : "red.4"} mt={6}>
+          {test.data.status.connected ? `Connected as ${test.data.status.user ?? "unknown"}` : `Failed: ${test.data.status.error ?? "check token"}`}
+        </Text>
+      )}
+      {scanM.isError && <Text size="11px" c="red.4" mt={6}>{(scanM.error as Error)?.message ?? "Scan failed."}</Text>}
+      {scan && (
+        <Box mt={8}>
+          <Text size="11px" c="dimmed">{scan.reposScanned} repos · {scan.filesScanned} files · {scan.findings} findings</Text>
+          <MigrationPlanView plan={scan.migrationPlan} />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+function AddConnectionModal({ opened, onClose }: { opened: boolean; onClose: () => void }) {
+  const qc = useQueryClient();
+  const [type, setType] = useState<string>("github");
+  const [displayName, setDisplayName] = useState("");
+  const [token, setToken] = useState("");
+  const [org, setOrg] = useState("");
+  const [repo, setRepo] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [project, setProject] = useState("");
+  const meta = SOURCE_META[type];
+
+  const create = useMutation({
+    mutationFn: () => createConnection({
+      integrationType: type, displayName: displayName || undefined, token,
+      org: org || undefined, repo: repo || undefined, baseUrl: baseUrl || undefined, project: project || undefined,
+    }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["connections"] });
+      setToken(""); setDisplayName(""); setOrg(""); setRepo(""); setBaseUrl(""); setProject("");
+      onClose();
+    },
+  });
+
+  return (
+    <Modal opened={opened} onClose={onClose} title="Connect a source" radius={2} size="lg" centered>
+      <Stack gap="sm">
+        <Select size="xs" radius={2} label="Source type" value={type} onChange={(v) => setType(v ?? "github")}
+          data={Object.entries(SOURCE_META).map(([value, m]) => ({ value, label: m.label }))} comboboxProps={{ radius: 2 }} />
+        <Alert color="brand" radius={2} variant="light" p="xs"><Text size="11px">{meta?.hint}</Text></Alert>
+        <TextInput size="xs" radius={2} label="Display name (optional)" placeholder={meta?.label} value={displayName} onChange={(e) => setDisplayName(e.currentTarget.value)} />
+        <PasswordInput size="xs" radius={2} label="Token / API key" placeholder="paste the secret" value={token} onChange={(e) => setToken(e.currentTarget.value)} />
+        <Group grow>
+          {meta?.needs.includes("org") && <TextInput size="xs" radius={2} label={type === "gitlab" ? "Group" : "Org"} placeholder="optional" value={org} onChange={(e) => setOrg(e.currentTarget.value)} />}
+          {meta?.needs.includes("repo") && <TextInput size="xs" radius={2} label="Repo (owner/repo)" placeholder="for PR remediation" value={repo} onChange={(e) => setRepo(e.currentTarget.value)} />}
+        </Group>
+        <Group grow>
+          {meta?.needs.includes("baseUrl") && <TextInput size="xs" radius={2} label="Base URL" placeholder={type === "jira" ? "https://you.atlassian.net" : "https://gitlab.example.com"} value={baseUrl} onChange={(e) => setBaseUrl(e.currentTarget.value)} />}
+          {meta?.needs.includes("project") && <TextInput size="xs" radius={2} label="Project" placeholder="key / id" value={project} onChange={(e) => setProject(e.currentTarget.value)} />}
+        </Group>
+        <Text size="10px" c="dimmed">The secret is stored on the gateway to drive scans and is never returned to the browser.</Text>
+        {create.isError && <Alert color="red" radius={2} variant="light" p="xs"><Text size="11px">{(create.error as Error)?.message ?? "Failed to save."}</Text></Alert>}
+        <Divider my={2} />
+        <Group justify="flex-end">
+          <Button size="xs" radius={2} variant="default" onClick={onClose}>Cancel</Button>
+          <Button size="xs" radius={2} color="brand" loading={create.isPending} disabled={!token.trim()} onClick={() => create.mutate()}>Add connection</Button>
+        </Group>
+      </Stack>
+    </Modal>
+  );
+}
+
+function ConnectionsSection() {
+  const { openMenu, menu } = useContextMenu();
+  const [adding, setAdding] = useState(false);
+  const { data } = useQuery({ queryKey: ["connections"], queryFn: fetchConnections });
+  const connections = data?.connections ?? [];
+
+  return (
+    <Card className="p-4">
+      {menu}
+      <AddConnectionModal opened={adding} onClose={() => setAdding(false)} />
+      <Group justify="space-between" mb="sm">
+        <Box>
+          <Text fw={700} c="gray.1">Connect a source</Text>
+          <Text size="12px" c="dimmed">Add GitHub / GitLab / Jira / Linear with a token, then scan for PQC issues and get a migration plan — no config file needed.</Text>
+        </Box>
+        <Button size="xs" radius={2} color="brand" onClick={() => setAdding(true)}>+ Add connection</Button>
+      </Group>
+      {connections.length === 0 ? (
+        <Box py="md"><EmptyState title="No sources connected">Click “Add connection”, pick a type, and paste a token to start scanning.</EmptyState></Box>
+      ) : (
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          {connections.map((c) => <ConnectionCard key={c.id} c={c} openMenu={openMenu} />)}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function IntegrationsPage() {
   const { data, isLoading } = useQuery({ queryKey: ["integrations"], queryFn: fetchIntegrations });
-
-  if (isLoading) return <Spinner className="h-64" />;
 
   const integrations = data?.integrations ?? [];
   const connected = integrations.filter((i) => i.status.connected).length;
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Integrations" subtitle="Connected services for discovery, scanning, and remediation" />
+      <PageHeader title="Integrations" subtitle="Connect your code hosts and trackers — scan for post-quantum risk and open migration work" />
+
+      <ConnectionsSection />
+
+      {isLoading ? <Spinner className="h-32" /> : integrations.length > 0 && (
+      <>
+      <Text size="11px" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.08em" }}>Config-defined integrations</Text>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Stat label="Total Integrations" value={integrations.length} accent="brand" />
@@ -265,6 +462,8 @@ export default function IntegrationsPage() {
             <IntegrationCard key={integration.id} integration={integration} />
           ))}
         </div>
+      )}
+      </>
       )}
 
       <RemediationHistory />

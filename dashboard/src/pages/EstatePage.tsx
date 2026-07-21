@@ -23,6 +23,7 @@ import {
 import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget } from "../api/client";
 import type { Target, ExposedService } from "../api/types";
 import { PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
+import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 
 const PQC_COLOR: Record<string, string> = {
   classical_weak: "red",
@@ -43,6 +44,7 @@ function PqcBadge({ status, size = "sm" }: { status: string; size?: string }) {
 
 export default function EstatePage() {
   const qc = useQueryClient();
+  const { openMenu, menu } = useContextMenu();
   const [selected, setSelected] = useState<string | null>(null);
   const [deepFor, setDeepFor] = useState<Target | null>(null);
 
@@ -51,11 +53,21 @@ export default function EstatePage() {
   const activeId = selected ?? targets[0]?.id ?? null;
   const active = targets.find((t) => t.id === activeId) ?? null;
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["targets"] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["targets"] });
+    qc.invalidateQueries({ queryKey: ["attack-paths"] });
+  };
   const scan = useMutation({ mutationFn: scanTarget, onSuccess: invalidate });
   const del = useMutation({ mutationFn: deleteTarget, onSuccess: invalidate });
 
   const containersTotal = targets.reduce((n, t) => n + (t.containers?.length ?? 0), 0);
+
+  const menuItemsFor = (t: Target): ContextMenuItem[] => [
+    { label: "Sweep (network)", onClick: () => scan.mutate(t.id) },
+    { label: "Connect & inventory (SSH)", onClick: () => setDeepFor(t) },
+    { label: "Copy host", onClick: () => navigator.clipboard?.writeText(t.host) },
+    { label: "Delete target", color: "red", divider: true, onClick: () => del.mutate(t.id) },
+  ];
 
   return (
     <div className="space-y-5">
@@ -64,6 +76,7 @@ export default function EstatePage() {
         subtitle="Register any connected system — a VM, a server over SSH/RDP, a network host — sweep it from the outside, then connect over SSH to inventory what runs inside"
       />
 
+      {menu}
       <DeepScanModal target={deepFor} onClose={() => setDeepFor(null)} onDone={invalidate} />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -93,6 +106,7 @@ export default function EstatePage() {
                 onSelect={() => setSelected(t.id)}
                 onScan={() => scan.mutate(t.id)}
                 onDelete={() => del.mutate(t.id)}
+                onContextMenu={(e) => openMenu(e, menuItemsFor(t))}
               />
             ))}
           </Stack>
@@ -105,15 +119,17 @@ export default function EstatePage() {
   );
 }
 
-function TargetRow({ t, active, scanning, onSelect, onScan, onDelete }: {
+function TargetRow({ t, active, scanning, onSelect, onScan, onDelete, onContextMenu }: {
   t: Target; active: boolean; scanning: boolean;
   onSelect: () => void; onScan: () => void; onDelete: () => void;
+  onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
     <Box
       px="md"
       py="sm"
       onClick={onSelect}
+      onContextMenu={onContextMenu}
       style={{
         cursor: "pointer",
         border: "1px solid var(--mantine-color-dark-4)",

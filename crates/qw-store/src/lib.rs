@@ -226,6 +226,45 @@ pub struct HostContainerRow {
     pub ports: String,
 }
 
+/// A UI-managed connection to an external source (GitHub, GitLab, Jira, Linear)
+/// with a stored secret. The row (including `token`) is persisted on the gateway
+/// to drive scans; the API layer masks the token before returning it to the
+/// browser — never serialize a ConnectionRow straight into an HTTP response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionRow {
+    pub id: String,
+    /// github | gitlab | jira | linear
+    pub integration_type: String,
+    pub display_name: String,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// GitHub org / GitLab group to enumerate (optional).
+    #[serde(default)]
+    pub org: Option<String>,
+    /// Jira/Linear project or GitHub owner/repo for remediation (optional).
+    #[serde(default)]
+    pub project: Option<String>,
+    /// owner/repo where auto-remediation PRs are opened (GitHub).
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// The secret. Persisted to drive scans; masked by the API before returning.
+    #[serde(default)]
+    pub token: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub last_tested: Option<DateTime<Utc>>,
+    /// "connected" | "failed" | "untested"
+    #[serde(default)]
+    pub last_status: Option<String>,
+    #[serde(default)]
+    pub last_user: Option<String>,
+    #[serde(default)]
+    pub last_scanned: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub findings_count: Option<u32>,
+}
+
 /// A connected system in the estate — a VM, a server (SSH/RDP), a network host.
 /// Registering it authorizes QuantaWatch to sweep it: port-scan + fingerprint
 /// every exposed service's crypto into `exposed_services`.
@@ -450,6 +489,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
     CREATE TABLE IF NOT EXISTS certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+    CREATE TABLE IF NOT EXISTS connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -705,6 +745,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS targets (
                 id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
             );
+            CREATE TABLE IF NOT EXISTS connections (
+                id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
+            );
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
             );
@@ -752,6 +795,7 @@ impl Store {
             CREATE TABLE policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
             CREATE TABLE certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+            CREATE TABLE connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -1270,6 +1314,38 @@ impl Store {
     pub fn delete_target(&self, tenant: &str, id: &str) {
         self.exec(
             "DELETE FROM targets WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        );
+    }
+
+    // ---- External connections (UI-managed integrations with stored secrets) ----
+
+    pub fn upsert_connection(&self, tenant: &str, conn: &ConnectionRow) {
+        let json = serde_json::to_string(conn).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO connections (id, tenant, data) VALUES (?1, ?2, ?3)",
+            "INSERT INTO connections (id, tenant, data) VALUES ($1, $2, $3) ON CONFLICT (tenant, id) DO UPDATE SET data = EXCLUDED.data",
+            &[conn.id.as_str(), tenant, json.as_str()],
+        );
+    }
+
+    pub fn list_connections(&self, tenant: &str) -> Vec<ConnectionRow> {
+        self.list_de(
+            "SELECT data FROM connections WHERE tenant = ?1 ORDER BY id LIMIT 10000",
+            &[tenant],
+        )
+    }
+
+    pub fn get_connection(&self, tenant: &str, id: &str) -> Option<ConnectionRow> {
+        self.one_de(
+            "SELECT data FROM connections WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        )
+    }
+
+    pub fn delete_connection(&self, tenant: &str, id: &str) {
+        self.exec(
+            "DELETE FROM connections WHERE tenant = ?1 AND id = ?2",
             &[tenant, id],
         );
     }

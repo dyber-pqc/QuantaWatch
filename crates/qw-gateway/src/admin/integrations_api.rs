@@ -194,25 +194,32 @@ pub async fn scan_integration(
         }
     };
 
-    let targets = match integration.discover_targets().await {
-        Ok(t) => t,
-        Err(e) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({
-                    "error": e.to_string(),
-                })),
-            )
-                .into_response();
-        }
-    };
+    match run_integration_scan(&state, &tenant, integration, &id).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+/// Shared scan pipeline: discover dependency files, fetch each, scan inline,
+/// persist findings, recompute posture + graph. Returns the result summary
+/// (with `results` for the caller to derive a migration plan). Used by both the
+/// config-based `scan_integration` and UI-managed connection scans.
+pub async fn run_integration_scan(
+    state: &AppState,
+    tenant: &str,
+    integration: &dyn qw_integrations::Integration,
+    id: &str,
+) -> Result<serde_json::Value, String> {
+    let targets = integration
+        .discover_targets()
+        .await
+        .map_err(|e| e.to_string())?;
 
     let mut repos: HashSet<String> = HashSet::new();
     let mut files_scanned = 0usize;
     let mut all_results = Vec::new();
 
     for target in &targets {
-        // Track unique repos via repo/project metadata.
         if let Some(repo) = target
             .metadata
             .get("repo")
@@ -239,20 +246,14 @@ pub async fn scan_integration(
         files_scanned += 1;
 
         for result in &results {
-            state
-                .store
-                .record_scan(&tenant, result, &target_with_content);
+            state.store.record_scan(tenant, result, &target_with_content);
         }
         all_results.extend(results);
     }
 
-    let summary = crate::background::recompute_and_snapshot(
-        &state,
-        &tenant,
-        &all_results,
-        "integration-scan",
-    )
-    .await;
+    let summary =
+        crate::background::recompute_and_snapshot(state, tenant, &all_results, "integration-scan")
+            .await;
 
     let findings: usize = all_results.iter().map(|r| r.findings.len()).sum();
     let repos_scanned = repos.len();
@@ -262,7 +263,7 @@ pub async fn scan_integration(
         .log(
             "system",
             qw_audit::AuditEvent::IntegrationSync {
-                integration_id: id.clone(),
+                integration_id: id.to_string(),
                 action: "scan".to_string(),
                 detail: format!("{} files", files_scanned),
             },
@@ -270,19 +271,14 @@ pub async fn scan_integration(
         .await;
 
     tracing::info!(
-        integration = %id,
-        repos = repos_scanned,
-        files = files_scanned,
-        findings,
-        score = summary.overall_score,
-        "Integration scan complete"
+        integration = %id, repos = repos_scanned, files = files_scanned, findings,
+        score = summary.overall_score, "Integration scan complete"
     );
 
-    Json(json!({
+    Ok(json!({
         "reposScanned": repos_scanned,
         "filesScanned": files_scanned,
         "findings": findings,
         "results": all_results,
     }))
-    .into_response()
 }

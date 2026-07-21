@@ -662,3 +662,41 @@ export interface TargetBoard {
   exposedServices: number;
   quantumVulnerable: number;
 }
+
+// ---- UI-managed connections (external sources with stored secrets) ----
+export interface Connection {
+  id: string;
+  integrationType: string;
+  displayName: string;
+  baseUrl?: string | null;
+  org?: string | null;
+  project?: string | null;
+  repo?: string | null;
+  hasToken: boolean;
+  createdAt: string;
+  lastTested?: string | null;
+  lastStatus?: string | null;
+  lastUser?: string | null;
+  lastScanned?: string | null;
+  findingsCount?: number | null;
+}
+export interface ConnectionBoard {
+  connections: Connection[];
+  total: number;
+  supportedTypes: string[];
+}
+export interface MigrationStep {
+  algorithm: string;
+  occurrences: number;
+  severity: string;
+  migrateTo: string;
+  action: string;
+  locations: string[];
+}
+export interface ConnectionScanResult {
+  reposScanned: number;
+  filesScanned: number;
+  findings: number;
+  migrationPlan: MigrationStep[];
+  connection: Connection;
+}

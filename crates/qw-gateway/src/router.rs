@@ -325,6 +325,24 @@ fn admin_routes() -> Router<AppState> {
             "/api/connectors",
             get(crate::admin::connectors_api::get_connectors),
         )
+        // UI-managed connections (external sources with stored secrets).
+        .route(
+            "/api/connections",
+            get(crate::admin::connections_api::list_connections)
+                .post(crate::admin::connections_api::create_connection),
+        )
+        .route(
+            "/api/connections/{id}",
+            axum::routing::delete(crate::admin::connections_api::delete_connection),
+        )
+        .route(
+            "/api/connections/{id}/test",
+            post(crate::admin::connections_api::test_connection),
+        )
+        .route(
+            "/api/connections/{id}/scan",
+            post(crate::admin::connections_api::scan_connection),
+        )
         .route(
             "/api/targets",
             get(crate::admin::targets_api::list_targets).post(crate::admin::targets_api::register),

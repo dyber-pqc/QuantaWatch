@@ -36,6 +36,9 @@ import type {
   FrameworkSummary,
   FrameworkDetail,
   MigrationPlan,
+  Connection,
+  ConnectionBoard,
+  ConnectionScanResult,
 } from "./types";
 
 // ---- Mock data for development when API is unavailable ----
@@ -787,6 +790,44 @@ export async function syncIntegration(id: string): Promise<{ targets_discovered:
 /** Discover repos, fetch dependency files, scan them, and update posture. */
 export async function scanIntegration(id: string): Promise<IntegrationScanResult> {
   return fetchJSON(`/api/integrations/${id}/scan`, { method: "POST" });
+}
+
+// ---- UI-managed connections (external sources with stored secrets) ----
+
+export async function fetchConnections(): Promise<ConnectionBoard> {
+  try {
+    return await fetchJSON<ConnectionBoard>("/api/connections");
+  } catch {
+    return { connections: [], total: 0, supportedTypes: ["github", "gitlab", "jira", "linear"] };
+  }
+}
+
+export async function createConnection(body: {
+  integrationType: string;
+  displayName?: string;
+  baseUrl?: string;
+  org?: string;
+  project?: string;
+  repo?: string;
+  token: string;
+}): Promise<Connection> {
+  return fetchJSON<Connection>("/api/connections", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function testConnection(id: string): Promise<{ connection: Connection; status: ConnectionStatus }> {
+  return fetchJSON(`/api/connections/${encodeURIComponent(id)}/test`, { method: "POST" });
+}
+
+export async function scanConnection(id: string): Promise<ConnectionScanResult> {
+  return fetchJSON(`/api/connections/${encodeURIComponent(id)}/scan`, { method: "POST" });
+}
+
+export async function deleteConnection(id: string): Promise<void> {
+  await fetchJSON(`/api/connections/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 /** Create a remediation ticket (Jira/Linear) from a finding. */

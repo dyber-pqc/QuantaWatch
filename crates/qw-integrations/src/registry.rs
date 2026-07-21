@@ -107,36 +107,30 @@ impl IntegrationRegistry {
     }
 }
 
+/// Construct a single integration from its config (used both at startup and for
+/// UI-managed connections built on demand from a stored secret).
+pub fn build_one(config: &IntegrationConfig) -> Option<Box<dyn Integration>> {
+    match config.integration_type.as_str() {
+        "github" => crate::github::GitHubIntegration::from_config(config)
+            .map(|i| Box::new(i) as Box<dyn Integration>),
+        "gitlab" => crate::gitlab::GitLabIntegration::from_config(config)
+            .map(|i| Box::new(i) as Box<dyn Integration>),
+        "jira" => crate::jira::JiraIntegration::from_config(config)
+            .map(|i| Box::new(i) as Box<dyn Integration>),
+        "linear" => crate::linear::LinearIntegration::from_config(config)
+            .map(|i| Box::new(i) as Box<dyn Integration>),
+        other => {
+            tracing::warn!(integration_type = other, "Unknown integration type, skipping");
+            None
+        }
+    }
+}
+
 pub fn build_integration_registry(configs: &[IntegrationConfig]) -> IntegrationRegistry {
     let mut registry = IntegrationRegistry::new();
     for config in configs {
-        match config.integration_type.as_str() {
-            "github" => {
-                if let Some(integration) = crate::github::GitHubIntegration::from_config(config) {
-                    registry.register(Box::new(integration));
-                }
-            }
-            "gitlab" => {
-                if let Some(integration) = crate::gitlab::GitLabIntegration::from_config(config) {
-                    registry.register(Box::new(integration));
-                }
-            }
-            "jira" => {
-                if let Some(integration) = crate::jira::JiraIntegration::from_config(config) {
-                    registry.register(Box::new(integration));
-                }
-            }
-            "linear" => {
-                if let Some(integration) = crate::linear::LinearIntegration::from_config(config) {
-                    registry.register(Box::new(integration));
-                }
-            }
-            other => {
-                tracing::warn!(
-                    integration_type = other,
-                    "Unknown integration type, skipping"
-                );
-            }
+        if let Some(integration) = build_one(config) {
+            registry.register(integration);
         }
     }
     registry
