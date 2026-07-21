@@ -236,6 +236,9 @@ pub async fn scan_target(
     target.last_scanned = Some(chrono::Utc::now());
     state.store.upsert_target(&tenant, &target);
 
+    // Re-fold this host into the attack-path graph (and alert on new paths).
+    crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
+
     Json(target).into_response()
 }
 
@@ -449,6 +452,9 @@ pub async fn deep_scan(
     target.pqc_status = worst_status(&target.exposed_services);
     target.last_scanned = Some(now);
     state.store.upsert_target(&tenant, &target);
+
+    // Fold the newly-discovered host subgraph into the attack-path graph.
+    crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
 
     Json(json!({
         "target": target,

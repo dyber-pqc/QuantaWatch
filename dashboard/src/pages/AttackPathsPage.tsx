@@ -8,11 +8,13 @@ import { Card, PageHeader, Stat, Spinner, EmptyState, SeverityBadge, PqcBadge } 
 
 const COL_INDEX: Record<GraphNodeType, number> = {
   identity: 0, data: 1, agent: 2, provider: 3, certificate: 4, dependency: 4, asset: 4,
+  host: 4, service: 4, container: 4,
 };
 const COL_X = [80, 305, 530, 745, 930];
-const COL_TITLE = ["Identities", "Data", "Agents", "Providers", "Assets"];
+const COL_TITLE = ["Identities", "Data", "Agents", "Providers", "Assets & Hosts"];
 const NODE_ICON: Record<GraphNodeType, string> = {
   identity: "🔑", data: "🗄", agent: "🤖", provider: "☁", certificate: "🔏", dependency: "📦", asset: "🌐",
+  host: "🖥", service: "🔌", container: "🐳",
 };
 const VBW = 1010;
 
@@ -28,6 +30,7 @@ function nodeColor(node: GraphNode): string {
   if (node.type === "data") return "#c084fc";
   if (node.type === "agent") return "#8b8ef0";
   if (node.type === "identity") return "#f0abfc";
+  if (node.type === "container") return "#7a8699";
   return riskColor(node.risk);
 }
 

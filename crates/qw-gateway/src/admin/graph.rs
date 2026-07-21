@@ -589,6 +589,123 @@ pub fn build_graph(
         }
     }
 
+    // Estate hosts — registered systems, their exposed/internal services, and
+    // (from the authenticated deep inventory) the containers running on them.
+    // A network sweep sees exposed ports; a deep scan adds the loopback-only
+    // services and containers, so a single host fans out into a whole subgraph.
+    for t in state.store.list_targets(tenant) {
+        let host_id = format!("host:{}", t.host);
+        let host_status = parse_status(&t.pqc_status);
+        let prod = t.environment.to_lowercase().contains("prod")
+            || t.tags.iter().any(|x| x.contains("external") || x.contains("customer"));
+        let env_weight = if prod { 0.95 } else { 0.6 };
+        push(
+            &mut nodes,
+            &mut seen,
+            Node {
+                id: host_id.clone(),
+                kind: "host".into(),
+                label: t.name.clone(),
+                sublabel: match &t.host_info {
+                    Some(info) if !info.is_empty() => info.clone(),
+                    _ => format!("{} · {}", t.kind, t.environment),
+                },
+                pqc_status: t.pqc_status.clone(),
+                risk: channel_weight(&host_status) * 100.0,
+                blast_radius: 0.0,
+                observed: false,
+            },
+        );
+
+        for s in &t.exposed_services {
+            let svc_status = parse_status(&s.pqc_status);
+            let sid = format!("service:{}:{}", t.host, s.port);
+            push(
+                &mut nodes,
+                &mut seen,
+                Node {
+                    id: sid.clone(),
+                    kind: "service".into(),
+                    label: format!(":{} {}", s.port, s.service),
+                    sublabel: if s.exposed { "exposed".into() } else { "internal (loopback)".into() },
+                    pqc_status: s.pqc_status.clone(),
+                    risk: channel_weight(&svc_status) * 100.0,
+                    blast_radius: 0.0,
+                    observed: false,
+                },
+            );
+            edges.push(Edge {
+                source: host_id.clone(),
+                target: sid.clone(),
+                kind: "exposes".into(),
+                observed: false,
+            });
+
+            // Only network-reachable services are attack *paths*; loopback-only
+            // services are graph nodes (blast radius on host compromise) but not
+            // externally exploitable, so they don't inflate the risk work-list.
+            let cw = channel_weight(&svc_status);
+            if !s.exposed || cw <= 0.0 {
+                continue;
+            }
+            // Unknown crypto (not yet fingerprinted) is a "characterize", not a
+            // confirmed weakness — discount it so it doesn't outrank real ones.
+            let known = !matches!(svc_status, PqcStatus::Unknown);
+            let known_mult = if known { 1.0 } else { 0.55 };
+            let score = (cw * env_weight * known_mult * 100.0 * 10.0).round() / 10.0;
+            if score < 15.0 {
+                continue;
+            }
+            *blast.entry(host_id.clone()).or_insert(0.0) += cw * env_weight;
+            let hndl = matches!(svc_status, PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak);
+            paths.push(AttackPath {
+                id: format!("service:{}:{}", t.host, s.port),
+                title: format!("{}:{} ({}) exposes a quantum-vulnerable channel", t.host, s.port, s.service),
+                severity: severity_for(score).into(),
+                score,
+                hndl,
+                observed: false,
+                request_count: 0,
+                kind: "external-asset".into(),
+                data_class: t.environment.clone(),
+                agent: "—".into(),
+                provider: format!("{}:{}", t.host, s.port),
+                tls_version: None,
+                channel_pqc: svc_status,
+                node_ids: vec![host_id.clone(), sid],
+                recommendation: if hndl {
+                    format!("Terminate {}:{} behind the QuantaWatch PQC overlay or issue it a hybrid ML-DSA certificate — harvestable today.", t.host, s.port)
+                } else {
+                    format!("Fingerprint {}:{} and treat as quantum-vulnerable until proven PQC/hybrid.", t.host, s.port)
+                },
+            });
+        }
+
+        for c in &t.containers {
+            let cid = format!("container:{}:{}", t.host, c.name);
+            push(
+                &mut nodes,
+                &mut seen,
+                Node {
+                    id: cid.clone(),
+                    kind: "container".into(),
+                    label: c.name.clone(),
+                    sublabel: c.image.clone(),
+                    pqc_status: "n/a".into(),
+                    risk: 0.0,
+                    blast_radius: 0.0,
+                    observed: false,
+                },
+            );
+            edges.push(Edge {
+                source: host_id.clone(),
+                target: cid,
+                kind: "runs".into(),
+                observed: false,
+            });
+        }
+    }
+
     // Fold blast radius back onto provider/cert nodes.
     for n in nodes.iter_mut() {
         if let Some(b) = blast.get(&n.id) {

@@ -175,7 +175,7 @@ export interface Measurement {
   value: string;
 }
 
-export type GraphNodeType = "identity" | "data" | "agent" | "provider" | "certificate" | "dependency" | "asset";
+export type GraphNodeType = "identity" | "data" | "agent" | "provider" | "certificate" | "dependency" | "asset" | "host" | "service" | "container";
 
 export interface GraphNode {
   id: string;
