@@ -269,12 +269,46 @@ fn build_pg_tls() -> MakeRustlsConnect {
     MakeRustlsConnect::new(config)
 }
 
+/// A unit of Postgres work, run on the executor thread against the pool.
+type PgJob = Box<dyn FnOnce(&PgPool) + Send>;
+
+/// Runs every Postgres operation on one dedicated OS thread.
+///
+/// The synchronous `postgres` + `r2d2` client drives its own tokio runtime via
+/// `block_on`, which panics ("Cannot start a runtime from within a runtime") if
+/// invoked from a thread already inside the gateway's async runtime — i.e.
+/// `AppState::new` and every axum handler that touches the store. This thread
+/// has no ambient runtime, so the client is safe here; callers submit a closure
+/// and block on its result, exactly as the SQLite backend blocks on its `Mutex`.
+struct PgExecutor {
+    tx: std::sync::mpsc::Sender<PgJob>,
+}
+
+impl PgExecutor {
+    /// Run `f` on the executor thread and return its result (blocks the caller).
+    fn run<T, F>(&self, f: F) -> T
+    where
+        T: Send + 'static,
+        F: FnOnce(&PgPool) -> T + Send + 'static,
+    {
+        let (rtx, rrx) = std::sync::mpsc::sync_channel::<T>(1);
+        // If the executor thread is gone, the Postgres backend is unrecoverable;
+        // fail loud, matching the SQLite path's `lock().unwrap()`.
+        self.tx
+            .send(Box::new(move |pool| {
+                let _ = rtx.send(f(pool));
+            }))
+            .expect("postgres executor thread has stopped");
+        rrx.recv().expect("postgres executor dropped the result")
+    }
+}
+
 /// Storage backend. SQLite (single-node, file or in-memory) or Postgres (shared
 /// across replicas for HA). Both keep the same JSON-blob-per-row model, so the
 /// public API is identical; only the SQL dialect differs.
 enum Backend {
     Sqlite(Mutex<Connection>),
-    Pg(PgPool),
+    Pg(PgExecutor),
 }
 
 #[derive(Clone)]
@@ -343,26 +377,62 @@ impl Store {
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid postgres url: {e}"))?;
         let connector = build_pg_tls();
-        // Connect directly once to surface a clear error (r2d2 hides the cause)
-        // and apply the schema.
-        config
-            .clone()
-            .connect(connector.clone())
-            .map_err(|e| {
-                let msg = e
-                    .as_db_error()
-                    .map(|d| d.message().to_string())
-                    .unwrap_or_else(|| e.to_string());
-                anyhow::anyhow!("postgres connect failed: {msg}")
-            })?
-            .batch_execute(PG_SCHEMA)?;
-        let manager = PostgresConnectionManager::new(config, connector);
-        let pool = r2d2::Pool::builder()
-            .max_size(16)
-            .connection_timeout(std::time::Duration::from_secs(10))
-            .build(manager)?;
+
+        // The sync postgres client nests a tokio runtime, so it must never run on
+        // an async worker thread. Own the pool on a dedicated thread and drive all
+        // work there; block here only until startup (connect + schema) is done so
+        // connection errors still surface synchronously from open_postgres.
+        let (job_tx, job_rx) = std::sync::mpsc::channel::<PgJob>();
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<anyhow::Result<()>>();
+
+        std::thread::Builder::new()
+            .name("qw-pg-store".to_string())
+            .spawn(move || {
+                let init = (|| -> anyhow::Result<PgPool> {
+                    // Connect directly once to surface a clear error (r2d2 hides
+                    // the cause) and apply the schema.
+                    config
+                        .clone()
+                        .connect(connector.clone())
+                        .map_err(|e| {
+                            let msg = e
+                                .as_db_error()
+                                .map(|d| d.message().to_string())
+                                .unwrap_or_else(|| e.to_string());
+                            anyhow::anyhow!("postgres connect failed: {msg}")
+                        })?
+                        .batch_execute(PG_SCHEMA)?;
+                    let manager = PostgresConnectionManager::new(config, connector);
+                    let pool = r2d2::Pool::builder()
+                        .max_size(16)
+                        .connection_timeout(std::time::Duration::from_secs(10))
+                        .build(manager)?;
+                    Ok(pool)
+                })();
+
+                match init {
+                    Ok(pool) => {
+                        if ready_tx.send(Ok(())).is_err() {
+                            return; // caller gave up before we were ready
+                        }
+                        drop(ready_tx);
+                        while let Ok(job) = job_rx.recv() {
+                            job(&pool);
+                        }
+                    }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e));
+                    }
+                }
+            })
+            .map_err(|e| anyhow::anyhow!("failed to spawn postgres executor: {e}"))?;
+
+        ready_rx
+            .recv()
+            .map_err(|_| anyhow::anyhow!("postgres executor exited before signalling readiness"))??;
+
         Ok(Self {
-            backend: Arc::new(Backend::Pg(pool)),
+            backend: Arc::new(Backend::Pg(PgExecutor { tx: job_tx })),
         })
     }
 
@@ -394,16 +464,20 @@ impl Store {
                     params.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
                 let _ = conn.execute(sqlite_sql, &p[..]);
             }
-            Backend::Pg(pool) => {
-                if let Ok(mut c) = pool.get() {
-                    let p: Vec<&(dyn postgres::types::ToSql + Sync)> = params
-                        .iter()
-                        .map(|s| s as &(dyn postgres::types::ToSql + Sync))
-                        .collect();
-                    if let Err(e) = c.execute(pg_sql, &p[..]) {
-                        tracing::warn!(error = %e, "postgres write failed");
+            Backend::Pg(ex) => {
+                let sql = pg_sql.to_string();
+                let owned: Vec<String> = params.iter().map(|s| s.to_string()).collect();
+                ex.run(move |pool| {
+                    if let Ok(mut c) = pool.get() {
+                        let p: Vec<&(dyn postgres::types::ToSql + Sync)> = owned
+                            .iter()
+                            .map(|s| s as &(dyn postgres::types::ToSql + Sync))
+                            .collect();
+                        if let Err(e) = c.execute(&sql, &p[..]) {
+                            tracing::warn!(error = %e, "postgres write failed");
+                        }
                     }
-                }
+                });
             }
         }
     }
@@ -423,21 +497,25 @@ impl Store {
                 };
                 rows.filter_map(|r| r.ok()).collect()
             }
-            Backend::Pg(pool) => {
-                let Ok(mut c) = pool.get() else {
-                    return Vec::new();
-                };
-                let p: Vec<&(dyn postgres::types::ToSql + Sync)> = params
-                    .iter()
-                    .map(|s| s as &(dyn postgres::types::ToSql + Sync))
-                    .collect();
-                match c.query(&pg_ph(sqlite_sql), &p[..]) {
-                    Ok(rows) => rows.iter().map(|row| row.get::<_, String>(0)).collect(),
-                    Err(e) => {
-                        tracing::warn!(error = %e, "postgres query failed");
-                        Vec::new()
+            Backend::Pg(ex) => {
+                let sql = pg_ph(sqlite_sql);
+                let owned: Vec<String> = params.iter().map(|s| s.to_string()).collect();
+                ex.run(move |pool| {
+                    let Ok(mut c) = pool.get() else {
+                        return Vec::new();
+                    };
+                    let p: Vec<&(dyn postgres::types::ToSql + Sync)> = owned
+                        .iter()
+                        .map(|s| s as &(dyn postgres::types::ToSql + Sync))
+                        .collect();
+                    match c.query(&sql, &p[..]) {
+                        Ok(rows) => rows.iter().map(|row| row.get::<_, String>(0)).collect(),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "postgres query failed");
+                            Vec::new()
+                        }
                     }
-                }
+                })
             }
         }
     }
@@ -914,26 +992,29 @@ impl Store {
                     Err(_) => Vec::new(),
                 }
             }
-            Backend::Pg(pool) => {
-                let Ok(mut c) = pool.get() else {
-                    return Vec::new();
-                };
-                match c.query(&pg_ph(SQL), &[&tenant]) {
-                    Ok(rows) => rows
-                        .iter()
-                        .map(|r| {
-                            row(
-                                r.get(0),
-                                r.get(1),
-                                r.get(2),
-                                r.get(3),
-                                r.get(4),
-                                r.get::<_, Option<String>>(5).unwrap_or_default(),
-                            )
-                        })
-                        .collect(),
-                    Err(_) => Vec::new(),
-                }
+            Backend::Pg(ex) => {
+                let tenant = tenant.to_string();
+                ex.run(move |pool| {
+                    let Ok(mut c) = pool.get() else {
+                        return Vec::new();
+                    };
+                    match c.query(&pg_ph(SQL), &[&tenant]) {
+                        Ok(rows) => rows
+                            .iter()
+                            .map(|r| {
+                                row(
+                                    r.get(0),
+                                    r.get(1),
+                                    r.get(2),
+                                    r.get(3),
+                                    r.get(4),
+                                    r.get::<_, Option<String>>(5).unwrap_or_default(),
+                                )
+                            })
+                            .collect(),
+                        Err(_) => Vec::new(),
+                    }
+                })
             }
         }
     }
@@ -1029,10 +1110,6 @@ impl Store {
     }
 }
 
-/// Postgres advisory-lock key that serializes global audit-checkpoint creation
-/// across replicas (arbitrary constant, unique to this use).
-const AUDIT_CHECKPOINT_LOCK: i64 = 0x5157_4155_4449_5401;
-
 /// Sharded audit backend: entry appends are lock-free (each replica writes only
 /// its own `writer_id` rows), checkpoint creation is serialized.
 impl AuditBackend for Store {
@@ -1049,15 +1126,19 @@ impl AuditBackend for Store {
                     tracing::warn!(error = %e, "audit append failed");
                 }
             }
-            Backend::Pg(pool) => {
-                if let Ok(mut c) = pool.get() {
-                    if let Err(e) = c.execute(
-                        "INSERT INTO audit_entries (writer_id, seq, content_hash, data) VALUES ($1, $2, $3, $4)",
-                        &[&entry.writer_id, &seq, &entry.content_hash, &json],
-                    ) {
-                        tracing::warn!(error = %e, "audit append failed");
+            Backend::Pg(ex) => {
+                let writer_id = entry.writer_id.clone();
+                let content_hash = entry.content_hash.clone();
+                ex.run(move |pool| {
+                    if let Ok(mut c) = pool.get() {
+                        if let Err(e) = c.execute(
+                            "INSERT INTO audit_entries (writer_id, seq, content_hash, data) VALUES ($1, $2, $3, $4)",
+                            &[&writer_id, &seq, &content_hash, &json],
+                        ) {
+                            tracing::warn!(error = %e, "audit append failed");
+                        }
                     }
-                }
+                });
             }
         }
     }
@@ -1073,16 +1154,19 @@ impl AuditBackend for Store {
                 )
                 .ok()
             }
-            Backend::Pg(pool) => {
-                let mut c = pool.get().ok()?;
-                let rows = c
-                    .query(
-                        "SELECT seq, content_hash FROM audit_entries WHERE writer_id = $1 ORDER BY seq DESC LIMIT 1",
-                        &[&writer_id],
-                    )
-                    .ok()?;
-                rows.first()
-                    .map(|row| (row.get::<_, i64>(0) as u64, row.get::<_, String>(1)))
+            Backend::Pg(ex) => {
+                let writer_id = writer_id.to_string();
+                ex.run(move |pool| {
+                    let mut c = pool.get().ok()?;
+                    let rows = c
+                        .query(
+                            "SELECT seq, content_hash FROM audit_entries WHERE writer_id = $1 ORDER BY seq DESC LIMIT 1",
+                            &[&writer_id],
+                        )
+                        .ok()?;
+                    rows.first()
+                        .map(|row| (row.get::<_, i64>(0) as u64, row.get::<_, String>(1)))
+                })
             }
         }
     }
@@ -1107,7 +1191,7 @@ impl AuditBackend for Store {
                 };
                 rows.filter_map(|r| r.ok()).collect()
             }
-            Backend::Pg(pool) => {
+            Backend::Pg(ex) => ex.run(move |pool| {
                 let Ok(mut c) = pool.get() else {
                     return Vec::new();
                 };
@@ -1122,7 +1206,7 @@ impl AuditBackend for Store {
                         .collect(),
                     Err(_) => Vec::new(),
                 }
-            }
+            }),
         }
     }
 
@@ -1196,15 +1280,11 @@ impl AuditBackend for Store {
                 .ok()?;
                 Some(cp)
             }
-            Backend::Pg(pool) => {
-                let mut c = pool.get().ok()?;
-                // Serialize checkpoint creation across replicas.
-                if c.execute("SELECT pg_advisory_lock($1)", &[&AUDIT_CHECKPOINT_LOCK])
-                    .is_err()
-                {
-                    return None;
-                }
-                let result = (|| {
+            Backend::Pg(ex) => {
+                // Read the next sequence + previous hash + all writer tips on the
+                // executor thread.
+                let read = ex.run(|pool| -> Option<(u64, String, Vec<WriterTip>)> {
+                    let mut c = pool.get().ok()?;
                     let latest = c
                         .query(
                             "SELECT checkpoint_seq, content_hash FROM audit_checkpoints ORDER BY checkpoint_seq DESC LIMIT 1",
@@ -1233,17 +1313,35 @@ impl AuditBackend for Store {
                     if tips.is_empty() {
                         return None;
                     }
-                    let cp = build(next_seq, &prev_hash, tips);
-                    let json = serde_json::to_string(&cp).unwrap_or_default();
+                    Some((next_seq, prev_hash, tips))
+                });
+                let (next_seq, prev_hash, tips) = read?;
+
+                // Sign on the caller's thread, so `build` need not be `Send`.
+                let cp = build(next_seq, &prev_hash, tips);
+                let json = serde_json::to_string(&cp).unwrap_or_default();
+                let seq = cp.checkpoint_seq as i64;
+                let content_hash = cp.content_hash.clone();
+
+                // Insert on the executor thread. The `checkpoint_seq` primary key
+                // rejects a duplicate if another replica committed the same
+                // sequence first — the loser just returns None (race lost),
+                // matching the advisory-lock behaviour without holding a lock.
+                let inserted = ex.run(move |pool| -> bool {
+                    let Ok(mut c) = pool.get() else {
+                        return false;
+                    };
                     c.execute(
                         "INSERT INTO audit_checkpoints (checkpoint_seq, content_hash, data) VALUES ($1, $2, $3)",
-                        &[&(cp.checkpoint_seq as i64), &cp.content_hash, &json],
+                        &[&seq, &content_hash, &json],
                     )
-                    .ok()?;
+                    .is_ok()
+                });
+                if inserted {
                     Some(cp)
-                })();
-                let _ = c.execute("SELECT pg_advisory_unlock($1)", &[&AUDIT_CHECKPOINT_LOCK]);
-                result
+                } else {
+                    None
+                }
             }
         }
     }
@@ -1261,6 +1359,33 @@ mod tests {
             by_status: std::collections::BTreeMap::new(),
             trigger: "test".into(),
         }
+    }
+
+    /// Regression: the Postgres backend must work when opened and queried from
+    /// INSIDE an async runtime — the real gateway (AppState::new + axum handlers)
+    /// runs there. Before the dedicated PgExecutor thread, the sync postgres
+    /// client's `block_on` panicked with "Cannot start a runtime from within a
+    /// runtime". Runs only when QW_TEST_PG_URL is set.
+    #[test]
+    fn postgres_works_inside_async_runtime() {
+        let Ok(url) = std::env::var("QW_TEST_PG_URL") else {
+            eprintln!("QW_TEST_PG_URL not set — skipping Postgres async test");
+            return;
+        };
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            // Open + write + read, all inside the runtime (would have panicked).
+            let s = Store::open_postgres(&url).expect("open_postgres inside async runtime");
+            let tenant = format!("async-{}", uuid::Uuid::new_v4());
+            s.record_posture(&tenant, &snap(77.0));
+            let hist = s.posture_history(&tenant, 10);
+            assert_eq!(hist.len(), 1, "posture row round-trips from async context");
+            assert_eq!(hist[0].overall_score, 77.0);
+        });
     }
 
     /// Postgres backend integration test. Runs only when QW_TEST_PG_URL points

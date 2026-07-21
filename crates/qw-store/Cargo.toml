@@ -32,3 +32,4 @@ tokio-postgres-rustls = "0.13"
 [dev-dependencies]
 tempfile = "3"
 base64 = "0.22"
+tokio = { workspace = true }
