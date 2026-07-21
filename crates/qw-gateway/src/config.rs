@@ -485,12 +485,18 @@ pub struct ServerConfig {
     pub listen: String,
     #[serde(default = "default_admin_listen")]
     pub admin_listen: String,
+    /// Directory of the built dashboard (Vite `dist`). When set and present, the
+    /// admin listener serves the SPA at `/` so the UI needs no separate server.
+    /// Defaults to `<exe dir>/dashboard` if that exists.
+    #[serde(default)]
+    pub dashboard_dir: Option<String>,
 }
 
 fn default_gateway() -> ServerConfig {
     ServerConfig {
         listen: default_listen(),
         admin_listen: default_admin_listen(),
+        dashboard_dir: None,
     }
 }
 

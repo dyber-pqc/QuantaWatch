@@ -451,16 +451,57 @@ pub fn build_proxy_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Admin-only router for the dashboard-facing listener (serves `/api/*`).
+/// Admin-only router for the dashboard-facing listener. Serves the authenticated
+/// `/api/*` and, when a built dashboard is present, the SPA at `/`.
 pub fn build_admin_router(state: AppState) -> Router {
-    admin_routes()
+    let api = admin_routes()
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_layer,
         ))
+        .with_state(state.clone());
+
+    // Serve the dashboard SPA (public static files — the API it calls is what's
+    // authenticated). Any non-/api path that isn't a real file falls back to
+    // index.html so client-side routes like /estate load on refresh.
+    let mut router = Router::new().merge(api);
+    if let Some(dir) = resolve_dashboard_dir(&state) {
+        let index = dir.join("index.html");
+        // `.fallback` (not `.not_found_service`) returns index.html with a 200
+        // for unknown paths, so client-side routes like /estate load on refresh
+        // instead of getting a 404.
+        let serve = tower_http::services::ServeDir::new(&dir)
+            .fallback(tower_http::services::ServeFile::new(&index));
+        tracing::info!(dir = %dir.display(), "serving dashboard SPA at /");
+        router = router.fallback_service(serve);
+    } else {
+        tracing::info!("no dashboard build found; admin listener serves the API only");
+    }
+
+    router
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
-        .with_state(state)
+}
+
+/// Locate the built dashboard: explicit config, else `<exe dir>/dashboard`.
+fn resolve_dashboard_dir(state: &AppState) -> Option<std::path::PathBuf> {
+    if let Some(d) = state
+        .config
+        .gateway
+        .dashboard_dir
+        .as_ref()
+        .filter(|s| !s.is_empty())
+    {
+        let p = std::path::PathBuf::from(d);
+        return p.join("index.html").exists().then_some(p);
+    }
+    let exe_default = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("dashboard")))?;
+    exe_default
+        .join("index.html")
+        .exists()
+        .then_some(exe_default)
 }
 
 async fn health() -> impl IntoResponse {

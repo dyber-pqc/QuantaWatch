@@ -61,6 +61,22 @@ New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 Copy-Item $SourceExe "$InstallDir\quantawatch.exe" -Force
 Write-Host "Binary installed: $InstallDir\quantawatch.exe"
 
+# --- dashboard (built SPA) --------------------------------------------------
+# The gateway serves <InstallDir>\dashboard at / automatically (exe-dir
+# fallback), so the UI needs no separate server. Build it first if missing:
+#   cd dashboard; npm run build
+$dist = Join-Path $PSScriptRoot '..\..\dashboard\dist'
+if (Test-Path (Join-Path $dist 'index.html')) {
+  $dashDest = Join-Path $InstallDir 'dashboard'
+  if (Test-Path $dashDest) { Remove-Item $dashDest -Recurse -Force }
+  New-Item -ItemType Directory -Path $dashDest -Force | Out-Null
+  Copy-Item "$dist\*" $dashDest -Recurse -Force
+  Write-Host "Dashboard installed: $dashDest  (served at http://localhost:9091)"
+} else {
+  Write-Warning "No dashboard build at $dist - the UI will not be served."
+  Write-Warning "Build it (cd dashboard; npm run build) and re-run this script."
+}
+
 # --- register (creates the virtual account) ---------------------------------
 # Registration happens BEFORE the ACL grant so the NT SERVICE\<name> SID exists.
 & "$InstallDir\quantawatch.exe" service install "$StateDir\quantawatch.yaml" $svcAccount
@@ -102,6 +118,7 @@ try {
   Write-Warning "Service started but the admin API did not answer: $_"
   Write-Warning "Check $StateDir\quantawatch-service.log"
 }
-Write-Host "`nLogs:   $StateDir\quantawatch-service.log"
-Write-Host "Stop:   sc.exe stop $ServiceName"
-Write-Host "Remove: `"$InstallDir\quantawatch.exe`" service uninstall"
+Write-Host "`nDashboard: http://localhost:9091   (log in with your admin credentials)"
+Write-Host "Logs:      $StateDir\quantawatch-service.log"
+Write-Host "Stop:      sc.exe stop $ServiceName"
+Write-Host "Remove:    `"$InstallDir\quantawatch.exe`" service uninstall"
