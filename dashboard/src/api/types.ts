@@ -702,3 +702,38 @@ export interface ConnectionScanResult {
   migrationPlan: MigrationStep[];
   connection: Connection;
 }
+
+// ---- Host-agent endpoints (firmware / boot-chain crypto) ----
+export interface EndpointComponent {
+  category: string;
+  name: string;
+  detail: string;
+  algorithm?: string | null;
+  pqcStatus: string;
+  severity: string;
+}
+export interface Endpoint {
+  id: string;
+  hostname: string;
+  os: string;
+  osKind: string;
+  agentVersion?: string | null;
+  enrolledAt: string;
+  lastReport: string;
+  pqcStatus: string;
+  findingsCount: number;
+  components: EndpointComponent[];
+  inventory?: unknown;
+}
+export interface EndpointBoard {
+  endpoints: Endpoint[];
+  total: number;
+  quantumVulnerable: number;
+}
+export interface EnrollInfo {
+  token: string;
+  reportPath: string;
+  linux: string;
+  windows: string;
+  note: string;
+}

@@ -39,6 +39,8 @@ import type {
   Connection,
   ConnectionBoard,
   ConnectionScanResult,
+  EndpointBoard,
+  EnrollInfo,
 } from "./types";
 
 // ---- Mock data for development when API is unavailable ----
@@ -844,6 +846,21 @@ export async function scanConnection(id: string): Promise<ConnectionScanResult> 
 
 export async function deleteConnection(id: string): Promise<void> {
   await fetchJSON(`/api/connections/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ---- Host-agent endpoints (firmware / boot-chain crypto) ----
+export async function fetchEndpoints(): Promise<EndpointBoard> {
+  try {
+    return await fetchJSON<EndpointBoard>("/api/endpoints");
+  } catch {
+    return { endpoints: [], total: 0, quantumVulnerable: 0 };
+  }
+}
+export async function fetchEnrollInfo(): Promise<EnrollInfo> {
+  return fetchJSON<EnrollInfo>("/api/endpoints/enroll");
+}
+export async function deleteEndpoint(id: string): Promise<void> {
+  await fetchJSON(`/api/endpoints/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 /** Create a remediation ticket (Jira/Linear) from a finding. */

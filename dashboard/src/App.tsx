@@ -18,6 +18,7 @@ import FrameworksPage from "./pages/FrameworksPage";
 import CryptoPoliciesPage from "./pages/CryptoPoliciesPage";
 import OverlayPage from "./pages/OverlayPage";
 import EstatePage from "./pages/EstatePage";
+import EndpointsPage from "./pages/EndpointsPage";
 import RemediationsPage from "./pages/RemediationsPage";
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
         <Route path="/crypto-policies" element={<CryptoPoliciesPage />} />
         <Route path="/overlay" element={<OverlayPage />} />
         <Route path="/estate" element={<EstatePage />} />
+        <Route path="/endpoints" element={<EndpointsPage />} />
         <Route path="/rbac" element={<RbacPage />} />
         <Route path="/sessions" element={<SessionsPage />} />
         <Route path="/audit" element={<AuditPage />} />
