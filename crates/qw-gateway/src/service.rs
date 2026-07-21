@@ -56,7 +56,24 @@ fn run_service(arguments: Vec<OsString>) -> Result<()> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(default_config_path);
 
-    init_file_logging();
+    // The SCM starts us in C:\Windows\System32. The config uses paths relative
+    // to itself (./data, ./keys, ./audit), so anchor the working directory to
+    // the config's own directory — otherwise the service would scatter its
+    // database and keys under System32. Logs go there too, keeping all mutable
+    // state in one place.
+    let state_dir = Path::new(&config_path)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(exe_dir);
+    let cwd_err = std::env::set_current_dir(&state_dir).err();
+
+    init_file_logging(&state_dir);
+    if let Some(e) = cwd_err {
+        tracing::error!(dir = %state_dir.display(), error = %e, "could not set working directory");
+    } else {
+        tracing::info!(dir = %state_dir.display(), "working directory anchored to the config");
+    }
     tracing::info!(%config_path, "QuantaWatch service starting");
 
     // Bridge the SCM's stop control into an async shutdown signal.
@@ -145,11 +162,10 @@ fn default_config_path() -> String {
         .to_string()
 }
 
-/// Services have no console: write JSON logs to a file beside the executable.
-fn init_file_logging() {
+/// Services have no console: write JSON logs to a rolling file in the state dir.
+fn init_file_logging(dir: &Path) {
     use tracing_subscriber::EnvFilter;
-    let dir = exe_dir();
-    let appender = tracing_appender::rolling::daily(&dir, "quantawatch-service.log");
+    let appender = tracing_appender::rolling::daily(dir, "quantawatch-service.log");
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -196,10 +212,17 @@ pub fn install(config_path: &str) -> Result<()> {
         .set_description(SERVICE_DESCRIPTION)
         .map_err(|e| anyhow!("set description: {e}"))?;
 
+    // Relative paths in the config (./data, ./keys, ./audit) and the log file
+    // all resolve against the config's directory at run time.
+    let state_dir = Path::new(&config)
+        .parent()
+        .map(|d| d.display().to_string())
+        .unwrap_or_default();
     println!("Installed service '{SERVICE_NAME}' ({SERVICE_DISPLAY_NAME})");
     println!("  exe    : {}", std::env::current_exe()?.display());
     println!("  config : {config}");
-    println!("  logs   : {}\\quantawatch-service.log", exe_dir().display());
+    println!("  state  : {state_dir}  (data/, keys/, audit/)");
+    println!("  logs   : {state_dir}\\quantawatch-service.log");
     println!("\nStart it with:  sc start {SERVICE_NAME}");
     println!("Configure auto-restart on failure:");
     println!("  sc failure {SERVICE_NAME} reset= 86400 actions= restart/5000/restart/5000/restart/30000");
