@@ -1,4 +1,6 @@
 import type {
+  Target,
+  TargetBoard,
   OverlayStatus,
   CryptoPolicyBoard,
   CryptoPolicyResult,
@@ -501,6 +503,38 @@ export async function fetchThreats(): Promise<Threat[]> {
   } catch {
     return [];
   }
+}
+
+// ---- Estate targets ----
+export async function fetchTargets(): Promise<TargetBoard> {
+  try {
+    return await fetchJSON<TargetBoard>("/api/targets");
+  } catch {
+    return { targets: [], total: 0, exposedServices: 0, quantumVulnerable: 0 };
+  }
+}
+
+export async function registerTarget(body: {
+  name: string;
+  host: string;
+  kind: string;
+  reachability: string[];
+  environment: string;
+  tags?: string[];
+}): Promise<Target> {
+  return fetchJSON<Target>("/api/targets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function scanTarget(id: string): Promise<Target> {
+  return fetchJSON<Target>(`/api/targets/${encodeURIComponent(id)}/scan`, { method: "POST" });
+}
+
+export async function deleteTarget(id: string): Promise<void> {
+  await fetchJSON(`/api/targets/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
 // ---- PQC-terminating overlay ----

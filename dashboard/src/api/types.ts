@@ -625,3 +625,30 @@ export interface OverlayStatus {
   total: number;
   pqcProtectedRoutes: number;
 }
+
+// ---- Estate targets ----
+export interface ExposedService {
+  port: number;
+  service: string;
+  pqcStatus: string;
+  detail: string;
+}
+export interface Target {
+  id: string;
+  name: string;
+  host: string;
+  kind: string;
+  reachability: string[];
+  environment: string;
+  tags: string[];
+  exposedServices: ExposedService[];
+  pqcStatus: string;
+  lastScanned?: string;
+  createdAt: string;
+}
+export interface TargetBoard {
+  targets: Target[];
+  total: number;
+  exposedServices: number;
+  quantumVulnerable: number;
+}

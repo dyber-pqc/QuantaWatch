@@ -191,6 +191,38 @@ pub struct PolicySnapshotRow {
     pub updated_at: DateTime<Utc>,
 }
 
+/// One network service exposed by a target, with its crypto posture.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExposedService {
+    pub port: u16,
+    pub service: String,
+    pub pqc_status: String,
+    pub detail: String,
+}
+
+/// A connected system in the estate — a VM, a server (SSH/RDP), a network host.
+/// Registering it authorizes QuantaWatch to sweep it: port-scan + fingerprint
+/// every exposed service's crypto into `exposed_services`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetRow {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    /// vm | server | network_device | container | endpoint | database
+    pub kind: String,
+    /// Declared reachability: ssh | rdp | tls | network.
+    pub reachability: Vec<String>,
+    pub environment: String,
+    pub tags: Vec<String>,
+    pub exposed_services: Vec<ExposedService>,
+    /// Worst PQC posture across exposed services.
+    pub pqc_status: String,
+    pub last_scanned: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A certificate issued by the internal PQC CA. The private key is NOT stored
 /// (returned once at issuance); this is the durable, auditable record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -383,6 +415,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
     CREATE TABLE IF NOT EXISTS certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+    CREATE TABLE IF NOT EXISTS targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -635,6 +668,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS certificates (
                 id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
             );
+            CREATE TABLE IF NOT EXISTS targets (
+                id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
+            );
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
             );
@@ -681,6 +717,7 @@ impl Store {
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
             CREATE TABLE certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+            CREATE TABLE targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -1169,6 +1206,38 @@ impl Store {
             "SELECT data FROM certificates WHERE tenant = ?1 AND id = ?2",
             &[tenant, id],
         )
+    }
+
+    // ---- Estate targets (connected systems) ----
+
+    pub fn upsert_target(&self, tenant: &str, target: &TargetRow) {
+        let json = serde_json::to_string(target).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO targets (id, tenant, data) VALUES (?1, ?2, ?3)",
+            "INSERT INTO targets (id, tenant, data) VALUES ($1, $2, $3) ON CONFLICT (tenant, id) DO UPDATE SET data = EXCLUDED.data",
+            &[target.id.as_str(), tenant, json.as_str()],
+        );
+    }
+
+    pub fn list_targets(&self, tenant: &str) -> Vec<TargetRow> {
+        self.list_de(
+            "SELECT data FROM targets WHERE tenant = ?1 ORDER BY id LIMIT 100000",
+            &[tenant],
+        )
+    }
+
+    pub fn get_target(&self, tenant: &str, id: &str) -> Option<TargetRow> {
+        self.one_de(
+            "SELECT data FROM targets WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        )
+    }
+
+    pub fn delete_target(&self, tenant: &str, id: &str) {
+        self.exec(
+            "DELETE FROM targets WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        );
     }
 
     // ---- Graph snapshots (drift/timeline) ----

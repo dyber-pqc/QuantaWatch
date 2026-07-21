@@ -325,6 +325,19 @@ fn admin_routes() -> Router<AppState> {
             "/api/connectors",
             get(crate::admin::connectors_api::get_connectors),
         )
+        .route(
+            "/api/targets",
+            get(crate::admin::targets_api::list_targets).post(crate::admin::targets_api::register),
+        )
+        .route(
+            "/api/targets/{id}",
+            get(crate::admin::targets_api::get_target)
+                .delete(crate::admin::targets_api::delete_target),
+        )
+        .route(
+            "/api/targets/{id}/scan",
+            post(crate::admin::targets_api::scan_target),
+        )
         .route("/api/pki/ca", get(crate::admin::pki_api::get_ca))
         .route("/api/pki/issue", post(crate::admin::pki_api::issue))
         .route("/api/pki/verify", post(crate::admin::pki_api::verify))

@@ -26,6 +26,7 @@ pub const RBAC_RESOURCES: &[&str] = &[
     "overlay",
     "pki",
     "connectors",
+    "targets",
     "slos",
     "alerts",
     "integrations",

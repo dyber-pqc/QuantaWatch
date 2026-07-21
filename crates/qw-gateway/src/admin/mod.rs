@@ -9,6 +9,7 @@ pub mod config_api;
 pub mod connectors_api;
 pub mod crypto_policies;
 pub mod pki_api;
+pub mod targets_api;
 pub mod evidence;
 pub mod frameworks;
 pub mod governance;
