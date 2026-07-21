@@ -18,5 +18,8 @@ pub mod providers;
 pub mod rbac;
 pub mod resilience;
 pub mod router;
+pub mod server;
+#[cfg(windows)]
+pub mod service;
 pub mod siem;
 pub mod state;

@@ -1,11 +1,33 @@
 use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 
-use qw_gateway::config::GatewayConfig;
-use qw_gateway::router;
-use qw_gateway::state::AppState;
-
 fn main() -> Result<()> {
+    // `quantawatch service <run|install|uninstall> [config]` manages the Windows
+    // service; anything else is the normal console launch (config path is the
+    // first positional argument).
+    let args: Vec<String> = std::env::args().collect();
+    if args.get(1).map(String::as_str) == Some("service") {
+        #[cfg(windows)]
+        {
+            let config = args.get(3).cloned().unwrap_or_else(|| "quantawatch.yaml".to_string());
+            return match args.get(2).map(String::as_str) {
+                // Invoked by the Service Control Manager, not by a human.
+                Some("run") => qw_gateway::service::start_dispatcher(),
+                Some("install") => qw_gateway::service::install(&config),
+                Some("uninstall") => qw_gateway::service::uninstall(),
+                _ => {
+                    eprintln!("usage: quantawatch service <install [config.yaml]|uninstall|run>");
+                    std::process::exit(2);
+                }
+            };
+        }
+        #[cfg(not(windows))]
+        {
+            eprintln!("`service` is only supported on Windows; use systemd elsewhere.");
+            std::process::exit(2);
+        }
+    }
+
     // ML-DSA-65 key generation uses large stack-allocated arrays. The async runtime's
     // entry future runs on the main OS thread, which has a small (~1MB) stack on Windows.
     // Run everything on a dedicated thread with a generous stack to avoid overflow.
@@ -24,7 +46,6 @@ fn main() -> Result<()> {
 }
 
 async fn run() -> Result<()> {
-    // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -33,51 +54,15 @@ async fn run() -> Result<()> {
         .json()
         .init();
 
-    tracing::info!("QuantaWatch Gateway starting...");
-
-    // Load configuration
     let config_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "quantawatch.yaml".to_string());
 
-    let config = GatewayConfig::load(&config_path)?;
-    tracing::info!(config_path = %config_path, "Configuration loaded");
-
-    // Build application state
-    let state = AppState::new(config.clone()).await?;
-    tracing::info!(
-        fingerprint = %state.gateway_identity.fingerprint,
-        "Gateway identity initialized"
-    );
-
-    // Spawn background tasks (startup scan, scheduled scans, posture snapshots)
-    qw_gateway::background::spawn(state.clone());
-
-    // Bind the proxy (provider-facing) and admin (dashboard-facing) listeners.
-    let listen_addr = config.gateway.listen.clone();
-    let admin_addr = config.gateway.admin_listen.clone();
-
-    let proxy_app = router::build_proxy_router(state.clone());
-    let admin_app = router::build_admin_router(state);
-
-    let proxy_listener = tokio::net::TcpListener::bind(&listen_addr).await?;
-    let admin_listener = tokio::net::TcpListener::bind(&admin_addr).await?;
-
-    tracing::info!(proxy = %listen_addr, admin = %admin_addr, "QuantaWatch Gateway listening");
-
     println!("\n  QuantaWatch Gateway v{}", env!("CARGO_PKG_VERSION"));
-    println!("  Proxy:     http://{}", listen_addr);
-    println!("  Dashboard: http://{}", admin_addr);
-    println!();
 
-    // Serve both concurrently; exit if either stops.
-    let proxy = tokio::spawn(async move { axum::serve(proxy_listener, proxy_app).await });
-    let admin = tokio::spawn(async move { axum::serve(admin_listener, admin_app).await });
-
-    tokio::select! {
-        r = proxy => { r??; }
-        r = admin => { r??; }
-    }
-
-    Ok(())
+    // Console mode: Ctrl-C drains the listeners instead of killing the process.
+    let shutdown = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    qw_gateway::server::run_gateway(&config_path, shutdown).await
 }

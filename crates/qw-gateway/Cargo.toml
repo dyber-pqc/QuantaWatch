@@ -54,9 +54,15 @@ time = "0.3"
 # Authenticated deep host inventory over SSH (pure-Rust client).
 russh = "0.45"
 hex.workspace = true
+tracing-appender = "0.2"
 sha2 = "0.10"
 hmac = "0.12"
 jsonwebtoken = "9"
+
+# Run as a real Windows service (SCM protocol) so the gateway survives logoff,
+# restarts after a crash, and starts on boot.
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8"
 
 [dev-dependencies]
 reqwest = { workspace = true, features = ["json"] }
