@@ -594,7 +594,12 @@ pub fn build_graph(
     // A network sweep sees exposed ports; a deep scan adds the loopback-only
     // services and containers, so a single host fans out into a whole subgraph.
     for t in state.store.list_targets(tenant) {
-        let host_id = format!("host:{}", t.host);
+        // Key the host subgraph by the target's stable id, NOT its host address:
+        // two distinct targets can share an IP (re-registration, NAT, a bastion
+        // fronting several logical hosts), and keying by host would collapse them
+        // into one node and mint duplicate path ids — which also corrupts drift
+        // detection. The host address stays in the label/title for readability.
+        let host_id = format!("host:{}", t.id);
         let host_status = parse_status(&t.pqc_status);
         let prod = t.environment.to_lowercase().contains("prod")
             || t.tags.iter().any(|x| x.contains("external") || x.contains("customer"));
@@ -607,8 +612,8 @@ pub fn build_graph(
                 kind: "host".into(),
                 label: t.name.clone(),
                 sublabel: match &t.host_info {
-                    Some(info) if !info.is_empty() => info.clone(),
-                    _ => format!("{} · {}", t.kind, t.environment),
+                    Some(info) if !info.is_empty() => format!("{} · {}", t.host, info),
+                    _ => format!("{} · {} · {}", t.host, t.kind, t.environment),
                 },
                 pqc_status: t.pqc_status.clone(),
                 risk: channel_weight(&host_status) * 100.0,
@@ -619,7 +624,7 @@ pub fn build_graph(
 
         for s in &t.exposed_services {
             let svc_status = parse_status(&s.pqc_status);
-            let sid = format!("service:{}:{}", t.host, s.port);
+            let sid = format!("service:{}:{}", t.id, s.port);
             push(
                 &mut nodes,
                 &mut seen,
@@ -627,7 +632,11 @@ pub fn build_graph(
                     id: sid.clone(),
                     kind: "service".into(),
                     label: format!(":{} {}", s.port, s.service),
-                    sublabel: if s.exposed { "exposed".into() } else { "internal (loopback)".into() },
+                    sublabel: format!(
+                        "{} · {}",
+                        t.host,
+                        if s.exposed { "exposed" } else { "internal (loopback)" }
+                    ),
                     pqc_status: s.pqc_status.clone(),
                     risk: channel_weight(&svc_status) * 100.0,
                     blast_radius: 0.0,
@@ -659,7 +668,7 @@ pub fn build_graph(
             *blast.entry(host_id.clone()).or_insert(0.0) += cw * env_weight;
             let hndl = matches!(svc_status, PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak);
             paths.push(AttackPath {
-                id: format!("service:{}:{}", t.host, s.port),
+                id: format!("service:{}:{}", t.id, s.port),
                 title: format!("{}:{} ({}) exposes a quantum-vulnerable channel", t.host, s.port, s.service),
                 severity: severity_for(score).into(),
                 score,
@@ -682,7 +691,7 @@ pub fn build_graph(
         }
 
         for c in &t.containers {
-            let cid = format!("container:{}:{}", t.host, c.name);
+            let cid = format!("container:{}:{}", t.id, c.name);
             push(
                 &mut nodes,
                 &mut seen,
