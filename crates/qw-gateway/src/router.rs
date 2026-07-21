@@ -360,6 +360,14 @@ fn admin_routes() -> Router<AppState> {
             "/api/targets/{id}/deep-scan",
             post(crate::admin::targets_api::deep_scan),
         )
+        .route(
+            "/api/targets/{id}/services/{port}/protect",
+            post(crate::admin::targets_api::protect_service),
+        )
+        .route(
+            "/api/targets/{id}/services/{port}/issue-cert",
+            post(crate::admin::targets_api::issue_service_cert),
+        )
         .route("/api/pki/ca", get(crate::admin::pki_api::get_ca))
         .route("/api/pki/issue", post(crate::admin::pki_api::issue))
         .route("/api/pki/verify", post(crate::admin::pki_api::verify))

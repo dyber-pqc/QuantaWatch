@@ -208,6 +208,13 @@ pub struct ExposedService {
     /// are always exposed; deep-inventory adds the internal ones.
     #[serde(default = "default_true")]
     pub exposed: bool,
+    /// Set once this service is fronted by the PQC overlay: the hybrid-PQC
+    /// listen address clients should connect to instead of the raw service.
+    #[serde(default)]
+    pub protected_listen: Option<String>,
+    /// Set once a hybrid ML-DSA certificate has been issued for this service.
+    #[serde(default)]
+    pub cert_id: Option<String>,
 }
 
 fn default_source() -> String {

@@ -634,6 +634,8 @@ export interface ExposedService {
   detail: string;
   source?: "network" | "host";
   exposed?: boolean;
+  protectedListen?: string | null;
+  certId?: string | null;
 }
 export interface HostContainer {
   name: string;

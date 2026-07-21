@@ -221,6 +221,8 @@ pub async fn scan_target(
             detail: f.description.chars().take(160).collect(),
             source: "network".to_string(),
             exposed: true,
+            protected_listen: None,
+            cert_id: None,
         });
         // Keep the worst posture seen on this port.
         if pqc_rank(&status) < pqc_rank(&entry.pqc_status) {
@@ -247,8 +249,20 @@ pub async fn scan_target(
 fn merge_services(
     existing: &[ExposedService],
     source: &str,
-    fresh: Vec<ExposedService>,
+    mut fresh: Vec<ExposedService>,
 ) -> Vec<ExposedService> {
+    // Carry any protection markers (overlay/cert applied earlier) forward onto
+    // the freshly-scanned rows so a re-scan doesn't drop "already protected".
+    for f in fresh.iter_mut() {
+        if let Some(prev) = existing.iter().find(|s| s.port == f.port) {
+            if f.protected_listen.is_none() {
+                f.protected_listen = prev.protected_listen.clone();
+            }
+            if f.cert_id.is_none() {
+                f.cert_id = prev.cert_id.clone();
+            }
+        }
+    }
     let mut out: Vec<ExposedService> =
         existing.iter().filter(|s| s.source != source).cloned().collect();
     out.extend(fresh);
@@ -371,6 +385,8 @@ pub async fn deep_scan(
             detail: detail.clone(),
             source: "host".to_string(),
             exposed: svc.exposed,
+            protected_listen: None,
+            cert_id: None,
         });
 
         findings.push(Finding {
@@ -461,4 +477,175 @@ pub async fn deep_scan(
         "servicesFound": result.findings.len(),
     }))
     .into_response()
+}
+
+// ---- One-click remediation: finding -> fix (overlay / PQC cert) ----
+
+fn find_service<'a>(target: &'a TargetRow, port: u16) -> Option<&'a ExposedService> {
+    target.exposed_services.iter().find(|s| s.port == port)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtectRequest {
+    /// "hybrid" (offer PQC, allow classical) | "pqc-only" (drop classical).
+    #[serde(default)]
+    mode: Option<String>,
+    /// Re-encrypt the upstream leg with TLS (for a TLS service) or forward
+    /// plaintext to a trusted local upstream.
+    #[serde(default)]
+    upstream_tls: Option<bool>,
+    /// Override the client-facing listen address; defaults to 0.0.0.0:0 (the OS
+    /// picks a free port).
+    #[serde(default)]
+    listen: Option<String>,
+}
+
+/// POST /api/targets/{id}/services/{port}/protect — front a discovered service
+/// with the hybrid-PQC overlay in one click. Binds a new PQC-terminating
+/// listener that forwards to `host:port`; clients then connect to the returned
+/// listen address over an X25519MLKEM768 channel.
+pub async fn protect_service(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+    Path((id, port)): Path<(String, u16)>,
+    body: Option<Json<ProtectRequest>>,
+) -> impl IntoResponse {
+    let body = body
+        .map(|b| b.0)
+        .unwrap_or(ProtectRequest { mode: None, upstream_tls: None, listen: None });
+    let tenant = tenant_of(&ctx);
+    let Some(mut target) = state.store.get_target(&tenant, &id) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("target '{id}' not found") }))).into_response();
+    };
+    let Some(svc) = find_service(&target, port) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("no service on port {port}") }))).into_response();
+    };
+    // If the raw service speaks TLS (https/ssh-alt/etc.), re-encrypt upstream by
+    // default so the internal leg stays protected too.
+    let default_upstream_tls = matches!(svc.service.as_str(), "https" | "https-alt" | "imaps" | "ldaps" | "smtps" | "pop3s" | "dns-over-tls");
+    let upstream = format!("{}:{}", target.host, port);
+    let mode = body.mode.unwrap_or_else(|| "hybrid".to_string());
+    let listen = body.listen.unwrap_or_else(|| "0.0.0.0:0".to_string());
+    let route_id = format!("target:{}:{}", target.id, port);
+
+    match state
+        .overlay
+        .add_route(&route_id, &listen, &upstream, body.upstream_tls.unwrap_or(default_upstream_tls), &mode)
+        .await
+    {
+        Ok(stats) => {
+            let listen_addr = stats.listen.clone();
+            for s in target.exposed_services.iter_mut() {
+                if s.port == port {
+                    s.protected_listen = Some(listen_addr.clone());
+                }
+            }
+            state.store.upsert_target(&tenant, &target);
+            (
+                StatusCode::OK,
+                Json(json!({
+                    "target": target,
+                    "protectedListen": listen_addr,
+                    "upstream": upstream,
+                    "mode": mode,
+                    "hybridGroup": "X25519MLKEM768",
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "error": format!("could not protect service: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IssueCertRequest {
+    #[serde(default)]
+    validity_days: Option<u32>,
+    /// "hybrid" (default) | "classical".
+    #[serde(default)]
+    key_type: Option<String>,
+}
+
+/// POST /api/targets/{id}/services/{port}/issue-cert — mint a hybrid ML-DSA
+/// certificate for a discovered service from the internal CA, in one click.
+pub async fn issue_service_cert(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+    Path((id, port)): Path<(String, u16)>,
+    body: Option<Json<IssueCertRequest>>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    let body = body.map(|b| b.0).unwrap_or(IssueCertRequest { validity_days: None, key_type: None });
+    let Some(mut target) = state.store.get_target(&tenant, &id) else {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("target '{id}' not found") }))).into_response();
+    };
+    if find_service(&target, port).is_none() {
+        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("no service on port {port}") }))).into_response();
+    }
+    let Some(ca) = &state.ca else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({ "error": "internal PKI/CA is not configured (set pki.enabled)" })),
+        )
+            .into_response();
+    };
+
+    let host = target.host.clone();
+    let hybrid = body.key_type.as_deref() != Some("classical");
+    let days = body.validity_days.unwrap_or(state.config.pki.default_validity_days);
+
+    match ca.issue(&host, &[host.clone()], days, hybrid) {
+        Ok((row, key_pem)) => {
+            state.store.record_certificate(&tenant, &row);
+            for s in target.exposed_services.iter_mut() {
+                if s.port == port {
+                    s.cert_id = Some(row.id.clone());
+                }
+            }
+            state.store.upsert_target(&tenant, &target);
+            let _ = state
+                .audit_logger
+                .log(
+                    "system",
+                    qw_audit::AuditEvent::CertificateIssued {
+                        cert_id: row.id.clone(),
+                        subject: row.subject.clone(),
+                        key_type: row.key_type.clone(),
+                        serial: row.serial.clone(),
+                        not_after: row.not_after.to_rfc3339(),
+                        renewed: false,
+                    },
+                )
+                .await;
+            (
+                StatusCode::CREATED,
+                Json(json!({
+                    "target": target,
+                    "certificate": {
+                        "id": row.id,
+                        "subject": row.subject,
+                        "sans": row.sans,
+                        "serial": row.serial,
+                        "keyType": row.key_type,
+                        "notAfter": row.not_after,
+                        "caFingerprint": row.ca_fingerprint,
+                        "pqcStatus": row.pqc_status,
+                    },
+                    "keyPem": key_pem, // returned once, never stored
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("cert issuance failed: {e}") })),
+        )
+            .into_response(),
+    }
 }

@@ -554,6 +554,22 @@ export async function deepScanTarget(
   });
 }
 
+/** One-click: front a discovered service with the hybrid-PQC overlay. */
+export async function protectService(
+  id: string,
+  port: number,
+): Promise<{ target: Target; protectedListen: string; mode: string; hybridGroup: string }> {
+  return fetchJSON(`/api/targets/${encodeURIComponent(id)}/services/${port}/protect`, { method: "POST" });
+}
+
+/** One-click: issue a hybrid ML-DSA certificate for a discovered service. */
+export async function issueServiceCert(
+  id: string,
+  port: number,
+): Promise<{ target: Target; certificate: { id: string; subject: string; serial: string; keyType: string; notAfter: string; caFingerprint: string; pqcStatus: string }; keyPem: string }> {
+  return fetchJSON(`/api/targets/${encodeURIComponent(id)}/services/${port}/issue-cert`, { method: "POST" });
+}
+
 export async function deleteTarget(id: string): Promise<void> {
   await fetchJSON(`/api/targets/${encodeURIComponent(id)}`, { method: "DELETE" });
 }

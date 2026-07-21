@@ -82,38 +82,127 @@ impl RouteStats {
     }
 }
 
-/// Shared overlay state, exposed to the admin API.
-#[derive(Debug)]
+/// Shared overlay state, exposed to the admin API. Routes are interior-mutable
+/// so the dashboard can protect a discovered service at runtime (one-click),
+/// not only from static config.
 pub struct OverlayState {
     pub enabled: bool,
-    pub cert_source: String,
-    pub routes: Vec<Arc<RouteStats>>,
+    pub cert_source: Mutex<String>,
+    pub routes: Mutex<Vec<Arc<RouteStats>>>,
+    /// The client-facing TLS config (hybrid-PQC). Built lazily (self-signed) the
+    /// first time a route is added if the overlay wasn't configured with one.
+    server_cfg: Mutex<Option<Arc<ServerConfig>>>,
+    connector: Arc<TlsConnector>,
+    audit: Arc<qw_audit::AuditLogger>,
 }
 
 impl OverlayState {
-    pub fn disabled() -> Self {
+    pub fn disabled(audit: Arc<qw_audit::AuditLogger>) -> Self {
         Self {
             enabled: false,
-            cert_source: "n/a".to_string(),
-            routes: vec![],
+            cert_source: Mutex::new("n/a".to_string()),
+            routes: Mutex::new(vec![]),
+            server_cfg: Mutex::new(None),
+            connector: Arc::new(upstream_connector()),
+            audit,
         }
     }
 
     pub fn snapshot(&self) -> serde_json::Value {
-        let routes: Vec<serde_json::Value> = self.routes.iter().map(|r| r.snapshot()).collect();
-        let protected = self
-            .routes
+        let routes_guard = self.routes.lock().unwrap();
+        let routes: Vec<serde_json::Value> = routes_guard.iter().map(|r| r.snapshot()).collect();
+        let protected = routes_guard
             .iter()
             .filter(|r| r.pqc_connections.load(Ordering::Relaxed) > 0)
             .count();
+        let total = routes_guard.len();
         serde_json::json!({
-            "enabled": self.enabled,
-            "certSource": self.cert_source,
+            "enabled": self.enabled || total > 0,
+            "certSource": self.cert_source.lock().unwrap().clone(),
             "hybridGroup": "X25519MLKEM768",
             "routes": routes,
-            "total": self.routes.len(),
+            "total": total,
             "pqcProtectedRoutes": protected,
         })
+    }
+
+    /// Ensure a client-facing server TLS config exists (lazily self-signed).
+    fn ensure_server_cfg(&self) -> anyhow::Result<Arc<ServerConfig>> {
+        let mut guard = self.server_cfg.lock().unwrap();
+        if let Some(c) = guard.as_ref() {
+            return Ok(c.clone());
+        }
+        let (cfg, source) = server_config(&OverlayConfig::default())?;
+        *self.cert_source.lock().unwrap() = format!("{source} (runtime)");
+        *guard = Some(cfg.clone());
+        Ok(cfg)
+    }
+
+    /// Bind a new protected route at runtime and start forwarding. `listen` may
+    /// use `:0` to let the OS pick a free port; the actual bound address is
+    /// recorded on the returned stats.
+    pub async fn add_route(
+        &self,
+        id: &str,
+        listen: &str,
+        upstream: &str,
+        upstream_tls: bool,
+        mode: &str,
+    ) -> anyhow::Result<Arc<RouteStats>> {
+        let server_cfg = self.ensure_server_cfg()?;
+        let listener = TcpListener::bind(listen)
+            .await
+            .map_err(|e| anyhow::anyhow!("overlay bind {listen}: {e}"))?;
+        let actual = listener
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| listen.to_string());
+        let route = OverlayRoute {
+            id: id.to_string(),
+            listen: actual,
+            upstream: upstream.to_string(),
+            upstream_tls,
+            mode: mode.to_string(),
+        };
+        let stats = Arc::new(RouteStats::new(&route));
+
+        let acceptor = TlsAcceptor::from(server_cfg);
+        let connector = self.connector.clone();
+        let stats_task = stats.clone();
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((tcp, _peer)) => {
+                        tokio::spawn(handle_conn(
+                            tcp,
+                            acceptor.clone(),
+                            connector.clone(),
+                            stats_task.clone(),
+                        ));
+                    }
+                    Err(e) => {
+                        tracing::warn!(route = %stats_task.id, error = %e, "overlay: accept failed");
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        });
+
+        self.routes.lock().unwrap().push(stats.clone());
+        tracing::info!(route = %route.id, listen = %route.listen, upstream = %route.upstream, "overlay: runtime route protected");
+        let _ = self
+            .audit
+            .log(
+                "system",
+                qw_audit::AuditEvent::OverlayRouteProtected {
+                    route_id: route.id.clone(),
+                    listen: route.listen.clone(),
+                    upstream: route.upstream.clone(),
+                    mode: route.mode.clone(),
+                },
+            )
+            .await;
+        Ok(stats)
     }
 }
 
@@ -285,7 +374,7 @@ pub async fn spawn(
     audit_logger: Arc<qw_audit::AuditLogger>,
 ) -> anyhow::Result<Arc<OverlayState>> {
     if !cfg.enabled || cfg.routes.is_empty() {
-        return Ok(Arc::new(OverlayState::disabled()));
+        return Ok(Arc::new(OverlayState::disabled(audit_logger)));
     }
 
     let (server_cfg, cert_source) = server_config(cfg)?;
@@ -347,8 +436,11 @@ pub async fn spawn(
 
     Ok(Arc::new(OverlayState {
         enabled: true,
-        cert_source,
-        routes: route_stats,
+        cert_source: Mutex::new(cert_source),
+        routes: Mutex::new(route_stats),
+        server_cfg: Mutex::new(Some(server_cfg)),
+        connector,
+        audit: audit_logger,
     }))
 }
 

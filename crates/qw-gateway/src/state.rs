@@ -177,7 +177,7 @@ impl AppState {
             .await
             .unwrap_or_else(|e| {
                 tracing::error!(error = %e, "overlay failed to start; continuing without it");
-                Arc::new(crate::overlay::OverlayState::disabled())
+                Arc::new(crate::overlay::OverlayState::disabled(audit_logger.clone()))
             });
 
         // Internal PQC certificate authority. The classical CA persists under

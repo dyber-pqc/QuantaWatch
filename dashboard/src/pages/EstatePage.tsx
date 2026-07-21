@@ -19,7 +19,7 @@ import {
   ActionIcon,
   Tooltip,
 } from "@mantine/core";
-import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget } from "../api/client";
+import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget, protectService, issueServiceCert } from "../api/client";
 import type { Target, ExposedService } from "../api/types";
 import { PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
@@ -111,7 +111,7 @@ export default function EstatePage() {
             ))}
           </Stack>
           <Box style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-6)" }} p="md">
-            {active ? <Detail t={active} scanning={scan.isPending} onScan={() => scan.mutate(active.id)} onDeepScan={() => setDeepFor(active)} /> : <Text c="dimmed" size="sm">Select a target.</Text>}
+            {active ? <Detail t={active} scanning={scan.isPending} onScan={() => scan.mutate(active.id)} onDeepScan={() => setDeepFor(active)} openMenu={openMenu} /> : <Text c="dimmed" size="sm">Select a target.</Text>}
           </Box>
         </div>
       )}
@@ -166,9 +166,17 @@ function TargetRow({ t, active, scanning, onSelect, onScan, onDelete, onContextM
   );
 }
 
-function ServiceCard({ s }: { s: ExposedService }) {
+function ServiceCard({ s, onProtect, onIssueCert, onMenu, busy }: {
+  s: ExposedService;
+  onProtect: () => void;
+  onIssueCert: () => void;
+  onMenu: (e: React.MouseEvent) => void;
+  busy: "protect" | "cert" | null;
+}) {
+  // Weak/secure/unknown services are candidates for a one-click fix.
+  const fixable = s.pqcStatus === "classical_weak" || s.pqcStatus === "classical_secure" || s.pqcStatus === "unknown";
   return (
-    <Box px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
+    <Box onContextMenu={onMenu} px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
       <Group justify="space-between" gap={8} wrap="nowrap">
         <Group gap={8} wrap="nowrap">
           <Text ff="monospace" size="13px" fw={600} c="gray.2">:{s.port}</Text>
@@ -178,11 +186,45 @@ function ServiceCard({ s }: { s: ExposedService }) {
         <PqcBadge status={s.pqcStatus} size="xs" />
       </Group>
       <Text size="11px" c="dimmed" mt={4} style={{ lineHeight: 1.5 }}>{s.detail}</Text>
+      {s.protectedListen && (
+        <Text ff="monospace" size="11px" c="signal.4" mt={4}>✓ protected via PQC overlay → {s.protectedListen}</Text>
+      )}
+      {s.certId && <Text size="11px" c="cyan.4" mt={2}>✓ hybrid ML-DSA certificate issued</Text>}
+      {fixable && (
+        <Group gap={6} mt={8}>
+          <Button size="compact-xs" radius={2} color="brand" variant="light" loading={busy === "protect"} onClick={onProtect}>
+            {s.protectedListen ? "Re-protect" : "Protect with overlay"}
+          </Button>
+          <Button size="compact-xs" radius={2} color="cyan" variant="light" loading={busy === "cert"} onClick={onIssueCert}>
+            {s.certId ? "Re-issue cert" : "Issue PQC cert"}
+          </Button>
+        </Group>
+      )}
     </Box>
   );
 }
 
-function Detail({ t, scanning, onScan, onDeepScan }: { t: Target; scanning: boolean; onScan: () => void; onDeepScan: () => void }) {
+function Detail({ t, scanning, onScan, onDeepScan, openMenu }: { t: Target; scanning: boolean; onScan: () => void; onDeepScan: () => void; openMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void }) {
+  const qc = useQueryClient();
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["targets"] });
+    qc.invalidateQueries({ queryKey: ["attack-paths"] });
+    qc.invalidateQueries({ queryKey: ["overlay"] });
+    qc.invalidateQueries({ queryKey: ["pki"] });
+  };
+  const protectM = useMutation({ mutationFn: (port: number) => protectService(t.id, port), onSuccess: invalidate });
+  const certM = useMutation({ mutationFn: (port: number) => issueServiceCert(t.id, port), onSuccess: invalidate });
+  const busyFor = (port: number): "protect" | "cert" | null =>
+    protectM.isPending && protectM.variables === port ? "protect" : certM.isPending && certM.variables === port ? "cert" : null;
+  const serviceMenu = (s: ExposedService): ContextMenuItem[] => [
+    { label: s.protectedListen ? "Re-protect with PQC overlay" : "Protect with PQC overlay", onClick: () => protectM.mutate(s.port) },
+    { label: s.certId ? "Re-issue PQC certificate" : "Issue PQC certificate", onClick: () => certM.mutate(s.port) },
+    { label: "Copy address", divider: true, onClick: () => navigator.clipboard?.writeText(`${t.host}:${s.port}`) },
+  ];
+  const renderService = (s: ExposedService, k: string) => (
+    <ServiceCard key={k} s={s} busy={busyFor(s.port)} onProtect={() => protectM.mutate(s.port)} onIssueCert={() => certM.mutate(s.port)} onMenu={(e) => openMenu(e, serviceMenu(s))} />
+  );
+
   const exposed = t.exposedServices.filter((s) => s.exposed !== false);
   const internal = t.exposedServices.filter((s) => s.exposed === false);
   const containers = t.containers ?? [];
@@ -220,13 +262,13 @@ function Detail({ t, scanning, onScan, onDeepScan }: { t: Target; scanning: bool
             {exposed.length > 0 && (
               <Stack gap={6}>
                 <Text size="11px" fw={700} tt="uppercase" c="dark.2" style={{ letterSpacing: "0.08em" }}>Exposed to the network ({exposed.length})</Text>
-                {exposed.map((s) => <ServiceCard key={`e-${s.port}`} s={s} />)}
+                {exposed.map((s) => renderService(s, `e-${s.port}`))}
               </Stack>
             )}
             {internal.length > 0 && (
               <Stack gap={6}>
                 <Text size="11px" fw={700} tt="uppercase" c="dark.2" style={{ letterSpacing: "0.08em" }}>Internal — loopback only ({internal.length})</Text>
-                {internal.map((s) => <ServiceCard key={`i-${s.port}`} s={s} />)}
+                {internal.map((s) => renderService(s, `i-${s.port}`))}
               </Stack>
             )}
             {containers.length > 0 && (
