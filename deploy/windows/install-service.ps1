@@ -46,15 +46,23 @@ if (-not (Test-Path "$StateDir\quantawatch.yaml")) {
 $svcAccount = if ($Account) { $Account } else { "NT SERVICE\$ServiceName" }
 
 # --- remove any previous install -------------------------------------------
+# Stopping a service is asynchronous: the SCM returns before the process exits,
+# and the exe stays locked until it does. Wait for the process to actually go
+# away, or the Copy-Item below fails with "being used by another process".
 if (Get-Service -Name $ServiceName -ErrorAction SilentlyContinue) {
-  Write-Host "Removing existing service..."
-  sc.exe stop $ServiceName  2>&1 | Out-Null
-  Start-Sleep -Seconds 2
+  Write-Host "Stopping existing service..."
+  Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
   sc.exe delete $ServiceName 2>&1 | Out-Null
-  Start-Sleep -Seconds 2
 }
-Get-Process quantawatch -ErrorAction SilentlyContinue | Stop-Process -Force
+$deadline = (Get-Date).AddSeconds(30)
+while ((Get-Process quantawatch -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+  Start-Sleep -Milliseconds 500
+}
+Get-Process quantawatch -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 1
+if (Get-Process quantawatch -ErrorAction SilentlyContinue) {
+  throw "A quantawatch.exe process is still running and holding the binary. Close it and retry."
+}
 
 # --- binary -----------------------------------------------------------------
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
