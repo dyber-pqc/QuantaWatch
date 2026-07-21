@@ -31,6 +31,56 @@ struct CodePattern {
     redact: bool,
 }
 
+/// The recommended PQC library for a source file's language (by extension), so
+/// the fix suggestion is actionable in the developer's own stack.
+fn lang_pqc_lib(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "rs" => "the RustCrypto ml-dsa / ml-kem crates",
+        "py" => "liboqs-python (oqs) or pqcrypto (ML-DSA / ML-KEM)",
+        "go" => "Cloudflare CIRCL (circl/sign/mldsa, circl/kem/mlkem)",
+        "java" => "BouncyCastle's PQC provider (ML-DSA / ML-KEM)",
+        "cs" => "BouncyCastle.NET PQC (ML-DSA / ML-KEM)",
+        "js" | "ts" | "jsx" | "tsx" => "@noble/post-quantum (ml-dsa / ml-kem)",
+        "c" | "cpp" | "h" => "liboqs (OQS_SIG_ml_dsa_65, OQS_KEM_ml_kem_768)",
+        "rb" => "liboqs-backed bindings (ML-DSA / ML-KEM)",
+        _ => return None,
+    })
+}
+
+/// The PQC target for a quantum-vulnerable primitive.
+fn pqc_target(algo: &str) -> &'static str {
+    let a = algo.to_uppercase();
+    if a.contains("RSA") {
+        "ML-DSA-65 (FIPS 204) for signatures, or ML-KEM-768 (FIPS 203) for key encapsulation"
+    } else if a.contains("ECDSA") || a.contains("ED25519") || a.contains("DSA") {
+        "ML-DSA-65 (FIPS 204)"
+    } else {
+        // ECDH / X25519 / DH / secp / prime — key exchange.
+        "ML-KEM-768 (FIPS 203), ideally as an X25519MLKEM768 hybrid"
+    }
+}
+
+/// Build the remediation string for a code finding.
+fn remediation_for(category: &FindingCategory, matched: &str, ext: &str) -> Option<String> {
+    match category {
+        FindingCategory::HardcodedKey => Some(
+            "Remove the hardcoded secret; load it from a secret manager or environment variable, and rotate the exposed credential."
+                .to_string(),
+        ),
+        FindingCategory::WeakAlgorithm => Some(format!(
+            "{matched} is broken — replace it (SHA-256/SHA-3 for hashing, AES-256-GCM for encryption)."
+        )),
+        FindingCategory::MissingPqc => {
+            let lib = lang_pqc_lib(ext).unwrap_or("a liboqs-backed PQC library (ML-DSA / ML-KEM)");
+            Some(format!(
+                "{matched} is quantum-vulnerable (harvest-now-decrypt-later). Migrate to {}. In this file's language, use {lib}.",
+                pqc_target(matched)
+            ))
+        }
+        _ => None,
+    }
+}
+
 impl CodeScanner {
     pub fn new(config: CodeScannerConfig) -> Self {
         Self { config }
@@ -75,7 +125,7 @@ impl CodeScanner {
                 title: "Hardcoded password",
                 redact: true,
             },
-            // Weak algorithms.
+            // Weak / broken algorithms.
             CodePattern {
                 re: Regex::new(r"(?i)\bMD5\b").unwrap(),
                 category: FindingCategory::WeakAlgorithm,
@@ -99,7 +149,7 @@ impl CodeScanner {
                 category: FindingCategory::WeakAlgorithm,
                 severity: FindingSeverity::Medium,
                 pqc_status: PqcStatus::ClassicalWeak,
-                asset_type: CryptoAssetType::HashFunction,
+                asset_type: CryptoAssetType::CryptoLibrary,
                 title: "Weak algorithm: DES",
                 redact: false,
             },
@@ -108,7 +158,7 @@ impl CodeScanner {
                 category: FindingCategory::WeakAlgorithm,
                 severity: FindingSeverity::Medium,
                 pqc_status: PqcStatus::ClassicalWeak,
-                asset_type: CryptoAssetType::HashFunction,
+                asset_type: CryptoAssetType::CryptoLibrary,
                 title: "Weak algorithm: RC4",
                 redact: false,
             },
@@ -117,18 +167,20 @@ impl CodeScanner {
                 category: FindingCategory::WeakAlgorithm,
                 severity: FindingSeverity::Medium,
                 pqc_status: PqcStatus::ClassicalWeak,
-                asset_type: CryptoAssetType::HashFunction,
+                asset_type: CryptoAssetType::CryptoLibrary,
                 title: "Weak algorithm: ECB mode",
                 redact: false,
             },
-            // Classical crypto.
+            // Quantum-vulnerable public-key crypto — the harvest-now-decrypt-later
+            // surface. Each match captures the specific algorithm so the finding
+            // carries a concrete PQC migration target.
             CodePattern {
-                re: Regex::new(r"(?i)\b(RSA|ECDSA|ECDH|X25519|Ed25519|secp256|prime256)\b").unwrap(),
-                category: FindingCategory::ClassicalCrypto,
-                severity: FindingSeverity::Info,
+                re: Regex::new(r"(?i)(\bRSA\b|\bDSA\b|\bECDSA\b|\bECDH\b|\bX25519\b|\bEd25519\b|\bsecp256r1\b|\bprime256v1\b|diffie[-_ ]?hellman)").unwrap(),
+                category: FindingCategory::MissingPqc,
+                severity: FindingSeverity::Medium,
                 pqc_status: PqcStatus::ClassicalSecure,
                 asset_type: CryptoAssetType::CryptoLibrary,
-                title: "Classical cryptography reference",
+                title: "Quantum-vulnerable public-key crypto",
                 redact: false,
             },
         ]
@@ -239,22 +291,42 @@ impl Scanner for CodeScanner {
             };
             let rel_path = path.strip_prefix(root).unwrap_or(path);
             let rel_str = rel_path.to_string_lossy().to_string();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
 
             for (line_no, line) in content.lines().enumerate() {
                 for pat in &patterns {
                     if let Some(m) = pat.re.find(line) {
-                        let description = Self::build_description(line, m.as_str(), pat.redact);
+                        let matched = m.as_str();
+                        let description = Self::build_description(line, matched, pat.redact);
+                        // Capture the specific algorithm for weak / quantum-vulnerable
+                        // findings so the migration planner can target a fix.
+                        let algorithm = match pat.category {
+                            FindingCategory::WeakAlgorithm | FindingCategory::MissingPqc => {
+                                Some(matched.to_uppercase())
+                            }
+                            _ => None,
+                        };
                         findings.push(Finding {
                             id: uuid::Uuid::new_v4().to_string(),
                             category: pat.category.clone(),
                             severity: pat.severity.clone(),
                             title: pat.title.to_string(),
-                            description: format!("{} ({}:{}): {}", pat.title, rel_str, line_no + 1, description),
+                            description: format!(
+                                "{} ({}:{}): {}",
+                                pat.title,
+                                rel_str,
+                                line_no + 1,
+                                description
+                            ),
                             asset: CryptoAsset {
                                 id: uuid::Uuid::new_v4().to_string(),
                                 asset_type: pat.asset_type.clone(),
                                 name: pat.title.to_string(),
-                                algorithm: None,
+                                algorithm,
                                 key_length: None,
                                 protocol_version: None,
                                 location: AssetLocation {
@@ -265,12 +337,7 @@ impl Scanner for CodeScanner {
                                 discovered_by: "code".to_string(),
                                 discovered_at: Utc::now(),
                             },
-                            remediation: match pat.category {
-                                FindingCategory::HardcodedKey => Some("Remove the hardcoded secret and load it from a secret manager or environment variable".to_string()),
-                                FindingCategory::WeakAlgorithm => Some("Replace this weak algorithm with a modern, secure alternative".to_string()),
-                                FindingCategory::ClassicalCrypto => Some("Consider migrating to a PQC or hybrid scheme".to_string()),
-                                _ => None,
-                            },
+                            remediation: remediation_for(&pat.category, matched, &ext),
                             pqc_status: pat.pqc_status.clone(),
                             metadata: HashMap::new(),
                         });
@@ -356,11 +423,38 @@ mod tests {
     }
 
     #[test]
-    fn test_classical_crypto_matches() {
-        let pat = find_pattern("Classical cryptography reference");
+    fn test_quantum_vulnerable_matches_and_captures() {
+        let pat = find_pattern("Quantum-vulnerable public-key crypto");
         assert!(pat.re.is_match("use RSA for signing"));
         assert!(pat.re.is_match("let k = Ed25519::generate();"));
         assert!(pat.re.is_match("ECDSA signature"));
+        assert!(pat.re.is_match("key = ECDH.compute()"));
+        assert!(pat.re.is_match("Diffie-Hellman group 14"));
+        // The match captures the specific token (drives the migration target).
+        assert_eq!(
+            pat.re.find("use RSA here").unwrap().as_str().to_uppercase(),
+            "RSA"
+        );
+        // secp256r1 (an ECDSA/ECDH curve) is flagged; AES256 is not.
+        assert!(pat.re.is_match("curve = secp256r1"));
+        assert!(!pat.re.is_match("cipher = AES256"));
+    }
+
+    #[test]
+    fn test_pqc_suggestions_are_algorithm_and_language_aware() {
+        // RSA -> signatures/KEM target; Python -> pqcrypto/liboqs.
+        let r = remediation_for(&FindingCategory::MissingPqc, "RSA", "py").unwrap();
+        assert!(r.contains("ML-DSA-65"));
+        assert!(r.contains("ML-KEM-768"));
+        assert!(r.contains("pqcrypto") || r.contains("liboqs-python"));
+        // ECDH -> KEM target; Go -> CIRCL.
+        let g = remediation_for(&FindingCategory::MissingPqc, "ECDH", "go").unwrap();
+        assert!(g.contains("ML-KEM-768"));
+        assert!(g.contains("CIRCL"));
+        // ECDSA -> signature target; Rust.
+        let rs = remediation_for(&FindingCategory::MissingPqc, "ECDSA", "rs").unwrap();
+        assert!(rs.contains("ML-DSA-65"));
+        assert!(rs.contains("ml-dsa"));
     }
 
     #[test]
@@ -400,9 +494,6 @@ mod tests {
         assert!(CodeScanner::should_skip_dir("target", &[]));
         assert!(CodeScanner::should_skip_dir("node_modules", &[]));
         assert!(!CodeScanner::should_skip_dir("src", &[]));
-        assert!(CodeScanner::should_skip_dir(
-            "vendor",
-            &["vendor".to_string()]
-        ));
+        assert!(CodeScanner::should_skip_dir("vendor", &["vendor".to_string()]));
     }
 }
