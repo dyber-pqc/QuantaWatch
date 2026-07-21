@@ -41,6 +41,11 @@ pub struct GatewayConfig {
     /// `GET /api/governance`; `?gate=1` fails CI on a policy violation.
     #[serde(default)]
     pub crypto_policy: qw_cbom::CryptoPolicy,
+    /// Actionable crypto-agility policies (selector + match + action + deadline).
+    /// Evaluated at `GET /api/crypto-policies`; enforced via connectors. Empty =
+    /// a built-in CNSA-2.0-aligned default set.
+    #[serde(default)]
+    pub crypto_policies: Vec<qw_cbom::CryptoAgilityPolicy>,
     /// CBOM attestation root of trust.
     #[serde(default)]
     pub attestation: AttestationConfig,
@@ -705,6 +710,7 @@ impl Default for GatewayConfig {
             auth: AuthConfig::default(),
             resilience: ResilienceConfig::default(),
             crypto_policy: qw_cbom::CryptoPolicy::default(),
+            crypto_policies: Vec::new(),
             attestation: AttestationConfig::default(),
             air_gapped: false,
             assets: Vec::new(),

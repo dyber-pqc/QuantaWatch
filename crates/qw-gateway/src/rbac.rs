@@ -22,6 +22,7 @@ pub const RBAC_RESOURCES: &[&str] = &[
     "frameworks",
     "rbac",
     "governance",
+    "crypto-policies",
     "slos",
     "alerts",
     "integrations",

@@ -6,6 +6,7 @@ pub mod auth_api;
 pub mod cbom;
 pub mod compliance;
 pub mod config_api;
+pub mod crypto_policies;
 pub mod evidence;
 pub mod frameworks;
 pub mod governance;

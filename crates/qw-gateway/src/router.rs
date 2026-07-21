@@ -321,6 +321,22 @@ fn admin_routes() -> Router<AppState> {
         )
         .route("/api/risk", get(crate::admin::remediation::get_risk))
         .route(
+            "/api/crypto-policies",
+            get(crate::admin::crypto_policies::get_policies),
+        )
+        .route(
+            "/api/crypto-policies/evaluate",
+            post(crate::admin::crypto_policies::evaluate_now),
+        )
+        .route(
+            "/api/crypto-policies/{id}",
+            get(crate::admin::crypto_policies::get_policy),
+        )
+        .route(
+            "/api/crypto-policies/{id}/enforce",
+            post(crate::admin::crypto_policies::enforce_policy),
+        )
+        .route(
             "/api/remediations",
             get(crate::admin::remediation::list_remediations),
         )

@@ -106,7 +106,7 @@ pub struct RemediateRequest {
 
 /// Reconstruct a scanner `Finding` from a stored `FindingRecord` so it can be
 /// handed to an integration's `create_remediation`.
-fn finding_from_record(r: &FindingRecord) -> Finding {
+pub(crate) fn finding_from_record(r: &FindingRecord) -> Finding {
     Finding {
         id: r.id.clone(),
         category: r.category.clone(),

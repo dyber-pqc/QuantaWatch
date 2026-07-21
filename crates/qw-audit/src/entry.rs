@@ -123,6 +123,15 @@ pub enum AuditEvent {
         channel_status: String,
         required: String,
     },
+    /// A crypto-agility policy was enforced on a violating asset (a remediation
+    /// PR/ticket was opened, or an alert raised).
+    AgilityPolicyEnforced {
+        policy_id: String,
+        severity: String,
+        resource: String,
+        action: String,
+        outcome: String,
+    },
 }
 
 impl AuditEntry {

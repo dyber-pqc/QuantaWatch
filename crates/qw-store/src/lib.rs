@@ -181,6 +181,16 @@ pub struct GovernanceSnapshot {
     pub verdict: String,
 }
 
+/// The last evaluation of one crypto-agility policy, for drift detection: the
+/// set of violation fingerprints and the status at that time.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicySnapshotRow {
+    pub status: String,
+    pub fingerprints: Vec<String>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// A point-in-time snapshot of the attack-path graph (for drift detection).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -340,6 +350,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS assets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
+    CREATE TABLE IF NOT EXISTS policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -586,6 +597,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS governance_snapshots (
                 tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT
             );
+            CREATE TABLE IF NOT EXISTS policy_snapshots (
+                tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id)
+            );
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
             );
@@ -630,6 +644,7 @@ impl Store {
             CREATE TABLE assets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
+            CREATE TABLE policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -1072,6 +1087,26 @@ impl Store {
         self.list_de(
             "SELECT data FROM assets WHERE tenant = ?1 ORDER BY id LIMIT 100000",
             &[tenant],
+        )
+    }
+
+    // ---- Crypto-agility policy drift baselines ----
+
+    /// Persist the latest evaluation of a policy (upsert by tenant+policy).
+    pub fn record_policy_snapshot(&self, tenant: &str, policy_id: &str, snap: &PolicySnapshotRow) {
+        let json = serde_json::to_string(snap).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO policy_snapshots (tenant, policy_id, data) VALUES (?1, ?2, ?3)",
+            "INSERT INTO policy_snapshots (tenant, policy_id, data) VALUES ($1, $2, $3) ON CONFLICT (tenant, policy_id) DO UPDATE SET data = EXCLUDED.data",
+            &[tenant, policy_id, json.as_str()],
+        );
+    }
+
+    /// The previous evaluation of a policy (the drift baseline), if any.
+    pub fn latest_policy_snapshot(&self, tenant: &str, policy_id: &str) -> Option<PolicySnapshotRow> {
+        self.one_de(
+            "SELECT data FROM policy_snapshots WHERE tenant = ?1 AND policy_id = ?2 LIMIT 1",
+            &[tenant, policy_id],
         )
     }
 
