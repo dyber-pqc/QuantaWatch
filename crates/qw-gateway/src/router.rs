@@ -320,6 +320,7 @@ fn admin_routes() -> Router<AppState> {
             get(crate::admin::remediation::list_migration_plans),
         )
         .route("/api/risk", get(crate::admin::remediation::get_risk))
+        .route("/api/overlay", get(get_overlay))
         .route(
             "/api/crypto-policies",
             get(crate::admin::crypto_policies::get_policies),
@@ -392,6 +393,14 @@ async fn health() -> impl IntoResponse {
         "service": "quantawatch",
         "version": env!("CARGO_PKG_VERSION"),
     }))
+}
+
+/// PQC-terminating overlay status: routes, live connection counts, and the
+/// negotiated key-exchange group proving each leg is hybrid-PQC protected.
+async fn get_overlay(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> impl IntoResponse {
+    axum::Json(state.overlay.snapshot())
 }
 
 async fn proxy_handler(State(state): State<AppState>, request: Request) -> Response {

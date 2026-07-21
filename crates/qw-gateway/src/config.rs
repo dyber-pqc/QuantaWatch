@@ -46,6 +46,11 @@ pub struct GatewayConfig {
     /// a built-in CNSA-2.0-aligned default set.
     #[serde(default)]
     pub crypto_policies: Vec<qw_cbom::CryptoAgilityPolicy>,
+    /// PQC-terminating proxy overlay: front legacy upstreams with a hybrid-PQC
+    /// TLS listener so the client leg is quantum-safe without touching the
+    /// upstream. Off by default.
+    #[serde(default)]
+    pub overlay: OverlayConfig,
     /// CBOM attestation root of trust.
     #[serde(default)]
     pub attestation: AttestationConfig,
@@ -711,6 +716,7 @@ impl Default for GatewayConfig {
             resilience: ResilienceConfig::default(),
             crypto_policy: qw_cbom::CryptoPolicy::default(),
             crypto_policies: Vec::new(),
+            overlay: OverlayConfig::default(),
             attestation: AttestationConfig::default(),
             air_gapped: false,
             assets: Vec::new(),
@@ -718,4 +724,43 @@ impl Default for GatewayConfig {
             crypto_enforcement: CryptoEnforcementConfig::default(),
         }
     }
+}
+
+/// PQC-terminating proxy overlay. Each route serves a hybrid-PQC TLS listener
+/// (X25519MLKEM768) to clients and forwards to a legacy upstream — so the
+/// client-facing leg is quantum-safe even when the upstream can't be changed.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OverlayConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub routes: Vec<OverlayRoute>,
+    /// PEM certificate + key for the client-facing TLS. If absent, a self-signed
+    /// cert is generated at startup (fine for internal/dev overlays).
+    #[serde(default)]
+    pub cert_file: Option<String>,
+    #[serde(default)]
+    pub key_file: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayRoute {
+    pub id: String,
+    /// Client-facing listen address; QuantaWatch serves hybrid-PQC TLS here.
+    pub listen: String,
+    /// The legacy upstream to forward decrypted traffic to (host:port).
+    pub upstream: String,
+    /// Re-encrypt the upstream leg with TLS (true) or forward in plaintext to a
+    /// trusted local upstream (false).
+    #[serde(default)]
+    pub upstream_tls: bool,
+    /// Client-leg posture: "hybrid" (offer PQC, allow classical) or "pqc-only"
+    /// (drop connections that didn't negotiate the hybrid group).
+    #[serde(default = "default_overlay_mode")]
+    pub mode: String,
+}
+
+fn default_overlay_mode() -> String {
+    "hybrid".to_string()
 }

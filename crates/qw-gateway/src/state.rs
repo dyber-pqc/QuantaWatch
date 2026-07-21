@@ -35,6 +35,7 @@ pub struct AppState {
     pub resilience: Arc<crate::resilience::Resilience>,
     pub attestor: Arc<dyn crate::attest::Attestor>,
     pub metrics: Arc<crate::metrics::Metrics>,
+    pub overlay: Arc<crate::overlay::OverlayState>,
 }
 
 /// Public session info stored in the DashMap (without secret keys).
@@ -167,6 +168,16 @@ impl AppState {
             store.clone(),
         ));
 
+        // PQC-terminating overlay: bind hybrid-PQC TLS listeners in front of any
+        // configured legacy upstreams. A bad route logs and is skipped rather
+        // than failing gateway startup.
+        let overlay = crate::overlay::spawn(&config.overlay, audit_logger.clone())
+            .await
+            .unwrap_or_else(|e| {
+                tracing::error!(error = %e, "overlay failed to start; continuing without it");
+                Arc::new(crate::overlay::OverlayState::disabled())
+            });
+
         Ok(Self {
             gateway_identity,
             policy_engine: Arc::new(RwLock::new(policy_engine)),
@@ -186,6 +197,7 @@ impl AppState {
             resilience,
             attestor,
             metrics: Arc::new(crate::metrics::Metrics::new()),
+            overlay,
         })
     }
 }

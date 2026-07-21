@@ -43,6 +43,12 @@ dashmap.workspace = true
 base64 = "0.22"
 bytes = "1"
 http = "1"
+# PQC-terminating overlay: a rustls TLS server on the aws-lc-rs backend (offers
+# the X25519MLKEM768 hybrid group) fronting legacy upstreams. rcgen mints a
+# self-signed cert for the client-facing leg when none is configured.
+rustls = "0.23"
+tokio-rustls = "0.26"
+rcgen = "0.13"
 hex.workspace = true
 sha2 = "0.10"
 hmac = "0.12"

@@ -132,6 +132,14 @@ pub enum AuditEvent {
         action: String,
         outcome: String,
     },
+    /// The PQC-terminating overlay began protecting a route (hybrid-PQC TLS on
+    /// the client leg, forwarding to a legacy upstream).
+    OverlayRouteProtected {
+        route_id: String,
+        listen: String,
+        upstream: String,
+        mode: String,
+    },
 }
 
 impl AuditEntry {

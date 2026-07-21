@@ -11,6 +11,7 @@ pub mod error;
 pub mod metrics;
 pub mod middleware;
 pub mod oidc;
+pub mod overlay;
 pub mod providers;
 pub mod rbac;
 pub mod resilience;
