@@ -11,7 +11,6 @@ import {
   PasswordInput,
   Textarea,
   SegmentedControl,
-  Modal,
   NumberInput,
   Divider,
   Alert,
@@ -24,6 +23,7 @@ import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget 
 import type { Target, ExposedService } from "../api/types";
 import { PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
+import { OverlayModal } from "../components/OverlayModal";
 
 const PQC_COLOR: Record<string, string> = {
   classical_weak: "red",
@@ -276,7 +276,7 @@ function DeepScanModal({ target, onClose, onDone }: { target: Target | null; onC
   const canRun = !!username.trim() && (authMode === "password" ? !!password : !!privateKey.trim());
 
   return (
-    <Modal opened={!!target} onClose={onClose} title={`Connect & inventory — ${target?.name ?? ""}`} radius={2} size="lg" centered>
+    <OverlayModal opened={!!target} onClose={onClose} title={`Connect & inventory — ${target?.name ?? ""}`} width={620}>
       <Stack gap="sm">
         <Alert color="teal" radius={2} variant="light" p="xs">
           <Text size="11px">QuantaWatch logs in over SSH to <b>{target?.host}</b> and reads listening sockets, Docker containers, and host facts. Credentials are used for this one connection and are <b>never stored</b>.</Text>
@@ -301,7 +301,7 @@ function DeepScanModal({ target, onClose, onDone }: { target: Target | null; onC
           <Button size="xs" radius={2} color="teal" loading={run.isPending} disabled={!canRun} onClick={() => run.mutate()}>Connect & inventory</Button>
         </Group>
       </Stack>
-    </Modal>
+    </OverlayModal>
   );
 }
 

@@ -2,8 +2,9 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Badge, Box, Group, Stack, Text, Button, TextInput, PasswordInput, Select,
-  Modal, Divider, Alert, ActionIcon, Tooltip,
+  Divider, Alert, ActionIcon, Tooltip,
 } from "@mantine/core";
+import { OverlayModal } from "../components/OverlayModal";
 import {
   fetchIntegrations,
   testIntegration,
@@ -358,7 +359,7 @@ function AddConnectionModal({ opened, onClose }: { opened: boolean; onClose: () 
   });
 
   return (
-    <Modal opened={opened} onClose={onClose} title="Connect a source" radius={2} size="lg" centered>
+    <OverlayModal opened={opened} onClose={onClose} title="Connect a source" width={620}>
       <Stack gap="sm">
         <Select size="xs" radius={2} label="Source type" value={type} onChange={(v) => setType(v ?? "github")}
           data={Object.entries(SOURCE_META).map(([value, m]) => ({ value, label: m.label }))} comboboxProps={{ radius: 2 }} />
@@ -381,7 +382,7 @@ function AddConnectionModal({ opened, onClose }: { opened: boolean; onClose: () 
           <Button size="xs" radius={2} color="brand" loading={create.isPending} disabled={!token.trim()} onClick={() => create.mutate()}>Add connection</Button>
         </Group>
       </Stack>
-    </Modal>
+    </OverlayModal>
   );
 }
 
