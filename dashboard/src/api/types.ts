@@ -737,3 +737,40 @@ export interface EnrollInfo {
   windows: string;
   note: string;
 }
+
+// ---- Internal PQC certificate authority (PKI) ----
+export interface Certificate {
+  id: string;
+  subject: string;
+  sans: string[];
+  serial: string;
+  keyType: string; // "hybrid" | "classical"
+  notBefore: string;
+  notAfter: string;
+  certPem: string;
+  mldsaPublicKey?: string | null;
+  mldsaSignature?: string | null;
+  caFingerprint: string;
+  pqcStatus: string;
+  status: string; // "active" | "revoked"
+  createdAt: string;
+  revokedAt?: string | null;
+}
+export interface CertBoard {
+  certificates: Certificate[];
+  total: number;
+  active: number;
+  hybrid: number;
+  revoked: number;
+}
+export interface CaInfo {
+  caCertPem: string;
+  commonName: string;
+  hybrid: boolean;
+  mldsaFingerprint: string;
+  mldsaPublicKey: string;
+}
+export interface IssueResult extends Certificate {
+  keyPem: string;
+  renewedFrom?: string;
+}

@@ -41,6 +41,9 @@ import type {
   ConnectionScanResult,
   EndpointBoard,
   EnrollInfo,
+  CertBoard,
+  CaInfo,
+  IssueResult,
 } from "./types";
 
 // ---- Mock data for development when API is unavailable ----
@@ -861,6 +864,51 @@ export async function fetchEnrollInfo(): Promise<EnrollInfo> {
 }
 export async function deleteEndpoint(id: string): Promise<void> {
   await fetchJSON(`/api/endpoints/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// ---- Internal PQC certificate authority (PKI) ----
+export async function fetchCertificates(): Promise<CertBoard> {
+  try {
+    return await fetchJSON<CertBoard>("/api/pki/certificates");
+  } catch {
+    return { certificates: [], total: 0, active: 0, hybrid: 0, revoked: 0 };
+  }
+}
+export async function fetchCa(): Promise<CaInfo | null> {
+  try {
+    return await fetchJSON<CaInfo>("/api/pki/ca");
+  } catch {
+    return null;
+  }
+}
+export async function issueCertificate(body: {
+  subject: string;
+  sans?: string[];
+  validityDays?: number;
+  keyType?: string;
+}): Promise<IssueResult> {
+  return fetchJSON<IssueResult>("/api/pki/issue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export async function verifyCertBinding(body: {
+  certPem: string;
+  mldsaPublicKey: string;
+  mldsaSignature: string;
+}): Promise<{ valid: boolean; binding: string }> {
+  return fetchJSON("/api/pki/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+export async function renewCertificate(id: string): Promise<IssueResult> {
+  return fetchJSON<IssueResult>(`/api/pki/certificates/${encodeURIComponent(id)}/renew`, { method: "POST" });
+}
+export async function revokeCertificate(id: string): Promise<void> {
+  await fetchJSON(`/api/pki/certificates/${encodeURIComponent(id)}/revoke`, { method: "POST" });
 }
 
 /** Create a remediation ticket (Jira/Linear) from a finding. */
