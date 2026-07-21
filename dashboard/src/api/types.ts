@@ -600,3 +600,28 @@ export interface EnforceResult {
   errors?: { resource: string; error: string }[];
   dryRun?: boolean;
 }
+
+// ---- PQC-terminating overlay ----
+export interface OverlayRouteStatus {
+  id: string;
+  listen: string;
+  upstream: string;
+  upstreamTls: boolean;
+  mode: string;
+  active: number;
+  total: number;
+  pqcConnections: number;
+  rejectedClassical: number;
+  bytes: number;
+  errors: number;
+  lastGroup: string | null;
+  pqcProtected: boolean;
+}
+export interface OverlayStatus {
+  enabled: boolean;
+  certSource: string;
+  hybridGroup: string;
+  routes: OverlayRouteStatus[];
+  total: number;
+  pqcProtectedRoutes: number;
+}

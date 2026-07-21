@@ -16,6 +16,7 @@ import Soc2Page from "./pages/Soc2Page";
 import RbacPage from "./pages/RbacPage";
 import FrameworksPage from "./pages/FrameworksPage";
 import CryptoPoliciesPage from "./pages/CryptoPoliciesPage";
+import OverlayPage from "./pages/OverlayPage";
 import RemediationsPage from "./pages/RemediationsPage";
 
 export default function App() {
@@ -33,6 +34,7 @@ export default function App() {
         <Route path="/soc2" element={<Soc2Page />} />
         <Route path="/frameworks" element={<FrameworksPage />} />
         <Route path="/crypto-policies" element={<CryptoPoliciesPage />} />
+        <Route path="/overlay" element={<OverlayPage />} />
         <Route path="/rbac" element={<RbacPage />} />
         <Route path="/sessions" element={<SessionsPage />} />
         <Route path="/audit" element={<AuditPage />} />

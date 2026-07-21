@@ -1,4 +1,5 @@
 import type {
+  OverlayStatus,
   CryptoPolicyBoard,
   CryptoPolicyResult,
   EnforceResult,
@@ -499,6 +500,15 @@ export async function fetchThreats(): Promise<Threat[]> {
     return asArray<Threat>(await fetchJSON("/api/threats"), "threats");
   } catch {
     return [];
+  }
+}
+
+// ---- PQC-terminating overlay ----
+export async function fetchOverlay(): Promise<OverlayStatus> {
+  try {
+    return await fetchJSON<OverlayStatus>("/api/overlay");
+  } catch {
+    return { enabled: false, certSource: "", hybridGroup: "", routes: [], total: 0, pqcProtectedRoutes: 0 };
   }
 }
 
