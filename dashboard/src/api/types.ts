@@ -551,3 +551,52 @@ export interface MigrationPlan {
   effort: string;
   patch?: MigrationPatch;
 }
+
+// ---- Crypto-agility policies ----
+export interface PolicyDrift {
+  new: string[];
+  resolved: string[];
+  regressed: boolean;
+  baselineExists: boolean;
+}
+export interface PolicyViolation {
+  findingId: string;
+  location: string;
+  category: string;
+  pqcStatus: string;
+  severity: string;
+  algorithm?: string;
+  fingerprint: string;
+  plan?: MigrationPlan;
+}
+export interface CryptoPolicyResult {
+  id: string;
+  name: string;
+  description: string;
+  severity: string;
+  action: string;
+  enforcement: string;
+  status: "compliant" | "violated";
+  violationCount: number;
+  violations: PolicyViolation[];
+  deadline?: string;
+  daysToDeadline?: number;
+  deadlinePassed: boolean;
+  drift: PolicyDrift;
+}
+export interface CryptoPolicyBoard {
+  policies: CryptoPolicyResult[];
+  total: number;
+  violated: number;
+  compliant: number;
+  criticalViolations: number;
+}
+export interface EnforceResult {
+  policyId: string;
+  action: string;
+  enforced: number;
+  message?: string;
+  tickets?: unknown[];
+  errors?: { resource: string; error: string }[];
+  dryRun?: boolean;
+}

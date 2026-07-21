@@ -1,4 +1,7 @@
 import type {
+  CryptoPolicyBoard,
+  CryptoPolicyResult,
+  EnforceResult,
   Session,
   AuditEntry,
   Stats,
@@ -497,6 +500,34 @@ export async function fetchThreats(): Promise<Threat[]> {
   } catch {
     return [];
   }
+}
+
+// ---- Crypto-agility policies ----
+export async function fetchCryptoPolicies(): Promise<CryptoPolicyBoard> {
+  try {
+    return await fetchJSON<CryptoPolicyBoard>("/api/crypto-policies");
+  } catch {
+    return { policies: [], total: 0, violated: 0, compliant: 0, criticalViolations: 0 };
+  }
+}
+
+export async function fetchCryptoPolicy(id: string): Promise<CryptoPolicyResult> {
+  return fetchJSON<CryptoPolicyResult>(`/api/crypto-policies/${encodeURIComponent(id)}`);
+}
+
+export async function evaluateCryptoPolicies(): Promise<{ evaluated: number }> {
+  return fetchJSON("/api/crypto-policies/evaluate", { method: "POST" });
+}
+
+export async function enforceCryptoPolicy(
+  id: string,
+  body: { integrationId?: string; project?: string; dryRun?: boolean },
+): Promise<EnforceResult> {
+  return fetchJSON<EnforceResult>(`/api/crypto-policies/${encodeURIComponent(id)}/enforce`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export async function verifyAuditChain(): Promise<AuditVerifyResult> {
