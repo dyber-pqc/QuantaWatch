@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod middleware;
 pub mod oidc;
 pub mod overlay;
+pub mod pki;
 pub mod providers;
 pub mod rbac;
 pub mod resilience;

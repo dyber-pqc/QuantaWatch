@@ -36,6 +36,8 @@ pub struct AppState {
     pub attestor: Arc<dyn crate::attest::Attestor>,
     pub metrics: Arc<crate::metrics::Metrics>,
     pub overlay: Arc<crate::overlay::OverlayState>,
+    /// Internal PQC certificate authority (None when pki.enabled = false).
+    pub ca: Option<Arc<crate::pki::CertAuthority>>,
 }
 
 /// Public session info stored in the DashMap (without secret keys).
@@ -178,6 +180,28 @@ impl AppState {
                 Arc::new(crate::overlay::OverlayState::disabled())
             });
 
+        // Internal PQC certificate authority. The classical CA persists under
+        // key_dir; the ML-DSA binding uses the (persisted) gateway identity.
+        let ca = if config.pki.enabled {
+            let key_dir = std::path::PathBuf::from(&config.identity.key_dir);
+            match crate::pki::CertAuthority::load_or_create(
+                &config.pki.common_name,
+                &key_dir,
+                gateway_identity.clone(),
+            ) {
+                Ok(ca) => {
+                    tracing::info!(cn = %config.pki.common_name, "PQC CA ready");
+                    Some(Arc::new(ca))
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "PQC CA failed to initialize; disabling");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             gateway_identity,
             policy_engine: Arc::new(RwLock::new(policy_engine)),
@@ -198,6 +222,7 @@ impl AppState {
             attestor,
             metrics: Arc::new(crate::metrics::Metrics::new()),
             overlay,
+            ca,
         })
     }
 }

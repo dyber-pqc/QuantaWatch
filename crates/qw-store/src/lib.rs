@@ -191,6 +191,37 @@ pub struct PolicySnapshotRow {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A certificate issued by the internal PQC CA. The private key is NOT stored
+/// (returned once at issuance); this is the durable, auditable record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CertificateRow {
+    pub id: String,
+    pub subject: String,
+    pub sans: Vec<String>,
+    pub serial: String,
+    /// "hybrid" (classical X.509 + ML-DSA binding) or "classical".
+    pub key_type: String,
+    pub not_before: DateTime<Utc>,
+    pub not_after: DateTime<Utc>,
+    /// The classical (Ed25519) X.509 leaf, PEM.
+    pub cert_pem: String,
+    /// The CA's ML-DSA-65 verifying key (base64), for the PQC binding.
+    #[serde(default)]
+    pub mldsa_public_key: Option<String>,
+    /// The CA's ML-DSA-65 signature over the leaf cert DER (base64).
+    #[serde(default)]
+    pub mldsa_signature: Option<String>,
+    pub ca_fingerprint: String,
+    /// "hybrid" | "classical" (mirrors PqcStatus semantics for the inventory).
+    pub pqc_status: String,
+    /// "active" | "revoked".
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
 /// A point-in-time snapshot of the attack-path graph (for drift detection).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -351,6 +382,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
+    CREATE TABLE IF NOT EXISTS certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -600,6 +632,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS policy_snapshots (
                 tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id)
             );
+            CREATE TABLE IF NOT EXISTS certificates (
+                id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
+            );
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
             );
@@ -645,6 +680,7 @@ impl Store {
             CREATE TABLE slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
+            CREATE TABLE certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -1107,6 +1143,31 @@ impl Store {
         self.one_de(
             "SELECT data FROM policy_snapshots WHERE tenant = ?1 AND policy_id = ?2 LIMIT 1",
             &[tenant, policy_id],
+        )
+    }
+
+    // ---- Issued certificates (internal PQC CA) ----
+
+    pub fn record_certificate(&self, tenant: &str, cert: &CertificateRow) {
+        let json = serde_json::to_string(cert).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO certificates (id, tenant, data) VALUES (?1, ?2, ?3)",
+            "INSERT INTO certificates (id, tenant, data) VALUES ($1, $2, $3) ON CONFLICT (tenant, id) DO UPDATE SET data = EXCLUDED.data",
+            &[cert.id.as_str(), tenant, json.as_str()],
+        );
+    }
+
+    pub fn list_certificates(&self, tenant: &str) -> Vec<CertificateRow> {
+        self.list_de(
+            "SELECT data FROM certificates WHERE tenant = ?1 ORDER BY id LIMIT 100000",
+            &[tenant],
+        )
+    }
+
+    pub fn get_certificate(&self, tenant: &str, id: &str) -> Option<CertificateRow> {
+        self.one_de(
+            "SELECT data FROM certificates WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
         )
     }
 

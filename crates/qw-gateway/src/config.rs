@@ -51,6 +51,10 @@ pub struct GatewayConfig {
     /// upstream. Off by default.
     #[serde(default)]
     pub overlay: OverlayConfig,
+    /// Internal PQC certificate authority: issue hybrid (classical X.509 +
+    /// ML-DSA-65 binding) certs and auto-rotate them before expiry.
+    #[serde(default)]
+    pub pki: PkiConfig,
     /// CBOM attestation root of trust.
     #[serde(default)]
     pub attestation: AttestationConfig,
@@ -717,6 +721,7 @@ impl Default for GatewayConfig {
             crypto_policy: qw_cbom::CryptoPolicy::default(),
             crypto_policies: Vec::new(),
             overlay: OverlayConfig::default(),
+            pki: PkiConfig::default(),
             attestation: AttestationConfig::default(),
             air_gapped: false,
             assets: Vec::new(),
@@ -763,4 +768,43 @@ pub struct OverlayRoute {
 
 fn default_overlay_mode() -> String {
     "hybrid".to_string()
+}
+
+/// Internal PQC certificate authority. Issues hybrid certificates — a classical
+/// Ed25519 X.509 leaf (usable in TLS today) plus an ML-DSA-65 signature binding
+/// (post-quantum authentication) — and auto-rotates them before expiry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PkiConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// The CA's common name.
+    #[serde(default = "default_ca_cn")]
+    pub common_name: String,
+    /// Default certificate lifetime in days.
+    #[serde(default = "default_cert_validity_days")]
+    pub default_validity_days: u32,
+    /// Auto-renew a certificate when it is within this many days of expiry.
+    #[serde(default = "default_auto_renew_days")]
+    pub auto_renew_days: u32,
+}
+
+impl Default for PkiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            common_name: default_ca_cn(),
+            default_validity_days: default_cert_validity_days(),
+            auto_renew_days: default_auto_renew_days(),
+        }
+    }
+}
+
+fn default_ca_cn() -> String {
+    "QuantaWatch PQC CA".to_string()
+}
+fn default_cert_validity_days() -> u32 {
+    90
+}
+fn default_auto_renew_days() -> u32 {
+    14
 }

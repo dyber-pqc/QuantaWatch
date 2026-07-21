@@ -140,6 +140,21 @@ pub enum AuditEvent {
         upstream: String,
         mode: String,
     },
+    /// The internal PQC CA issued (or renewed) a certificate.
+    CertificateIssued {
+        cert_id: String,
+        subject: String,
+        key_type: String,
+        serial: String,
+        not_after: String,
+        renewed: bool,
+    },
+    /// A certificate was revoked.
+    CertificateRevoked {
+        cert_id: String,
+        subject: String,
+        reason: String,
+    },
 }
 
 impl AuditEntry {
