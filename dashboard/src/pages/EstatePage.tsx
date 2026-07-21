@@ -19,7 +19,7 @@ import {
   ActionIcon,
   Tooltip,
 } from "@mantine/core";
-import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget, protectService, issueServiceCert } from "../api/client";
+import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget, protectService, issueServiceCert, fetchEndpoints } from "../api/client";
 import type { Target, ExposedService } from "../api/types";
 import { PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
@@ -51,7 +51,9 @@ export default function EstatePage() {
   const [view, setView] = useState<string>("map");
 
   const { data: board, isLoading } = useQuery({ queryKey: ["targets"], queryFn: fetchTargets });
+  const { data: epBoard } = useQuery({ queryKey: ["endpoints"], queryFn: fetchEndpoints });
   const targets = board?.targets ?? [];
+  const endpoints = epBoard?.endpoints ?? [];
   const activeId = selected ?? targets[0]?.id ?? null;
   const active = targets.find((t) => t.id === activeId) ?? null;
 
@@ -90,10 +92,10 @@ export default function EstatePage() {
 
       <AddTarget onAdded={invalidate} />
 
-      {targets.length > 0 && (
+      {(targets.length > 0 || endpoints.length > 0) && (
         <Group justify="space-between" align="center">
           <Text size="11px" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.08em" }}>
-            {view === "map" ? "Estate map — hosts, services & containers" : "Targets"}
+            {view === "map" ? "Estate map — hosts, services, containers & endpoints" : "Targets"}
           </Text>
           <SegmentedControl
             size="xs"
@@ -110,12 +112,12 @@ export default function EstatePage() {
 
       {isLoading ? (
         <Spinner className="py-16" />
-      ) : targets.length === 0 ? (
+      ) : targets.length === 0 && endpoints.length === 0 ? (
         <Box style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2 }} py="xl">
-          <EmptyState title="No targets yet">Add a host above, then scan it to inventory what it exposes.</EmptyState>
+          <EmptyState title="No targets yet">Add a host above and scan it, or enrol a host agent under Endpoints.</EmptyState>
         </Box>
       ) : view === "map" ? (
-        <EstateMap targets={targets} onDeepScan={(t) => setDeepFor(t)} />
+        <EstateMap targets={targets} endpoints={endpoints} onDeepScan={(t) => setDeepFor(t)} />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,340px)_1fr]">
           <Stack gap={8}>

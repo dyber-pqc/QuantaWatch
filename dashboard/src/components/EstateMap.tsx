@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge, Box, Button, Group, Stack, Text, ActionIcon, ScrollArea, Divider, Tooltip } from "@mantine/core";
 import { protectService, issueServiceCert, scanTarget } from "../api/client";
-import type { Target, ExposedService, HostContainer } from "../api/types";
+import type { Target, ExposedService, HostContainer, Endpoint, EndpointComponent } from "../api/types";
 
 const PQC_HEX: Record<string, string> = {
   classical_weak: "#e76a6e",
@@ -12,21 +12,28 @@ const PQC_HEX: Record<string, string> = {
   pqc_ready: "#5bb98c",
 };
 const pqcHex = (s?: string) => PQC_HEX[s ?? "unknown"] ?? "#8a94a6";
-const ICON = { host: "🖥", service: "🔌", container: "🐳" } as const;
+const ICON = { host: "🖥", service: "🔌", container: "🐳", endpoint: "🖥", component: "🔒" } as const;
+const OS_ICON = (k?: string) => (k === "windows" ? "🪟" : k === "macos" ? "🍎" : k === "linux" ? "🐧" : "🖥");
+const CAT_ICON: Record<string, string> = {
+  secure_boot: "🛡️", tpm: "🔐", measured_boot: "📏", disk_encryption: "💽",
+  ssh_host_key: "🔑", certificate: "📜", crypto_library: "📦",
+};
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const fixable = (s?: string) => s === "classical_weak" || s === "classical_secure" || s === "unknown";
 
 type MapNode =
   | { kind: "host"; id: string; x: number; y: number; t: Target }
   | { kind: "service"; id: string; x: number; y: number; t: Target; s: ExposedService }
-  | { kind: "container"; id: string; x: number; y: number; t: Target; c: HostContainer };
+  | { kind: "container"; id: string; x: number; y: number; t: Target; c: HostContainer }
+  | { kind: "endpoint"; id: string; x: number; y: number; ep: Endpoint }
+  | { kind: "component"; id: string; x: number; y: number; ep: Endpoint; comp: EndpointComponent };
 
 const COL = { host: 96, service: 380, container: 660 };
 const ROW = 66;
 const BAND_GAP = 34;
 const VBW = 780;
 
-export function EstateMap({ targets, onDeepScan }: { targets: Target[]; onDeepScan: (t: Target) => void }) {
+export function EstateMap({ targets, endpoints = [], onDeepScan }: { targets: Target[]; endpoints?: Endpoint[]; onDeepScan: (t: Target) => void }) {
   const qc = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -70,10 +77,25 @@ export function EstateMap({ targets, onDeepScan }: { targets: Target[]; onDeepSc
       });
       y += bandH + BAND_GAP;
     }
+    // Host-agent endpoints: the endpoint is a host node, its firmware
+    // components fan out in the middle column (no containers).
+    for (const ep of endpoints) {
+      const comps = ep.components ?? [];
+      const rows = Math.max(comps.length, 1);
+      const bandH = rows * ROW;
+      const eid = `endpoint:${ep.id}`;
+      nodes.push({ kind: "endpoint", id: eid, x: COL.host, y: y + bandH / 2, ep });
+      comps.forEach((comp, i) => {
+        const id = `comp:${ep.id}:${i}`;
+        nodes.push({ kind: "component", id, x: COL.service, y: y + i * ROW + ROW / 2, ep, comp });
+        edges.push({ a: eid, b: id });
+      });
+      y += bandH + BAND_GAP;
+    }
     const height = Math.max(y + 10, 220);
     const posById: Record<string, MapNode> = Object.fromEntries(nodes.map((n) => [n.id, n]));
     return { nodes, edges, height, posById };
-  }, [targets]);
+  }, [targets, endpoints]);
 
   const selected = selectedId ? layout.posById[selectedId] : null;
 
@@ -137,8 +159,12 @@ export function EstateMap({ targets, onDeepScan }: { targets: Target[]; onDeepSc
   const reset = () => { viewRef.current = { k: 1, tx: 0, ty: 0 }; applyView(); };
 
   const nodeColor = (n: MapNode) =>
-    n.kind === "host" ? pqcHex(n.t.pqcStatus) : n.kind === "service" ? pqcHex(n.s.pqcStatus) : "#7a8699";
-  const nodeR = (n: MapNode) => (n.kind === "host" ? 22 : n.kind === "container" ? 14 : 16);
+    n.kind === "host" ? pqcHex(n.t.pqcStatus)
+      : n.kind === "service" ? pqcHex(n.s.pqcStatus)
+      : n.kind === "endpoint" ? pqcHex(n.ep.pqcStatus)
+      : n.kind === "component" ? pqcHex(n.comp.pqcStatus)
+      : "#7a8699";
+  const nodeR = (n: MapNode) => (n.kind === "host" || n.kind === "endpoint" ? 22 : n.kind === "container" ? 14 : 16);
 
   return (
     <div className="relative overflow-hidden rounded-lg border border-white/[0.06] bg-gradient-to-b from-surface-950/60 to-surface-900/30">
@@ -200,7 +226,7 @@ export function EstateMap({ targets, onDeepScan }: { targets: Target[]; onDeepSc
 
         <g ref={gRef}>
           {/* Column headers */}
-          {([["Hosts", COL.host], ["Services", COL.service], ["Containers", COL.container]] as const).map(([t, x]) => (
+          {([["Hosts", COL.host], ["Services / Firmware", COL.service], ["Containers", COL.container]] as const).map(([t, x]) => (
             <text key={t} x={x} y={22} textAnchor="middle" className="fill-gray-500" style={{ fontSize: 10.5, letterSpacing: 1.5, fontWeight: 600 }}>{t.toUpperCase()}</text>
           ))}
 
@@ -225,8 +251,23 @@ export function EstateMap({ targets, onDeepScan }: { targets: Target[]; onDeepSc
             const r = nodeR(n);
             const color = nodeColor(n);
             const isSel = n.id === selectedId;
+            const big = n.kind === "host" || n.kind === "endpoint";
             const label =
-              n.kind === "host" ? n.t.name : n.kind === "service" ? `:${n.s.port} ${n.s.service}` : n.c.name;
+              n.kind === "host" ? n.t.name
+                : n.kind === "service" ? `:${n.s.port} ${n.s.service}`
+                : n.kind === "container" ? n.c.name
+                : n.kind === "endpoint" ? n.ep.hostname
+                : n.comp.name;
+            const glyph =
+              n.kind === "endpoint" ? OS_ICON(n.ep.osKind)
+                : n.kind === "component" ? (CAT_ICON[n.comp.category] ?? "🔒")
+                : ICON[n.kind];
+            const sub =
+              n.kind === "host" ? n.t.host
+                : n.kind === "endpoint" ? "agent"
+                : n.kind === "service" && n.s.exposed === false ? "internal"
+                : n.kind === "component" && n.comp.severity !== "info" ? n.comp.severity
+                : null;
             const short = label.length > 16 ? label.slice(0, 15) + "…" : label;
             const dim = selectedId && !isSel && !layout.edges.some((e) => (e.a === selectedId && e.b === n.id) || (e.b === selectedId && e.a === n.id)) ? 0.28 : 1;
             const protectedFlag = n.kind === "service" && !!n.s.protectedListen;
@@ -239,10 +280,9 @@ export function EstateMap({ targets, onDeepScan }: { targets: Target[]; onDeepSc
                   <circle className="em-core" cx={n.x} cy={n.y} r={r} fill={color} fillOpacity={isSel ? 0.28 : 0.16} stroke={color} strokeWidth={isSel ? 2.4 : 1.8} />
                 </g>
                 <circle cx={n.x} cy={n.y} r={r} fill="url(#em-node)" />
-                <text x={n.x} y={n.y + (n.kind === "host" ? 6 : 5)} textAnchor="middle" style={{ fontSize: n.kind === "host" ? 18 : 14, pointerEvents: "none" }}>{ICON[n.kind]}</text>
+                <text x={n.x} y={n.y + (big ? 6 : 5)} textAnchor="middle" style={{ fontSize: big ? 18 : 14, pointerEvents: "none" }}>{glyph}</text>
                 <text x={n.x} y={n.y + r + 14} textAnchor="middle" className="fill-gray-100" style={{ fontSize: 10.5, fontWeight: 600, pointerEvents: "none" }}>{short}</text>
-                {n.kind === "host" && <text x={n.x} y={n.y + r + 25} textAnchor="middle" className="fill-gray-500" style={{ fontSize: 8.5, pointerEvents: "none" }}>{n.t.host}</text>}
-                {n.kind === "service" && n.s.exposed === false && <text x={n.x} y={n.y + r + 25} textAnchor="middle" className="fill-gray-600" style={{ fontSize: 8, pointerEvents: "none" }}>internal</text>}
+                {sub && <text x={n.x} y={n.y + r + 25} textAnchor="middle" className="fill-gray-500" style={{ fontSize: 8.5, pointerEvents: "none" }}>{sub}</text>}
               </g>
             );
           })}
@@ -287,9 +327,28 @@ function MapDetail({ node, onClose, onDeepScan, onSweep, onProtect, onIssueCert,
   onIssueCert: (id: string, port: number) => void;
   busy: { sweep: boolean; protect?: number; cert?: number };
 }) {
-  const color = node.kind === "host" ? pqcHex(node.t.pqcStatus) : node.kind === "service" ? pqcHex(node.s.pqcStatus) : "#7a8699";
-  const title = node.kind === "host" ? node.t.name : node.kind === "service" ? `:${node.s.port} ${node.s.service}` : node.c.name;
-  const kindLabel = node.kind === "host" ? "Host" : node.kind === "service" ? "Network service" : "Container";
+  const color =
+    node.kind === "host" ? pqcHex(node.t.pqcStatus)
+      : node.kind === "service" ? pqcHex(node.s.pqcStatus)
+      : node.kind === "endpoint" ? pqcHex(node.ep.pqcStatus)
+      : node.kind === "component" ? pqcHex(node.comp.pqcStatus)
+      : "#7a8699";
+  const title =
+    node.kind === "host" ? node.t.name
+      : node.kind === "service" ? `:${node.s.port} ${node.s.service}`
+      : node.kind === "container" ? node.c.name
+      : node.kind === "endpoint" ? node.ep.hostname
+      : node.comp.name;
+  const kindLabel =
+    node.kind === "host" ? "Host"
+      : node.kind === "service" ? "Network service"
+      : node.kind === "container" ? "Container"
+      : node.kind === "endpoint" ? "Endpoint (agent)"
+      : "Firmware component";
+  const glyph =
+    node.kind === "endpoint" ? OS_ICON(node.ep.osKind)
+      : node.kind === "component" ? (CAT_ICON[node.comp.category] ?? "🔒")
+      : ICON[node.kind];
 
   return (
     <Box style={{
@@ -301,7 +360,7 @@ function MapDetail({ node, onClose, onDeepScan, onSweep, onProtect, onIssueCert,
       <Group justify="space-between" wrap="nowrap" px="sm" py={8} style={{ borderBottom: "1px solid var(--mantine-color-dark-5)" }}>
         <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
           <Box style={{ width: 26, height: 26, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: 4, background: `${color}22`, border: `1px solid ${color}66` }}>
-            <Text fz={15} style={{ lineHeight: 1 }}>{ICON[node.kind]}</Text>
+            <Text fz={15} style={{ lineHeight: 1 }}>{glyph}</Text>
           </Box>
           <Box style={{ minWidth: 0 }}>
             <Text fw={700} fz={13} c="gray.1" truncate>{title}</Text>
@@ -380,6 +439,34 @@ function MapDetail({ node, onClose, onDeepScan, onSweep, onProtect, onIssueCert,
                   <Text ff="monospace" fz={10.5} c="gray.3" style={{ lineHeight: 1.5 }}>{node.c.ports}</Text>
                 </>
               )}
+            </>
+          )}
+
+          {node.kind === "endpoint" && (
+            <>
+              <Text ff="monospace" fz={11} c="brand.4">{node.ep.os}</Text>
+              <Group gap={6}>
+                <Pqc status={node.ep.pqcStatus} />
+                {node.ep.findingsCount > 0 && <Badge variant="light" color="rose" radius={2} size="sm" tt="none">{node.ep.findingsCount} findings</Badge>}
+                <Badge variant="light" color="gray" radius={2} size="sm" tt="none">{node.ep.components.length} components</Badge>
+              </Group>
+              <Text fz={10.5} c="dimmed" style={{ lineHeight: 1.5 }}>
+                Firmware / boot-chain crypto reported by the host agent. These are hardware-pinned — plan a firmware/TPM refresh; they are not one-click fixable.
+              </Text>
+              <Text ff="monospace" fz={9.5} c="dark.3">{node.ep.agentVersion ?? "agent"} · last report {new Date(node.ep.lastReport).toLocaleString()}</Text>
+            </>
+          )}
+
+          {node.kind === "component" && (
+            <>
+              <Group gap={6}>
+                <Pqc status={node.comp.pqcStatus} />
+                {node.comp.severity !== "info" && <Badge variant="light" color={node.comp.severity === "high" || node.comp.severity === "critical" ? "red" : node.comp.severity === "medium" ? "orange" : "yellow"} radius={2} size="sm" tt="none">{node.comp.severity}</Badge>}
+                <Badge variant="outline" color="gray" radius={2} size="sm" tt="none">{node.comp.category.replace(/_/g, " ")}</Badge>
+              </Group>
+              {node.comp.algorithm && <Text ff="monospace" fz={10.5} c="gray.3">{node.comp.algorithm}</Text>}
+              <Text fz={10.5} c="dimmed" style={{ lineHeight: 1.5 }}>{node.comp.detail}</Text>
+              <Text fz={9.5} c="dark.3">on {node.ep.hostname}</Text>
             </>
           )}
         </Stack>
