@@ -233,6 +233,27 @@ pub struct HostContainerRow {
     pub ports: String,
 }
 
+/// A PQC-overlay route protected at runtime (via one-click "protect"),
+/// persisted so it can be re-bound after a gateway restart.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlayRouteRow {
+    /// Route id, e.g. "target:{targetId}:{port}".
+    pub id: String,
+    /// The Estate target this route fronts, if any (for cleanup on delete).
+    #[serde(default)]
+    pub target_id: Option<String>,
+    /// The actual bound client-facing listen address (host:port).
+    pub listen: String,
+    /// The legacy upstream (host:port) traffic is forwarded to.
+    pub upstream: String,
+    #[serde(default)]
+    pub upstream_tls: bool,
+    /// "hybrid" | "pqc-only".
+    pub mode: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A UI-managed connection to an external source (GitHub, GitLab, Jira, Linear)
 /// with a stored secret. The row (including `token`) is persisted on the gateway
 /// to drive scans; the API layer masks the token before returning it to the
@@ -497,6 +518,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+    CREATE TABLE IF NOT EXISTS overlay_routes (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -755,6 +777,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS connections (
                 id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
             );
+            CREATE TABLE IF NOT EXISTS overlay_routes (
+                id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
+            );
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
             );
@@ -803,6 +828,7 @@ impl Store {
             CREATE TABLE certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+            CREATE TABLE overlay_routes (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -1355,6 +1381,39 @@ impl Store {
             "DELETE FROM connections WHERE tenant = ?1 AND id = ?2",
             &[tenant, id],
         );
+    }
+
+    // ---- Persisted PQC-overlay routes (durable one-click protection) ----
+
+    pub fn record_overlay_route(&self, tenant: &str, route: &OverlayRouteRow) {
+        let json = serde_json::to_string(route).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO overlay_routes (id, tenant, data) VALUES (?1, ?2, ?3)",
+            "INSERT INTO overlay_routes (id, tenant, data) VALUES ($1, $2, $3) ON CONFLICT (tenant, id) DO UPDATE SET data = EXCLUDED.data",
+            &[route.id.as_str(), tenant, json.as_str()],
+        );
+    }
+
+    /// Every persisted route across all tenants — used at startup to re-bind.
+    pub fn list_all_overlay_routes(&self) -> Vec<OverlayRouteRow> {
+        self.list_de("SELECT data FROM overlay_routes ORDER BY id LIMIT 100000", &[])
+    }
+
+    pub fn delete_overlay_route(&self, tenant: &str, id: &str) {
+        self.exec(
+            "DELETE FROM overlay_routes WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        );
+    }
+
+    /// Remove every persisted route fronting a given target (called when the
+    /// target is deleted so it doesn't re-bind on the next restart).
+    pub fn delete_overlay_routes_for_target(&self, tenant: &str, target_id: &str) {
+        for r in self.list_all_overlay_routes() {
+            if r.target_id.as_deref() == Some(target_id) {
+                self.delete_overlay_route(tenant, &r.id);
+            }
+        }
     }
 
     // ---- Graph snapshots (drift/timeline) ----

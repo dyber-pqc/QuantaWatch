@@ -126,6 +126,13 @@ impl OverlayState {
         })
     }
 
+    /// Drop a route from the snapshot (e.g. its target was deleted). The bound
+    /// listener task is orphaned and stops accepting usefully after the next
+    /// restart, when it is simply not re-bound.
+    pub fn remove_route(&self, id: &str) {
+        self.routes.lock().unwrap().retain(|r| r.id != id);
+    }
+
     /// Ensure a client-facing server TLS config exists (lazily self-signed).
     fn ensure_server_cfg(&self) -> anyhow::Result<Arc<ServerConfig>> {
         let mut guard = self.server_cfg.lock().unwrap();
@@ -188,7 +195,12 @@ impl OverlayState {
             }
         });
 
-        self.routes.lock().unwrap().push(stats.clone());
+        // Replace any prior in-memory route with the same id (e.g. re-protect).
+        {
+            let mut routes = self.routes.lock().unwrap();
+            routes.retain(|r| r.id != stats.id);
+            routes.push(stats.clone());
+        }
         tracing::info!(route = %route.id, listen = %route.listen, upstream = %route.upstream, "overlay: runtime route protected");
         let _ = self
             .audit

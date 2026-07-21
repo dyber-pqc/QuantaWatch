@@ -154,6 +154,13 @@ pub async fn delete_target(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
+    // Drop any PQC-overlay routes protecting this target so they don't re-bind.
+    for r in state.store.list_all_overlay_routes() {
+        if r.target_id.as_deref() == Some(id.as_str()) {
+            state.overlay.remove_route(&r.id);
+        }
+    }
+    state.store.delete_overlay_routes_for_target(&tenant, &id);
     state.store.delete_target(&tenant, &id);
     Json(json!({ "id": id, "deleted": true }))
 }
@@ -542,6 +549,19 @@ pub async fn protect_service(
                 }
             }
             state.store.upsert_target(&tenant, &target);
+            // Persist the route so it survives a gateway restart.
+            state.store.record_overlay_route(
+                &tenant,
+                &qw_store::OverlayRouteRow {
+                    id: route_id.clone(),
+                    target_id: Some(target.id.clone()),
+                    listen: listen_addr.clone(),
+                    upstream: upstream.clone(),
+                    upstream_tls: body.upstream_tls.unwrap_or(default_upstream_tls),
+                    mode: mode.clone(),
+                    created_at: chrono::Utc::now(),
+                },
+            );
             (
                 StatusCode::OK,
                 Json(json!({

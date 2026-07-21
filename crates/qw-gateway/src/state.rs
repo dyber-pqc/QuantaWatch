@@ -202,6 +202,19 @@ impl AppState {
             None
         };
 
+        // Re-bind PQC-overlay routes that were protected before a restart, so
+        // one-click protection is durable. A route that fails to re-bind (e.g.
+        // its port is taken) is logged and skipped rather than failing startup.
+        for route in store.list_all_overlay_routes() {
+            match overlay
+                .add_route(&route.id, &route.listen, &route.upstream, route.upstream_tls, &route.mode)
+                .await
+            {
+                Ok(_) => tracing::info!(route = %route.id, listen = %route.listen, upstream = %route.upstream, "overlay: re-bound persisted route"),
+                Err(e) => tracing::warn!(route = %route.id, listen = %route.listen, error = %e, "overlay: failed to re-bind persisted route"),
+            }
+        }
+
         Ok(Self {
             gateway_identity,
             policy_engine: Arc::new(RwLock::new(policy_engine)),
