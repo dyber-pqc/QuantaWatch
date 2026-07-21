@@ -24,6 +24,7 @@ import type { Target, ExposedService } from "../api/types";
 import { PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
 import { OverlayModal } from "../components/OverlayModal";
+import { EstateMap } from "../components/EstateMap";
 
 const PQC_COLOR: Record<string, string> = {
   classical_weak: "red",
@@ -47,6 +48,7 @@ export default function EstatePage() {
   const { openMenu, menu } = useContextMenu();
   const [selected, setSelected] = useState<string | null>(null);
   const [deepFor, setDeepFor] = useState<Target | null>(null);
+  const [view, setView] = useState<string>("map");
 
   const { data: board, isLoading } = useQuery({ queryKey: ["targets"], queryFn: fetchTargets });
   const targets = board?.targets ?? [];
@@ -88,12 +90,32 @@ export default function EstatePage() {
 
       <AddTarget onAdded={invalidate} />
 
+      {targets.length > 0 && (
+        <Group justify="space-between" align="center">
+          <Text size="11px" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.08em" }}>
+            {view === "map" ? "Estate map — hosts, services & containers" : "Targets"}
+          </Text>
+          <SegmentedControl
+            size="xs"
+            radius={2}
+            value={view}
+            onChange={setView}
+            data={[
+              { label: "Map", value: "map" },
+              { label: "List", value: "list" },
+            ]}
+          />
+        </Group>
+      )}
+
       {isLoading ? (
         <Spinner className="py-16" />
       ) : targets.length === 0 ? (
         <Box style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2 }} py="xl">
           <EmptyState title="No targets yet">Add a host above, then scan it to inventory what it exposes.</EmptyState>
         </Box>
+      ) : view === "map" ? (
+        <EstateMap targets={targets} onDeepScan={(t) => setDeepFor(t)} />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,340px)_1fr]">
           <Stack gap={8}>
