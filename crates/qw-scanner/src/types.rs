@@ -43,6 +43,9 @@ pub enum TargetType {
     /// An endpoint that upgrades to TLS mid-session via STARTTLS (PostgreSQL
     /// SSLRequest, SMTP STARTTLS). `metadata.protocol` selects the dialect.
     StartTlsEndpoint,
+    /// A Remote Desktop (RDP, 3389) endpoint: negotiate the security layer
+    /// (Standard RDP Security vs TLS vs CredSSP/NLA), then fingerprint the TLS.
+    RdpEndpoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +115,15 @@ impl ScanTarget {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             target_type: TargetType::NetworkHost,
+            address: address.to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn rdp(address: &str) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            target_type: TargetType::RdpEndpoint,
             address: address.to_string(),
             metadata: HashMap::new(),
         }

@@ -13,6 +13,7 @@
 //! — it is emphatically not an internet-wide port scanner.
 
 use crate::registry::{Scanner, ScannerError};
+use crate::scanners::rdp::RdpScanner;
 use crate::scanners::ssh::SshScanner;
 use crate::scanners::starttls::StartTlsScanner;
 use crate::scanners::tls::TlsScanner;
@@ -188,11 +189,18 @@ impl Scanner for NetworkScanner {
             targets: vec![],
         });
 
+        let rdp = RdpScanner::new(self.config.connect_timeout_ms.div_ceil(1000).max(3));
+
         for port in open_ports {
             let addr = format!("{host}:{port}");
             if port == 22 {
                 if let Ok(r) = ssh.scan(&ScanTarget::ssh(&addr)).await {
                     findings.extend(r.findings);
+                }
+            } else if port == 3389 {
+                match rdp.scan(&ScanTarget::rdp(&addr)).await {
+                    Ok(r) => findings.extend(r.findings),
+                    Err(e) => tracing::debug!(%addr, error = %e, "RDP fingerprint failed"),
                 }
             } else if is_immediate_tls_port(port) {
                 match tls.scan(&ScanTarget::tls(&addr)).await {

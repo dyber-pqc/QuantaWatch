@@ -116,6 +116,10 @@ pub fn build_scanner_registry(config: &ScannerConfig) -> ScannerRegistry {
             config.network.clone(),
         )));
     }
+    // RDP endpoints (3389): scannable standalone and via the network sweep.
+    registry.register(Box::new(crate::scanners::rdp::RdpScanner::new(
+        config.network.connect_timeout_ms.div_ceil(1000).max(3),
+    )));
     if config.starttls.enabled {
         registry.register(Box::new(crate::scanners::starttls::StartTlsScanner::new(
             config.starttls.clone(),
