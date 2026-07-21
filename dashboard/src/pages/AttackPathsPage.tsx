@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import { fetchAttackPaths, fetchAttackPathTimeline, simulateAttackPaths, fetchIntegrations, remediateAttackPath, openAuthed, BOARD_REPORT_URL } from "../api/client";
-import type { AttackPath, GraphNode, GraphNodeType, SimulateResponse, RemediationTicket, KillChainStage } from "../api/types";
-import { Badge, Group, Box, Text } from "@mantine/core";
+import type { AttackPath, GraphNode, GraphNodeType, SimulateResponse, RemediationTicket, KillChainStage, PqcStatus } from "../api/types";
+import { Badge, Group, Box, Text, ActionIcon, ScrollArea, Stack, Divider } from "@mantine/core";
 import { Card, PageHeader, Stat, Spinner, EmptyState, SeverityBadge, PqcBadge } from "../components/ui";
 
 const COL_INDEX: Record<GraphNodeType, number> = {
@@ -34,7 +34,7 @@ function nodeColor(node: GraphNode): string {
   return riskColor(node.risk);
 }
 
-function Graph({ nodes, edges, activeIds, focus }: { nodes: GraphNode[]; edges: { source: string; target: string; observed: boolean }[]; activeIds: Set<string> | null; focus: { id: string; nodeIds: string[] } | null }) {
+function Graph({ nodes, edges, activeIds, focus, selectedNodeId, onNodeClick }: { nodes: GraphNode[]; edges: { source: string; target: string; observed: boolean }[]; activeIds: Set<string> | null; focus: { id: string; nodeIds: string[] } | null; selectedNodeId: string | null; onNodeClick: (n: GraphNode | null) => void }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Pan/zoom is applied IMPERATIVELY (ref + setAttribute), never through React
   // state — a wheel/trackpad can fire 100+ events/sec, and re-rendering the
@@ -177,7 +177,31 @@ function Graph({ nodes, edges, activeIds, focus }: { nodes: GraphNode[]; edges: 
             <stop offset="0%" stopColor="#ffffff" stopOpacity="0.14" />
             <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
           </radialGradient>
+          {/* Soft outer glow, colored per node via the group's `color`. */}
+          <filter id="ap-glow" x="-60%" y="-60%" width="220%" height="220%">
+            <feGaussianBlur stdDeviation="3.2" result="b" />
+            <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+          </filter>
+          <pattern id="ap-grid" width="26" height="26" patternUnits="userSpaceOnUse">
+            <circle cx="1" cy="1" r="1" fill="#ffffff" fillOpacity="0.028" />
+          </pattern>
+          <style>{`
+            .ap-node { cursor: pointer; }
+            .ap-node .ap-halo { opacity: 0; transition: opacity 140ms ease; }
+            .ap-node:hover .ap-halo { opacity: 0.9; }
+            .ap-node:hover .ap-core { filter: brightness(1.25); }
+            .ap-flow { stroke-dasharray: 5 7; animation: apFlow 0.9s linear infinite; }
+            @keyframes apFlow { to { stroke-dashoffset: -24; } }
+            .ap-sel { animation: apSel 1.7s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+            @keyframes apSel { 0%,100% { opacity: .95; } 50% { opacity: .3; } }
+            @media (prefers-reduced-motion: reduce) {
+              .ap-flow, .ap-sel { animation: none; }
+            }
+          `}</style>
         </defs>
+        {/* Dot-grid backdrop (fixed to the viewBox, sits under the pan/zoom group). */}
+        <rect x={0} y={0} width={VBW} height={layout.height} fill="url(#ap-grid)" />
+        <rect x={0} y={0} width={VBW} height={layout.height} fill="transparent" onClick={() => onNodeClick(null)} />
 
         <g ref={gRef}>
           {/* Column bands + headers */}
@@ -195,21 +219,30 @@ function Graph({ nodes, edges, activeIds, focus }: { nodes: GraphNode[]; edges: 
             const a = layout.pos[e.source]; const b = layout.pos[e.target];
             if (!a || !b) return null;
             const active = activeIds ? activeIds.has(e.source) && activeIds.has(e.target) : false;
-            const faded = activeIds && !active;
+            const touchesSel = selectedNodeId != null && (e.source === selectedNodeId || e.target === selectedNodeId);
+            const faded = (activeIds && !active) || (selectedNodeId != null && !touchesSel && !active);
             const mx = (a.x + b.x) / 2;
             const ra = 15 + (a.node.risk / 100) * 9;
             const rb = 15 + (b.node.risk / 100) * 9;
+            const d = `M ${a.x + ra} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${b.x - rb - 3} ${b.y}`;
+            const highlight = active || touchesSel;
+            const stroke = highlight ? "#a6a8f0" : e.observed ? "#5b8def" : "#3b3a39";
             return (
-              <path
-                key={i}
-                d={`M ${a.x + ra} ${a.y} C ${mx} ${a.y}, ${mx} ${b.y}, ${b.x - rb - 3} ${b.y}`}
-                fill="none"
-                stroke={active ? "#a6a8f0" : e.observed ? "#5b8def" : "#3b3a39"}
-                strokeWidth={active ? 2.6 : e.observed ? 1.8 : 1.1}
-                strokeDasharray={e.observed ? "0" : "4 3"}
-                markerEnd={faded ? "url(#ap-arrow-dim)" : "url(#ap-arrow)"}
-                opacity={faded ? 0.1 : e.observed ? 0.9 : 0.55}
-              />
+              <g key={i} opacity={faded ? 0.09 : 1} style={{ transition: "opacity 140ms" }}>
+                <path
+                  d={d}
+                  fill="none"
+                  stroke={stroke}
+                  strokeWidth={highlight ? 2.6 : e.observed ? 1.7 : 1.1}
+                  strokeDasharray={e.observed ? "0" : "4 3"}
+                  markerEnd={faded ? "url(#ap-arrow-dim)" : "url(#ap-arrow)"}
+                  opacity={e.observed || highlight ? 0.9 : 0.5}
+                />
+                {/* Live traffic (or a highlighted edge) gets a flowing pulse. */}
+                {(e.observed || highlight) && !faded && (
+                  <path className="ap-flow" d={d} fill="none" stroke={highlight ? "#c7c9ff" : "#9fc2ff"} strokeWidth={highlight ? 2 : 1.4} strokeLinecap="round" opacity={0.9} />
+                )}
+              </g>
             );
           })}
 
@@ -217,23 +250,37 @@ function Graph({ nodes, edges, activeIds, focus }: { nodes: GraphNode[]; edges: 
           {Object.values(layout.pos).map(({ x, y, node }) => {
             const r = 15 + (node.risk / 100) * 9;
             const color = nodeColor(node);
+            const isSel = node.id === selectedNodeId;
             const label = node.label.length > 15 ? node.label.slice(0, 14) + "…" : node.label;
             const sub = node.blastRadius > 0 ? `blast ${node.blastRadius}` : node.sublabel.slice(0, 18);
             return (
-              <g key={node.id} opacity={dim(node.id)} style={{ transition: "opacity 120ms" }}>
+              <g
+                key={node.id}
+                className="ap-node"
+                opacity={dim(node.id)}
+                style={{ transition: "opacity 120ms" }}
+                onClick={(e) => { e.stopPropagation(); onNodeClick(node); }}
+              >
+                {/* Pulsing selection ring */}
+                {isSel && <circle className="ap-sel" cx={x} cy={y} r={r + 8} fill="none" stroke={color} strokeWidth={2.2} />}
+                {/* Hover halo (revealed via CSS) */}
+                <circle className="ap-halo" cx={x} cy={y} r={r + 6} fill={color} fillOpacity={0.14} />
                 {node.observed && (
                   <circle cx={x} cy={y} r={r + 5.5} fill="none" stroke="#5b8def" strokeWidth={1.3} strokeDasharray="2 3" opacity={0.55} />
                 )}
-                <circle cx={x} cy={y} r={r} fill={color} fillOpacity={0.16} stroke={color} strokeWidth={1.8} />
+                {/* Core disc with a colored glow */}
+                <g filter="url(#ap-glow)">
+                  <circle className="ap-core" cx={x} cy={y} r={r} fill={color} fillOpacity={isSel ? 0.28 : 0.16} stroke={color} strokeWidth={isSel ? 2.4 : 1.8} />
+                </g>
                 <circle cx={x} cy={y} r={r} fill="url(#ap-node)" />
-                <text x={x} y={y + 5} textAnchor="middle" style={{ fontSize: 15 }}>{NODE_ICON[node.type]}</text>
+                <text x={x} y={y + 5} textAnchor="middle" style={{ fontSize: 15, pointerEvents: "none" }}>{NODE_ICON[node.type]}</text>
                 {/* risk pill */}
-                <g transform={`translate(${x + r - 2} ${y - r + 1})`}>
+                <g transform={`translate(${x + r - 2} ${y - r + 1})`} style={{ pointerEvents: "none" }}>
                   <circle r={7} fill="#1f1f1f" stroke={color} strokeWidth={1.2} />
                   <text textAnchor="middle" y={2.6} style={{ fontSize: 7.5, fontWeight: 700 }} fill={color}>{Math.round(node.risk)}</text>
                 </g>
-                <text x={x} y={y + r + 15} textAnchor="middle" className="fill-gray-100" style={{ fontSize: 11, fontWeight: 600 }}>{label}</text>
-                <text x={x} y={y + r + 27} textAnchor="middle" className="fill-gray-500" style={{ fontSize: 8.5 }}>{sub}</text>
+                <text x={x} y={y + r + 15} textAnchor="middle" className="fill-gray-100" style={{ fontSize: 11, fontWeight: 600, pointerEvents: "none" }}>{label}</text>
+                <text x={x} y={y + r + 27} textAnchor="middle" className="fill-gray-500" style={{ fontSize: 8.5, pointerEvents: "none" }}>{sub}</text>
               </g>
             );
           })}
@@ -379,12 +426,135 @@ function PathRow({ path, onHover, onSelect, selected, remediable }: { path: Atta
   );
 }
 
+const NODE_KIND_INFO: Record<GraphNodeType, { label: string; note: string }> = {
+  identity: { label: "Identity", note: "A user or API key that can drive agents. Over-privileged non-human identities are an access-risk path." },
+  data: { label: "Data class", note: "A category of data an agent handles. Node risk reflects its sensitivity — the prize an attacker is after." },
+  agent: { label: "AI agent", note: "Reaches the providers shown. Its data is exposed if any channel it uses is quantum-vulnerable." },
+  provider: { label: "AI provider", note: "An upstream AI endpoint. Its TLS key exchange decides harvest-now-decrypt-later exposure on every call." },
+  certificate: { label: "Certificate", note: "An X.509 certificate on a channel. A classical signature algorithm is quantum-forgeable." },
+  dependency: { label: "Crypto dependency", note: "A cryptographic library found in your code. Replace weak/classical ones with PQC-capable equivalents." },
+  asset: { label: "Infrastructure asset", note: "Discovered by a cloud / connector inventory." },
+  host: { label: "Estate host", note: "A registered system in your estate. Its services and containers appear as connected nodes." },
+  service: { label: "Network service", note: "A listening service on a host. Classical transport crypto here is harvestable — protect it with the PQC overlay or issue it a hybrid cert." },
+  container: { label: "Container", note: "A container running on a host." },
+};
+
+const EDGE_VERB: Record<string, string> = {
+  "can-access": "can access",
+  handles: "handles",
+  "routes-to": "routes to",
+  "secured-by": "secured by",
+  "depends-on": "depends on",
+  exposes: "exposes",
+  runs: "runs",
+};
+
+function NodeDetail({ node, nodes, edges, paths, onFocusPath, onClose }: {
+  node: GraphNode;
+  nodes: GraphNode[];
+  edges: { source: string; target: string; observed: boolean; kind?: string }[];
+  paths: AttackPath[];
+  onFocusPath: (id: string) => void;
+  onClose: () => void;
+}) {
+  const byId = useMemo(() => Object.fromEntries(nodes.map((n) => [n.id, n])), [nodes]);
+  const outgoing = edges.filter((e) => e.source === node.id).map((e) => ({ n: byId[e.target], kind: e.kind, out: true, observed: e.observed })).filter((x) => x.n);
+  const incoming = edges.filter((e) => e.target === node.id).map((e) => ({ n: byId[e.source], kind: e.kind, out: false, observed: e.observed })).filter((x) => x.n);
+  const inPaths = paths.filter((p) => p.nodeIds.includes(node.id));
+  const info = NODE_KIND_INFO[node.type];
+  const hasPqc = node.pqcStatus && node.pqcStatus !== "n/a";
+  const color = nodeColor(node);
+
+  const Conn = ({ n, kind, out, observed }: { n: GraphNode; kind?: string; out: boolean; observed: boolean }) => (
+    <Group gap={7} wrap="nowrap" style={{ minWidth: 0 }}>
+      <Text ff="monospace" fz={10} c={out ? "brand.4" : "dark.2"} style={{ flexShrink: 0 }}>{out ? "→" : "←"}</Text>
+      <Text fz={15} style={{ flexShrink: 0, lineHeight: 1 }}>{NODE_ICON[n.type]}</Text>
+      <Box style={{ minWidth: 0 }}>
+        <Text fz={11.5} c="gray.2" truncate>{n.label}</Text>
+        <Text fz={9} c="dimmed">{kind ? (EDGE_VERB[kind] ?? kind) : n.type}{observed ? " · observed" : ""}</Text>
+      </Box>
+    </Group>
+  );
+
+  return (
+    <Box
+      style={{
+        position: "absolute", top: 10, right: 10, width: 280, maxHeight: "calc(100% - 20px)", zIndex: 20,
+        display: "flex", flexDirection: "column",
+        background: "color-mix(in srgb, var(--mantine-color-dark-7) 92%, transparent)",
+        backdropFilter: "blur(6px)",
+        border: `1px solid ${color}55`, borderRadius: 4,
+        boxShadow: "0 12px 40px rgba(0,0,0,0.5)",
+      }}
+    >
+      <Group justify="space-between" wrap="nowrap" px="sm" py={8} style={{ borderBottom: "1px solid var(--mantine-color-dark-5)" }}>
+        <Group gap={8} wrap="nowrap" style={{ minWidth: 0 }}>
+          <Box style={{ width: 26, height: 26, flexShrink: 0, display: "grid", placeItems: "center", borderRadius: 4, background: `${color}22`, border: `1px solid ${color}66` }}>
+            <Text fz={15} style={{ lineHeight: 1 }}>{NODE_ICON[node.type]}</Text>
+          </Box>
+          <Box style={{ minWidth: 0 }}>
+            <Text fw={700} fz={13} c="gray.1" truncate>{node.label}</Text>
+            <Text fz={9.5} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.06em" }}>{info?.label ?? node.type}</Text>
+          </Box>
+        </Group>
+        <ActionIcon variant="subtle" color="gray" size="sm" radius={2} onClick={onClose} aria-label="Close">
+          <svg width={14} height={14} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+        </ActionIcon>
+      </Group>
+
+      <ScrollArea.Autosize mah="calc(100vh - 320px)">
+        <Stack gap="xs" p="sm">
+          {node.sublabel && <Text ff="monospace" fz={10.5} c="dark.1">{node.sublabel}</Text>}
+
+          <Group gap={6}>
+            {hasPqc && <PqcBadge status={node.pqcStatus as PqcStatus} />}
+            <Badge variant="light" color={node.risk >= 70 ? "red" : node.risk >= 45 ? "orange" : node.risk >= 20 ? "yellow" : "teal"} radius={2} size="sm" tt="none" fw={600}
+              title="Risk — channel weakness weighted by what it protects">risk {Math.round(node.risk)}</Badge>
+            {node.blastRadius > 0 && <Badge variant="light" color="grape" radius={2} size="sm" tt="none" fw={600} title="Sensitivity exposed if this node's crypto broke">blast {node.blastRadius}</Badge>}
+            {node.observed && <Badge variant="light" color="cyan" radius={2} size="sm" tt="none" fw={600}>observed</Badge>}
+          </Group>
+
+          {(outgoing.length > 0 || incoming.length > 0) && (
+            <>
+              <Divider label={`Connections (${outgoing.length + incoming.length})`} labelPosition="left" styles={{ label: { fontSize: 9.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--mantine-color-dark-2)" } }} />
+              <Stack gap={6}>
+                {outgoing.map((c, i) => <Conn key={`o${i}`} {...c} />)}
+                {incoming.map((c, i) => <Conn key={`i${i}`} {...c} />)}
+              </Stack>
+            </>
+          )}
+
+          {inPaths.length > 0 && (
+            <>
+              <Divider label={`In attack paths (${inPaths.length})`} labelPosition="left" styles={{ label: { fontSize: 9.5, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--mantine-color-dark-2)" } }} />
+              <Stack gap={5}>
+                {inPaths.slice(0, 6).map((p) => (
+                  <Box key={p.id} onClick={() => onFocusPath(p.id)}
+                    style={{ cursor: "pointer", borderLeft: `2px solid ${riskColor(p.score)}`, padding: "3px 8px", borderRadius: 2, background: "rgba(255,255,255,0.02)" }}>
+                    <Group gap={6} wrap="nowrap">
+                      <Text ff="heading" fw={700} fz={11} style={{ color: riskColor(p.score), fontVariantNumeric: "tabular-nums", flexShrink: 0 }}>{Math.round(p.score)}</Text>
+                      <Text fz={10.5} c="gray.3" truncate>{p.title}</Text>
+                    </Group>
+                  </Box>
+                ))}
+              </Stack>
+            </>
+          )}
+
+          {info?.note && <Text fz={10.5} c="dimmed" style={{ lineHeight: 1.5 }} mt={2}>{info.note}</Text>}
+        </Stack>
+      </ScrollArea.Autosize>
+    </Box>
+  );
+}
+
 export default function AttackPathsPage() {
   const { data, isLoading } = useQuery({ queryKey: ["attack-paths"], queryFn: fetchAttackPaths });
   const { data: timeline } = useQuery({ queryKey: ["attack-path-timeline"], queryFn: fetchAttackPathTimeline });
   const { data: integrationsData } = useQuery({ queryKey: ["integrations"], queryFn: fetchIntegrations });
   const [hovered, setHovered] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [sim, setSim] = useState<SimulateResponse | null>(null);
   const [hardened, setHardened] = useState<Set<string>>(new Set());
   const [simBusy, setSimBusy] = useState(false);
@@ -393,6 +563,10 @@ export default function AttackPathsPage() {
 
   const live = sim ?? data;
   const paths = live?.paths ?? [];
+  // Dedupe by id: two Estate targets can share a host, which would otherwise
+  // collide on host:/service: node ids and trip React's duplicate-key guard.
+  const graphNodes = Array.from(new Map((live?.nodes ?? []).map((n) => [n.id, n])).values());
+  const graphEdges = live?.edges ?? [];
   const s = live?.summary;
   // Highlight follows hover, but falls back to the pinned (clicked) path.
   const activePath = paths.find((p) => p.id === (hovered ?? selected));
@@ -479,12 +653,24 @@ export default function AttackPathsPage() {
                 <div className="qw-eyebrow">Cryptographic Security Graph {sim && <span className="text-quantum-300">(simulated)</span>}</div>
                 {activePath && <div className="max-w-[55%] truncate text-[11px] text-gray-500">{activePath.title}</div>}
               </div>
-              <Graph nodes={live?.nodes ?? []} edges={live?.edges ?? []} activeIds={activeIds} focus={focus} />
+              <div style={{ position: "relative" }}>
+                <Graph nodes={graphNodes} edges={graphEdges} activeIds={activeIds} focus={focus} selectedNodeId={selectedNode?.id ?? null} onNodeClick={setSelectedNode} />
+                {selectedNode && (
+                  <NodeDetail
+                    node={selectedNode}
+                    nodes={graphNodes}
+                    edges={graphEdges}
+                    paths={paths}
+                    onFocusPath={(id) => setSelected(id)}
+                    onClose={() => setSelectedNode(null)}
+                  />
+                )}
+              </div>
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-[10px] text-gray-500">
                 <span className="flex items-center gap-1"><span className="inline-block h-2.5 w-2.5 rounded-full border border-dashed border-[#5b8def]" /> observed in live traffic</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-0 w-4 border-t-2 border-[#5b8def]" /> observed flow</span>
                 <span className="flex items-center gap-1"><span className="inline-block h-0 w-4 border-t border-dashed border-gray-600" /> possible flow</span>
-                <span>node size &amp; ring number = risk</span>
+                <span>click a node for details · node size &amp; ring = risk</span>
               </div>
             </Card>
 
