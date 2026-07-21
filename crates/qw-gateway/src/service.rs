@@ -41,19 +41,26 @@ pub fn start_dispatcher() -> Result<()> {
         .map_err(|e| anyhow!("service dispatcher failed: {e}"))
 }
 
-/// SCM calls this on the service's own thread. Any error here is reported back
-/// as a service-specific exit code so `sc query` shows a real failure.
+/// SCM calls this on the service's own thread. Catch panics here: this function
+/// is invoked from a C callback, so a panic unwinding past it is undefined
+/// behaviour (in practice, a process abort → error 1067 with no diagnostics).
 fn service_main(arguments: Vec<OsString>) {
-    if let Err(e) = run_service(arguments) {
-        tracing::error!(error = %e, "service terminated with an error");
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_service(arguments))) {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::error!(error = %e, "service terminated with an error"),
+        Err(_) => tracing::error!("service panicked during startup"),
     }
 }
 
 fn run_service(arguments: Vec<OsString>) -> Result<()> {
-    // Config path is argument 1 (set in the service's binPath at install time).
-    let config_path = arguments
-        .get(1)
-        .map(|s| s.to_string_lossy().to_string())
+    // The config path is set in the service's binPath ("...exe service run
+    // <config>"), which the SCM passes as the PROCESS command line — visible via
+    // std::env::args(), NOT via this `arguments` parameter (that only carries the
+    // extra args from the StartService call, usually just the service name). So
+    // read argv[3] first, then fall back to any StartService arg, then a default.
+    let config_path = std::env::args()
+        .nth(3)
+        .or_else(|| arguments.get(1).map(|s| s.to_string_lossy().to_string()))
         .unwrap_or_else(default_config_path);
 
     // The SCM starts us in C:\Windows\System32. The config uses paths relative
@@ -163,18 +170,40 @@ fn default_config_path() -> String {
 }
 
 /// Services have no console: write JSON logs to a rolling file in the state dir.
+///
+/// Uses the fallible builder rather than `rolling::daily()`, which `.expect()`s
+/// on failure — a panic here would unwind across the SCM's C callback and abort
+/// the whole process (error 1067) before any log exists. If the file can't be
+/// opened we fall back to a discard writer so the service still runs.
 fn init_file_logging(dir: &Path) {
+    use tracing_appender::rolling::{RollingFileAppender, Rotation};
     use tracing_subscriber::EnvFilter;
-    let appender = tracing_appender::rolling::daily(dir, "quantawatch-service.log");
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info,qw_gateway=debug")),
-        )
-        .json()
-        .with_writer(appender)
-        .with_ansi(false)
-        .try_init();
+    let filter = || {
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("info,qw_gateway=debug"))
+    };
+    match RollingFileAppender::builder()
+        .rotation(Rotation::DAILY)
+        .filename_prefix("quantawatch-service")
+        .filename_suffix("log")
+        .build(dir)
+    {
+        Ok(appender) => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter())
+                .json()
+                .with_writer(appender)
+                .with_ansi(false)
+                .try_init();
+        }
+        Err(_) => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter())
+                .json()
+                .with_writer(std::io::sink)
+                .try_init();
+        }
+    }
 }
 
 /// Register the service. Requires an elevated process.
