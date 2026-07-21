@@ -47,9 +47,15 @@ pub fn spawn(state: AppState) {
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(interval));
             ticker.tick().await; // skip the immediate first tick
+            let rediscover = !s.config.assets.is_empty() || !s.config.connectors.is_empty();
             loop {
                 ticker.tick().await;
                 for tenant in all_tenants(&s) {
+                    // Re-run cloud/K8s discovery so newly-created KMS keys, certs,
+                    // and ingresses surface without a restart, then scan.
+                    if rediscover {
+                        crate::assets::sync_assets(&s, &tenant).await;
+                    }
                     run_full_scan(&s, &tenant, "scheduled").await;
                 }
                 // Reconcile external ticket/PR status after scanning.
