@@ -199,6 +199,31 @@ pub struct ExposedService {
     pub service: String,
     pub pqc_status: String,
     pub detail: String,
+    /// How this service was found: "network" (external sweep) or "host"
+    /// (authenticated deep inventory over SSH).
+    #[serde(default = "default_source")]
+    pub source: String,
+    /// True = reachable from the network (wildcard/external bind); false =
+    /// loopback-only, discoverable only by logging in. Network-swept services
+    /// are always exposed; deep-inventory adds the internal ones.
+    #[serde(default = "default_true")]
+    pub exposed: bool,
+}
+
+fn default_source() -> String {
+    "network".to_string()
+}
+fn default_true() -> bool {
+    true
+}
+
+/// A container discovered by the authenticated deep inventory (docker ps).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostContainerRow {
+    pub name: String,
+    pub image: String,
+    pub ports: String,
 }
 
 /// A connected system in the estate — a VM, a server (SSH/RDP), a network host.
@@ -217,6 +242,15 @@ pub struct TargetRow {
     pub environment: String,
     pub tags: Vec<String>,
     pub exposed_services: Vec<ExposedService>,
+    /// Containers found by authenticated deep inventory (empty until deep-scanned).
+    #[serde(default)]
+    pub containers: Vec<HostContainerRow>,
+    /// Host facts from deep inventory (hostname + kernel), if connected.
+    #[serde(default)]
+    pub host_info: Option<String>,
+    /// True once an authenticated SSH deep inventory has run against this host.
+    #[serde(default)]
+    pub deep_scanned: bool,
     /// Worst PQC posture across exposed services.
     pub pqc_status: String,
     pub last_scanned: Option<DateTime<Utc>>,

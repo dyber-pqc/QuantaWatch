@@ -51,6 +51,8 @@ tokio-rustls = "0.26"
 # x509-parser feature lets the CA reload its persisted cert to keep issuing.
 rcgen = { version = "0.13", features = ["x509-parser"] }
 time = "0.3"
+# Authenticated deep host inventory over SSH (pure-Rust client).
+russh = "0.45"
 hex.workspace = true
 sha2 = "0.10"
 hmac = "0.12"

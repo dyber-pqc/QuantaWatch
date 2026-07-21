@@ -632,6 +632,13 @@ export interface ExposedService {
   service: string;
   pqcStatus: string;
   detail: string;
+  source?: "network" | "host";
+  exposed?: boolean;
+}
+export interface HostContainer {
+  name: string;
+  image: string;
+  ports: string;
 }
 export interface Target {
   id: string;
@@ -642,6 +649,9 @@ export interface Target {
   environment: string;
   tags: string[];
   exposedServices: ExposedService[];
+  containers?: HostContainer[];
+  hostInfo?: string | null;
+  deepScanned?: boolean;
   pqcStatus: string;
   lastScanned?: string;
   createdAt: string;

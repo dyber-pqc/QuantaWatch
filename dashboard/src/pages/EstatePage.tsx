@@ -8,13 +8,20 @@ import {
   Text,
   Button,
   TextInput,
+  PasswordInput,
+  Textarea,
+  SegmentedControl,
+  Modal,
+  NumberInput,
+  Divider,
+  Alert,
   Select,
   ScrollArea,
   ActionIcon,
   Tooltip,
 } from "@mantine/core";
-import { fetchTargets, registerTarget, scanTarget, deleteTarget } from "../api/client";
-import type { Target } from "../api/types";
+import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget } from "../api/client";
+import type { Target, ExposedService } from "../api/types";
 import { PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 
 const PQC_COLOR: Record<string, string> = {
@@ -37,6 +44,7 @@ function PqcBadge({ status, size = "sm" }: { status: string; size?: string }) {
 export default function EstatePage() {
   const qc = useQueryClient();
   const [selected, setSelected] = useState<string | null>(null);
+  const [deepFor, setDeepFor] = useState<Target | null>(null);
 
   const { data: board, isLoading } = useQuery({ queryKey: ["targets"], queryFn: fetchTargets });
   const targets = board?.targets ?? [];
@@ -47,18 +55,22 @@ export default function EstatePage() {
   const scan = useMutation({ mutationFn: scanTarget, onSuccess: invalidate });
   const del = useMutation({ mutationFn: deleteTarget, onSuccess: invalidate });
 
+  const containersTotal = targets.reduce((n, t) => n + (t.containers?.length ?? 0), 0);
+
   return (
     <div className="space-y-5">
       <PageHeader
         title="Estate"
-        subtitle="Register any connected system — a VM, a server over SSH/RDP, a network host — then sweep it for exposed services and their post-quantum posture"
+        subtitle="Register any connected system — a VM, a server over SSH/RDP, a network host — sweep it from the outside, then connect over SSH to inventory what runs inside"
       />
+
+      <DeepScanModal target={deepFor} onClose={() => setDeepFor(null)} onDone={invalidate} />
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Stat label="Targets" value={board?.total ?? 0} accent="brand" />
-        <Stat label="Exposed services" value={board?.exposedServices ?? 0} accent="violet" />
+        <Stat label="Services found" value={board?.exposedServices ?? 0} accent="violet" />
         <Stat label="Quantum-vulnerable" value={board?.quantumVulnerable ?? 0} accent={(board?.quantumVulnerable ?? 0) > 0 ? "rose" : "emerald"} />
-        <Stat label="PQC-ready" value={targets.filter((t) => t.pqcStatus === "pqc_ready" || t.pqcStatus === "hybrid").length} accent="emerald" />
+        <Stat label="Containers" value={containersTotal} accent="amber" />
       </div>
 
       <AddTarget onAdded={invalidate} />
@@ -85,7 +97,7 @@ export default function EstatePage() {
             ))}
           </Stack>
           <Box style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-6)" }} p="md">
-            {active ? <Detail t={active} scanning={scan.isPending} onScan={() => scan.mutate(active.id)} /> : <Text c="dimmed" size="sm">Select a target.</Text>}
+            {active ? <Detail t={active} scanning={scan.isPending} onScan={() => scan.mutate(active.id)} onDeepScan={() => setDeepFor(active)} /> : <Text c="dimmed" size="sm">Select a target.</Text>}
           </Box>
         </div>
       )}
@@ -129,14 +141,36 @@ function TargetRow({ t, active, scanning, onSelect, onScan, onDelete }: {
       <Group gap={6} mt={8} wrap="wrap">
         <Badge color="gray" radius={2} size="xs" variant="outline">{t.kind}</Badge>
         <PqcBadge status={t.pqcStatus} size="xs" />
-        {t.exposedServices.length > 0 && <Badge color="violet" radius={2} size="xs" variant="light">{t.exposedServices.length} exposed</Badge>}
+        {t.exposedServices.length > 0 && <Badge color="violet" radius={2} size="xs" variant="light">{t.exposedServices.length} services</Badge>}
+        {(t.containers?.length ?? 0) > 0 && <Badge color="cyan" radius={2} size="xs" variant="light">{t.containers!.length} containers</Badge>}
+        {t.deepScanned && <Badge color="teal" radius={2} size="xs" variant="light">deep-scanned</Badge>}
         {!t.lastScanned && <Badge color="gray" radius={2} size="xs" variant="light">not scanned</Badge>}
       </Group>
     </Box>
   );
 }
 
-function Detail({ t, scanning, onScan }: { t: Target; scanning: boolean; onScan: () => void }) {
+function ServiceCard({ s }: { s: ExposedService }) {
+  return (
+    <Box px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
+      <Group justify="space-between" gap={8} wrap="nowrap">
+        <Group gap={8} wrap="nowrap">
+          <Text ff="monospace" size="13px" fw={600} c="gray.2">:{s.port}</Text>
+          <Text ff="monospace" size="12px" c="gray.4">{s.service}</Text>
+          {s.source === "host" && <Badge color="teal" radius={2} size="xs" variant="outline">host</Badge>}
+        </Group>
+        <PqcBadge status={s.pqcStatus} size="xs" />
+      </Group>
+      <Text size="11px" c="dimmed" mt={4} style={{ lineHeight: 1.5 }}>{s.detail}</Text>
+    </Box>
+  );
+}
+
+function Detail({ t, scanning, onScan, onDeepScan }: { t: Target; scanning: boolean; onScan: () => void; onDeepScan: () => void }) {
+  const exposed = t.exposedServices.filter((s) => s.exposed !== false);
+  const internal = t.exposedServices.filter((s) => s.exposed === false);
+  const containers = t.containers ?? [];
+
   return (
     <Stack gap="sm">
       <Group justify="space-between" align="flex-start" wrap="wrap">
@@ -150,32 +184,108 @@ function Detail({ t, scanning, onScan }: { t: Target; scanning: boolean; onScan:
             <Text size="12px" c="dimmed">{t.kind} · {t.environment}</Text>
             {t.reachability.length > 0 && <Text size="11px" c="dark.2">via {t.reachability.join(", ")}</Text>}
           </Group>
+          {t.hostInfo && <Text ff="monospace" size="11px" c="teal.4" mt={4}>{t.hostInfo}</Text>}
         </Box>
-        <Button size="xs" radius={2} color="brand" loading={scanning} onClick={onScan}>Scan now</Button>
+        <Group gap={6}>
+          <Tooltip label="External network sweep (no credentials)" withArrow>
+            <Button size="xs" radius={2} variant="default" loading={scanning} onClick={onScan}>Sweep</Button>
+          </Tooltip>
+          <Tooltip label="Connect over SSH and inventory from the inside" withArrow>
+            <Button size="xs" radius={2} color="teal" onClick={onDeepScan}>Connect & inventory</Button>
+          </Tooltip>
+        </Group>
       </Group>
 
-      {t.exposedServices.length === 0 ? (
-        <Box py="lg"><EmptyState title={t.lastScanned ? "No crypto-relevant services exposed" : "Not scanned yet"}>{t.lastScanned ? "The sweep found no open crypto ports." : "Run a scan to inventory this host."}</EmptyState></Box>
+      {t.exposedServices.length === 0 && containers.length === 0 ? (
+        <Box py="lg"><EmptyState title={t.lastScanned ? "Nothing found" : "Not scanned yet"}>{t.lastScanned ? "The sweep found no open crypto ports. Connect over SSH to inventory internal services." : "Sweep from the outside, or connect over SSH to inventory from the inside."}</EmptyState></Box>
       ) : (
-        <ScrollArea.Autosize mah="calc(100vh - 380px)">
-          <Stack gap={6}>
-            {t.exposedServices.map((s) => (
-              <Box key={s.port} px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
-                <Group justify="space-between" gap={8} wrap="nowrap">
-                  <Group gap={8} wrap="nowrap">
-                    <Text ff="monospace" size="13px" fw={600} c="gray.2">:{s.port}</Text>
-                    <Text ff="monospace" size="12px" c="gray.4">{s.service}</Text>
-                  </Group>
-                  <PqcBadge status={s.pqcStatus} size="xs" />
-                </Group>
-                <Text size="11px" c="dimmed" mt={4} style={{ lineHeight: 1.5 }}>{s.detail}</Text>
-              </Box>
-            ))}
+        <ScrollArea.Autosize mah="calc(100vh - 360px)">
+          <Stack gap={10}>
+            {exposed.length > 0 && (
+              <Stack gap={6}>
+                <Text size="11px" fw={700} tt="uppercase" c="dark.2" style={{ letterSpacing: "0.08em" }}>Exposed to the network ({exposed.length})</Text>
+                {exposed.map((s) => <ServiceCard key={`e-${s.port}`} s={s} />)}
+              </Stack>
+            )}
+            {internal.length > 0 && (
+              <Stack gap={6}>
+                <Text size="11px" fw={700} tt="uppercase" c="dark.2" style={{ letterSpacing: "0.08em" }}>Internal — loopback only ({internal.length})</Text>
+                {internal.map((s) => <ServiceCard key={`i-${s.port}`} s={s} />)}
+              </Stack>
+            )}
+            {containers.length > 0 && (
+              <Stack gap={6}>
+                <Text size="11px" fw={700} tt="uppercase" c="dark.2" style={{ letterSpacing: "0.08em" }}>Containers ({containers.length})</Text>
+                {containers.map((c) => (
+                  <Box key={c.name} px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
+                    <Group justify="space-between" gap={8} wrap="nowrap">
+                      <Text size="12px" fw={600} c="gray.2" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.name}</Text>
+                      <Text ff="monospace" size="11px" c="cyan.4" style={{ flexShrink: 0 }}>{c.image}</Text>
+                    </Group>
+                    {c.ports && <Text ff="monospace" size="10px" c="dimmed" mt={2}>{c.ports}</Text>}
+                  </Box>
+                ))}
+              </Stack>
+            )}
           </Stack>
         </ScrollArea.Autosize>
       )}
-      {t.lastScanned && <Text ff="monospace" size="10px" c="dark.3">last swept {new Date(t.lastScanned).toLocaleString()}</Text>}
+      {t.lastScanned && <Text ff="monospace" size="10px" c="dark.3">last scanned {new Date(t.lastScanned).toLocaleString()}</Text>}
     </Stack>
+  );
+}
+
+function DeepScanModal({ target, onClose, onDone }: { target: Target | null; onClose: () => void; onDone: () => void }) {
+  const [authMode, setAuthMode] = useState<string>("password");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const [passphrase, setPassphrase] = useState("");
+  const [port, setPort] = useState<number>(22);
+
+  const run = useMutation({
+    mutationFn: () =>
+      deepScanTarget(target!.id, {
+        port,
+        username,
+        ...(authMode === "password" ? { password } : { privateKey, passphrase: passphrase || undefined }),
+      }),
+    onSuccess: () => {
+      onDone();
+      onClose();
+      setPassword(""); setPrivateKey(""); setPassphrase("");
+    },
+  });
+
+  const canRun = !!username.trim() && (authMode === "password" ? !!password : !!privateKey.trim());
+
+  return (
+    <Modal opened={!!target} onClose={onClose} title={`Connect & inventory — ${target?.name ?? ""}`} radius={2} size="lg" centered>
+      <Stack gap="sm">
+        <Alert color="teal" radius={2} variant="light" p="xs">
+          <Text size="11px">QuantaWatch logs in over SSH to <b>{target?.host}</b> and reads listening sockets, Docker containers, and host facts. Credentials are used for this one connection and are <b>never stored</b>.</Text>
+        </Alert>
+        <Group gap="sm" grow>
+          <TextInput size="xs" radius={2} label="Username" placeholder="root" value={username} onChange={(e) => setUsername(e.currentTarget.value)} />
+          <NumberInput size="xs" radius={2} label="SSH port" value={port} onChange={(v) => setPort(typeof v === "number" ? v : 22)} min={1} max={65535} />
+        </Group>
+        <SegmentedControl size="xs" radius={2} value={authMode} onChange={setAuthMode} data={[{ label: "Password", value: "password" }, { label: "Private key", value: "key" }]} />
+        {authMode === "password" ? (
+          <PasswordInput size="xs" radius={2} label="Password" value={password} onChange={(e) => setPassword(e.currentTarget.value)} />
+        ) : (
+          <Stack gap="xs">
+            <Textarea size="xs" radius={2} label="OpenSSH private key (PEM)" autosize minRows={4} maxRows={8} styles={{ input: { fontFamily: "monospace", fontSize: 11 } }} placeholder={"-----BEGIN OPENSSH PRIVATE KEY-----"} value={privateKey} onChange={(e) => setPrivateKey(e.currentTarget.value)} />
+            <PasswordInput size="xs" radius={2} label="Key passphrase (optional)" value={passphrase} onChange={(e) => setPassphrase(e.currentTarget.value)} />
+          </Stack>
+        )}
+        {run.isError && <Alert color="red" radius={2} variant="light" p="xs"><Text size="11px">{(run.error as Error)?.message ?? "Inventory failed."}</Text></Alert>}
+        <Divider my={2} />
+        <Group justify="flex-end" gap="sm">
+          <Button size="xs" radius={2} variant="default" onClick={onClose}>Cancel</Button>
+          <Button size="xs" radius={2} color="teal" loading={run.isPending} disabled={!canRun} onClick={() => run.mutate()}>Connect & inventory</Button>
+        </Group>
+      </Stack>
+    </Modal>
   );
 }
 

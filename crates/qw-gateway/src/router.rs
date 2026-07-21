@@ -338,6 +338,10 @@ fn admin_routes() -> Router<AppState> {
             "/api/targets/{id}/scan",
             post(crate::admin::targets_api::scan_target),
         )
+        .route(
+            "/api/targets/{id}/deep-scan",
+            post(crate::admin::targets_api::deep_scan),
+        )
         .route("/api/pki/ca", get(crate::admin::pki_api::get_ca))
         .route("/api/pki/issue", post(crate::admin::pki_api::issue))
         .route("/api/pki/verify", post(crate::admin::pki_api::verify))

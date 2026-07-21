@@ -533,6 +533,24 @@ export async function scanTarget(id: string): Promise<Target> {
   return fetchJSON<Target>(`/api/targets/${encodeURIComponent(id)}/scan`, { method: "POST" });
 }
 
+export interface DeepScanCreds {
+  port?: number;
+  username: string;
+  password?: string;
+  privateKey?: string;
+  passphrase?: string;
+}
+export async function deepScanTarget(
+  id: string,
+  creds: DeepScanCreds,
+): Promise<{ target: Target; servicesFound: number }> {
+  return fetchJSON(`/api/targets/${encodeURIComponent(id)}/deep-scan`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(creds),
+  });
+}
+
 export async function deleteTarget(id: string): Promise<void> {
   await fetchJSON(`/api/targets/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
