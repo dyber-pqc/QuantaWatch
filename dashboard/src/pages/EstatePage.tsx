@@ -129,6 +129,7 @@ export default function EstatePage() {
                 scanning={scan.isPending && scan.variables === t.id}
                 onSelect={() => setSelected(t.id)}
                 onScan={() => scan.mutate(t.id)}
+                onDeepScan={() => setDeepFor(t)}
                 onDelete={() => del.mutate(t.id)}
                 onContextMenu={(e) => openMenu(e, menuItemsFor(t))}
               />
@@ -143,9 +144,9 @@ export default function EstatePage() {
   );
 }
 
-function TargetRow({ t, active, scanning, onSelect, onScan, onDelete, onContextMenu }: {
+function TargetRow({ t, active, scanning, onSelect, onScan, onDeepScan, onDelete, onContextMenu }: {
   t: Target; active: boolean; scanning: boolean;
-  onSelect: () => void; onScan: () => void; onDelete: () => void;
+  onSelect: () => void; onScan: () => void; onDeepScan: () => void; onDelete: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
   return (
@@ -171,6 +172,11 @@ function TargetRow({ t, active, scanning, onSelect, onScan, onDelete, onContextM
           <Tooltip label="Sweep for exposed services" withArrow>
             <ActionIcon size="sm" radius={2} variant="light" color="brand" loading={scanning} onClick={(e) => { e.stopPropagation(); onScan(); }}>
               <svg width={13} height={13} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" /></svg>
+            </ActionIcon>
+          </Tooltip>
+          <Tooltip label="Connect over SSH and inventory from the inside" withArrow>
+            <ActionIcon size="sm" radius={2} variant="light" color="teal" onClick={(e) => { e.stopPropagation(); onDeepScan(); }}>
+              <svg width={13} height={13} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9.75 6h13.5A2.25 2.25 0 0 0 21 15.75V6.75A2.25 2.25 0 0 0 18.75 4.5H5.25A2.25 2.25 0 0 0 3 6.75v9A2.25 2.25 0 0 0 5.25 18Z" /></svg>
             </ActionIcon>
           </Tooltip>
           <ActionIcon size="sm" radius={2} variant="subtle" color="gray" onClick={(e) => { e.stopPropagation(); onDelete(); }}>
