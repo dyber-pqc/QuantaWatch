@@ -68,6 +68,8 @@ async fn auth_layer(
         || path.ends_with("/api/auth/config")
         || path.contains("/api/auth/oidc/")
         || path.contains("/api/webhooks/")
+        // Host-agent report: authenticated by the enrollment token in-handler.
+        || path.ends_with("/api/endpoints/report")
     {
         return next.run(req).await;
     }
@@ -324,6 +326,14 @@ fn admin_routes() -> Router<AppState> {
         .route(
             "/api/connectors",
             get(crate::admin::connectors_api::get_connectors),
+        )
+        // Host-agent endpoints (firmware / boot-chain crypto inventory).
+        .route("/api/endpoints", get(crate::admin::endpoints_api::list_endpoints))
+        .route("/api/endpoints/enroll", get(crate::admin::endpoints_api::enroll_info))
+        .route("/api/endpoints/report", post(crate::admin::endpoints_api::report))
+        .route(
+            "/api/endpoints/{id}",
+            axum::routing::delete(crate::admin::endpoints_api::delete_endpoint),
         )
         // UI-managed connections (external sources with stored secrets).
         .route(

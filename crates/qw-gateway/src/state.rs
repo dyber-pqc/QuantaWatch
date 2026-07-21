@@ -38,6 +38,9 @@ pub struct AppState {
     pub overlay: Arc<crate::overlay::OverlayState>,
     /// Internal PQC certificate authority (None when pki.enabled = false).
     pub ca: Option<Arc<crate::pki::CertAuthority>>,
+    /// Shared secret host agents present (X-QW-Agent-Token) to post endpoint
+    /// reports. Persisted under key_dir so it is stable across restarts.
+    pub agent_enroll_token: Arc<String>,
 }
 
 /// Public session info stored in the DashMap (without secret keys).
@@ -215,8 +218,12 @@ impl AppState {
             }
         }
 
+        // Host-agent enrollment token: stable secret persisted under key_dir.
+        let agent_enroll_token = Arc::new(load_or_create_agent_token(&key_dir));
+
         Ok(Self {
             gateway_identity,
+            agent_enroll_token,
             policy_engine: Arc::new(RwLock::new(policy_engine)),
             security_monitor,
             audit_logger,
@@ -238,6 +245,26 @@ impl AppState {
             ca,
         })
     }
+}
+
+/// Load the host-agent enrollment token from key_dir, generating and persisting
+/// one on first run. A stable shared secret agents present to post reports.
+fn load_or_create_agent_token(key_dir: &std::path::Path) -> String {
+    let path = key_dir.join("agent_enrollment.token");
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        let t = s.trim().to_string();
+        if !t.is_empty() {
+            return t;
+        }
+    }
+    let token = format!(
+        "qwa_{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    );
+    let _ = std::fs::create_dir_all(key_dir);
+    let _ = std::fs::write(&path, &token);
+    token
 }
 
 /// Expand `${VAR}` references in a config string from the environment. Lets a

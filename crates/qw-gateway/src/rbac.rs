@@ -27,6 +27,7 @@ pub const RBAC_RESOURCES: &[&str] = &[
     "pki",
     "connectors",
     "connections",
+    "endpoints",
     "targets",
     "slos",
     "alerts",

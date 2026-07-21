@@ -233,6 +233,48 @@ pub struct HostContainerRow {
     pub ports: String,
 }
 
+/// One classified crypto component reported by a host agent (a boot-chain,
+/// firmware, or endpoint crypto element).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointComponent {
+    /// secure_boot | tpm | measured_boot | disk_encryption | ssh_host_key |
+    /// crypto_library | certificate
+    pub category: String,
+    pub name: String,
+    pub detail: String,
+    #[serde(default)]
+    pub algorithm: Option<String>,
+    pub pqc_status: String,
+    /// info | low | medium | high | critical
+    pub severity: String,
+}
+
+/// A host reported by an installed QuantaWatch agent — including the firmware /
+/// boot-chain crypto (TPM, Secure Boot, measured boot, disk encryption) that no
+/// network or SSH scan can see.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndpointRow {
+    pub id: String,
+    pub hostname: String,
+    pub os: String,
+    /// linux | windows | macos | other
+    pub os_kind: String,
+    #[serde(default)]
+    pub agent_version: Option<String>,
+    pub enrolled_at: DateTime<Utc>,
+    pub last_report: DateTime<Utc>,
+    /// Worst PQC posture across the endpoint's components.
+    pub pqc_status: String,
+    pub findings_count: u32,
+    /// Classified components for the UI.
+    pub components: Vec<EndpointComponent>,
+    /// The raw inventory the agent posted (for drill-down).
+    #[serde(default)]
+    pub inventory: serde_json::Value,
+}
+
 /// A PQC-overlay route protected at runtime (via one-click "protect"),
 /// persisted so it can be re-bound after a gateway restart.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -519,6 +561,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS overlay_routes (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+    CREATE TABLE IF NOT EXISTS endpoints (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -780,6 +823,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS overlay_routes (
                 id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
             );
+            CREATE TABLE IF NOT EXISTS endpoints (
+                id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
+            );
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
             );
@@ -829,6 +875,7 @@ impl Store {
             CREATE TABLE targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE overlay_routes (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
+            CREATE TABLE endpoints (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
@@ -1414,6 +1461,44 @@ impl Store {
                 self.delete_overlay_route(tenant, &r.id);
             }
         }
+    }
+
+    // ---- Host-agent endpoints (firmware / boot-chain crypto inventory) ----
+
+    pub fn upsert_endpoint(&self, tenant: &str, ep: &EndpointRow) {
+        let json = serde_json::to_string(ep).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO endpoints (id, tenant, data) VALUES (?1, ?2, ?3)",
+            "INSERT INTO endpoints (id, tenant, data) VALUES ($1, $2, $3) ON CONFLICT (tenant, id) DO UPDATE SET data = EXCLUDED.data",
+            &[ep.id.as_str(), tenant, json.as_str()],
+        );
+    }
+
+    pub fn list_endpoints(&self, tenant: &str) -> Vec<EndpointRow> {
+        self.list_de(
+            "SELECT data FROM endpoints WHERE tenant = ?1 ORDER BY id LIMIT 10000",
+            &[tenant],
+        )
+    }
+
+    pub fn get_endpoint(&self, tenant: &str, id: &str) -> Option<EndpointRow> {
+        self.one_de(
+            "SELECT data FROM endpoints WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        )
+    }
+
+    /// Find an endpoint by hostname (so repeat reports from the same host update
+    /// in place rather than duplicating).
+    pub fn find_endpoint_by_hostname(&self, tenant: &str, hostname: &str) -> Option<EndpointRow> {
+        self.list_endpoints(tenant).into_iter().find(|e| e.hostname == hostname)
+    }
+
+    pub fn delete_endpoint(&self, tenant: &str, id: &str) {
+        self.exec(
+            "DELETE FROM endpoints WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        );
     }
 
     // ---- Graph snapshots (drift/timeline) ----
