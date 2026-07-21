@@ -178,7 +178,13 @@ fn init_file_logging(dir: &Path) {
 }
 
 /// Register the service. Requires an elevated process.
-pub fn install(config_path: &str) -> Result<()> {
+///
+/// `account` defaults to the per-service **virtual account**
+/// `NT SERVICE\QuantaWatch`: Windows creates it automatically, it has no
+/// password to manage or leak, and it is far less privileged than LocalSystem —
+/// it can only reach what it has explicitly been granted. Pass "LocalSystem"
+/// (or a domain account) to override.
+pub fn install(config_path: &str, account: Option<&str>) -> Result<()> {
     let manager = ServiceManager::local_computer(
         None::<&str>,
         ServiceManagerAccess::CONNECT | ServiceManagerAccess::CREATE_SERVICE,
@@ -191,6 +197,16 @@ pub fn install(config_path: &str) -> Result<()> {
         .map_err(|e| anyhow!("config '{config_path}' not found: {e}"))?;
     let config = strip_unc(&config);
 
+    // Virtual service account unless overridden. "LocalSystem" maps to None,
+    // which is how the SCM spells the built-in account.
+    let default_account = format!("NT SERVICE\\{SERVICE_NAME}");
+    let account = account.unwrap_or(&default_account).to_string();
+    let account_name = if account.eq_ignore_ascii_case("localsystem") {
+        None
+    } else {
+        Some(OsString::from(&account))
+    };
+
     let info = ServiceInfo {
         name: OsString::from(SERVICE_NAME),
         display_name: OsString::from(SERVICE_DISPLAY_NAME),
@@ -201,7 +217,8 @@ pub fn install(config_path: &str) -> Result<()> {
         // argv[0] is the exe; these follow it -> arguments[1] = config path.
         launch_arguments: vec![OsString::from("service"), OsString::from("run"), OsString::from(&config)],
         dependencies: vec![],
-        account_name: None, // LocalSystem
+        // A virtual account has no password; Windows manages it.
+        account_name,
         account_password: None,
     };
 
@@ -220,6 +237,7 @@ pub fn install(config_path: &str) -> Result<()> {
         .unwrap_or_default();
     println!("Installed service '{SERVICE_NAME}' ({SERVICE_DISPLAY_NAME})");
     println!("  exe    : {}", std::env::current_exe()?.display());
+    println!("  account: {account}");
     println!("  config : {config}");
     println!("  state  : {state_dir}  (data/, keys/, audit/)");
     println!("  logs   : {state_dir}\\quantawatch-service.log");
