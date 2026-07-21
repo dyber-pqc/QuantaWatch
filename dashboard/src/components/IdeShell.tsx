@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Menu, ScrollArea, Tooltip } from "@mantine/core";
 import { navSections } from "./Sidebar";
+import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import {
   fetchAuditEntries, fetchThreats, fetchMe, fetchPosture, fetchTenants, getTenant, setTenant, logout,
   syncRemediations, verifyAuditChain, triggerScan, fetchFrameworks, fetchFramework, openAuthed,
@@ -79,12 +80,34 @@ export default function IdeShell({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const { openMenu: openTabMenu, menu: tabMenu } = useContextMenu();
+
   const closeTab = (p: string) => setOpenPaths((prev) => {
     const idx = prev.indexOf(p);
     const next = prev.filter((x) => x !== p);
     if (p === pathname) navigate(next[idx] ?? next[idx - 1] ?? next[0] ?? "/");
     return next.length ? next : ["/"];
   });
+  const closeOthers = (p: string) => { setOpenPaths([p]); if (pathname !== p) navigate(p); };
+  const closeToRight = (p: string) => setOpenPaths((prev) => {
+    const i = prev.indexOf(p);
+    if (i < 0) return prev;
+    const next = prev.slice(0, i + 1);
+    if (!next.includes(pathname)) navigate(p);
+    return next;
+  });
+  const closeAll = () => { setOpenPaths(["/"]); navigate("/"); };
+
+  const tabMenuItems = (p: string): ContextMenuItem[] => {
+    const i = openPaths.indexOf(p);
+    return [
+      { label: "Close", onClick: () => closeTab(p) },
+      { label: "Close Others", disabled: openPaths.length <= 1, onClick: () => closeOthers(p) },
+      { label: "Close to the Right", disabled: i < 0 || i >= openPaths.length - 1, onClick: () => closeToRight(p) },
+      { label: "Close All", onClick: closeAll },
+      { label: "Copy Path", divider: true, onClick: () => navigator.clipboard?.writeText(p) },
+    ];
+  };
 
   const dragPath = useRef<string | null>(null);
   const reorderTabs = (from: string, to: string) => {
@@ -184,11 +207,13 @@ export default function IdeShell({ children }: { children: ReactNode }) {
 
         {/* Editor column */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+          {tabMenu}
           <div style={{ display: "flex", background: C.chrome, borderBottom: `1px solid ${C.border}`, overflowX: "auto", flexShrink: 0 }}>
             {openPaths.map((p) => {
               const active = p === pathname;
               return (
                 <div key={p} onClick={() => navigate(p)} title={p}
+                  onContextMenu={(e) => openTabMenu(e, tabMenuItems(p))}
                   draggable
                   onDragStart={(e) => { dragPath.current = p; e.dataTransfer.effectAllowed = "move"; }}
                   onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }}
