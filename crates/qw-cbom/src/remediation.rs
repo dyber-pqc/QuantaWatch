@@ -87,6 +87,11 @@ pub struct MigrationPlan {
 
 /// True if this finding warrants a migration (not already PQC / advisory-only).
 fn needs_migration(f: &FindingRecord) -> bool {
+    // Suppressed findings (false positive / accepted risk) leave the work list
+    // but stay in the store for the audit trail.
+    if matches!(f.status, qw_scanner::FindingStatus::Suppressed) {
+        return false;
+    }
     if matches!(f.pqc_status, PqcStatus::PqcReady | PqcStatus::Hybrid) {
         return false;
     }
@@ -457,6 +462,10 @@ mod tests {
             location: location.into(),
             remediation: None,
             created_at: Utc::now(),
+            confidence: Default::default(),
+            evidence: Vec::new(),
+            status: Default::default(),
+            note: None,
         }
     }
 

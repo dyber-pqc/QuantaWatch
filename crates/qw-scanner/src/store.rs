@@ -116,6 +116,10 @@ impl ScanStore {
                 location: finding.asset.location.path.clone(),
                 remediation: finding.remediation.clone(),
                 created_at: chrono::Utc::now(),
+                confidence: crate::confidence_of(finding),
+                evidence: crate::evidence_of(finding, &result.scanner_id),
+                status: Default::default(),
+                note: None,
             };
             let _ = self.tx.send(StoreCommand::RecordFinding(fr)).await;
         }

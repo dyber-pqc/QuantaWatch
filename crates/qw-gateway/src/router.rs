@@ -322,6 +322,10 @@ fn admin_routes() -> Router<AppState> {
             post(crate::admin::remediation::verify_finding),
         )
         .route(
+            "/api/findings/{id}/status",
+            post(crate::admin::remediation::set_finding_status),
+        )
+        .route(
             "/api/remediations/plans",
             get(crate::admin::remediation::list_migration_plans),
         )

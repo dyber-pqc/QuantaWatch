@@ -404,6 +404,10 @@ mod tests {
             location: "loc".into(),
             remediation: None,
             created_at: Utc::now(),
+            confidence: Default::default(),
+            evidence: Vec::new(),
+            status: Default::default(),
+            note: None,
         }
     }
 

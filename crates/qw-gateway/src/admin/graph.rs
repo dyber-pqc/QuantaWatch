@@ -217,7 +217,14 @@ pub fn build_graph(
         .collect();
     let observed_providers: BTreeSet<String> = flows.iter().map(|f| f.provider.clone()).collect();
 
-    let findings = state.store.all_findings(tenant);
+    // Suppressed findings (false positive / accepted risk) don't contribute
+    // attack paths or graph nodes, but remain in the store for the audit trail.
+    let findings: Vec<_> = state
+        .store
+        .all_findings(tenant)
+        .into_iter()
+        .filter(|f| !matches!(f.status, qw_scanner::FindingStatus::Suppressed))
+        .collect();
 
     // Cert status per host (worst) from findings.
     let mut cert_by_host: BTreeMap<String, PqcStatus> = BTreeMap::new();

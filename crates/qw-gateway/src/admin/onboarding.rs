@@ -86,6 +86,10 @@ fn record_from_finding(f: &Finding) -> FindingRecord {
         location: f.asset.location.path.clone(),
         remediation: f.remediation.clone(),
         created_at: Utc::now(),
+        confidence: qw_scanner::confidence_of(f),
+        evidence: qw_scanner::evidence_of(f, "onboarding"),
+        status: Default::default(),
+        note: None,
     }
 }
 

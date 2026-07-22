@@ -18,7 +18,9 @@ use qw_audit::{AuditBackend, AuditCheckpoint, AuditEntry, WriterTip};
 use qw_cbom::PostureSnapshot;
 use qw_crypto::sha3_256_hex;
 use qw_integrations::RemediationTicket;
-use qw_scanner::{FindingRecord, ScanRecord, ScanResult, ScanTarget};
+use qw_scanner::{
+    confidence_of, evidence_of, FindingRecord, FindingStatus, ScanRecord, ScanResult, ScanTarget,
+};
 
 pub const DEFAULT_TENANT: &str = "default";
 
@@ -926,6 +928,12 @@ impl Store {
             // changed posture updates the same row.
             let stable_id =
                 stable_finding_id(&finding.asset.location.path, &finding.title);
+            // Preserve triage (acknowledged/suppressed + note) across re-scans —
+            // an upsert would otherwise reset a suppressed finding to Open.
+            let (status, note) = self
+                .get_finding(tenant, &stable_id)
+                .map(|p| (p.status, p.note))
+                .unwrap_or((FindingStatus::Open, None));
             let fr = FindingRecord {
                 id: stable_id.clone(),
                 scan_id: scan_id.clone(),
@@ -939,6 +947,10 @@ impl Store {
                 location: finding.asset.location.path.clone(),
                 remediation: finding.remediation.clone(),
                 created_at: Utc::now(),
+                confidence: confidence_of(finding),
+                evidence: evidence_of(finding, &result.scanner_id),
+                status,
+                note,
             };
             let fjson = serde_json::to_string(&fr).unwrap_or_default();
             let created = fr.created_at.to_rfc3339();
@@ -995,6 +1007,22 @@ impl Store {
             "UPDATE findings SET data = ?1 WHERE tenant = ?2 AND id = ?3",
             &[fjson.as_str(), tenant, record.id.as_str()],
         );
+    }
+
+    /// Set a finding's triage status (open / acknowledged / suppressed) + note.
+    /// Returns the updated record, or None if the finding doesn't exist.
+    pub fn set_finding_status(
+        &self,
+        tenant: &str,
+        id: &str,
+        status: FindingStatus,
+        note: Option<String>,
+    ) -> Option<FindingRecord> {
+        let mut rec = self.get_finding(tenant, id)?;
+        rec.status = status;
+        rec.note = note;
+        self.update_finding(tenant, &rec);
+        Some(rec)
     }
 
     /// One-time migration: collapse the historical append-only duplicates (the

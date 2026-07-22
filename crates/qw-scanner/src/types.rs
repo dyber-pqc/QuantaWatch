@@ -273,6 +273,37 @@ pub struct ScanRecord {
     pub content_hash: String,
 }
 
+/// How much we trust a finding. High = directly measured (a handshake
+/// completed, a cert parsed); Medium = a static/heuristic match (a dependency
+/// or code pattern); Low = a port answered but the crypto wasn't characterized.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    High,
+    Medium,
+    Low,
+}
+impl Default for Confidence {
+    fn default() -> Self {
+        Confidence::Medium
+    }
+}
+
+/// Triage state. Suppressed drops out of the work list (false positive /
+/// won't-fix) but is retained for the audit trail.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum FindingStatus {
+    Open,
+    Acknowledged,
+    Suppressed,
+}
+impl Default for FindingStatus {
+    fn default() -> Self {
+        FindingStatus::Open
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FindingRecord {
@@ -288,6 +319,65 @@ pub struct FindingRecord {
     pub location: String,
     pub remediation: Option<String>,
     pub created_at: DateTime<Utc>,
+    // Confidence + evidence + triage. `#[serde(default)]` keeps older stored
+    // findings (written before these existed) deserializable.
+    #[serde(default)]
+    pub confidence: Confidence,
+    #[serde(default)]
+    pub evidence: Vec<String>,
+    #[serde(default)]
+    pub status: FindingStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// Derive a confidence level from what the probe actually observed.
+pub fn confidence_of(f: &Finding) -> Confidence {
+    // A port that answered but whose crypto we couldn't read is a "characterize",
+    // not a confirmed weakness — low confidence regardless of who found it.
+    if matches!(f.pqc_status, PqcStatus::Unknown) {
+        return Confidence::Low;
+    }
+    match f.asset.asset_type {
+        // Live measurements: a handshake completed, a certificate parsed, an
+        // at-rest cipher read from the store's config.
+        CryptoAssetType::TlsConnection
+        | CryptoAssetType::Certificate
+        | CryptoAssetType::ProtocolEndpoint
+        | CryptoAssetType::DataStore => Confidence::High,
+        // Static / heuristic matches (dependency manifests, code patterns): real,
+        // but likelier to false-positive than a live measurement.
+        CryptoAssetType::CryptoLibrary => Confidence::Medium,
+        _ => Confidence::Medium,
+    }
+}
+
+/// Build a human-readable evidence trail: what was observed, by which probe.
+pub fn evidence_of(f: &Finding, scanner_id: &str) -> Vec<String> {
+    let mut ev = Vec::new();
+    ev.push(format!(
+        "Probe: {} scanner",
+        if scanner_id.is_empty() { &f.asset.discovered_by } else { scanner_id }
+    ));
+    ev.push(format!("Observed: {}", f.asset.discovered_at.to_rfc3339()));
+    ev.push(format!("Location: {}", f.asset.location.path));
+    if let Some(a) = &f.asset.algorithm {
+        ev.push(format!("Algorithm: {a}"));
+    }
+    if let Some(p) = &f.asset.protocol_version {
+        ev.push(format!("Protocol: {p}"));
+    }
+    if let Some(k) = f.asset.key_length {
+        ev.push(format!("Key length: {k} bits"));
+    }
+    ev.push(format!("Classified: {}", f.pqc_status));
+    // Surface a couple of scanner-specific facts (RDP security mode, exposure…).
+    for key in ["security_mode", "exposed", "source", "tls_version"] {
+        if let Some(v) = f.metadata.get(key) {
+            ev.push(format!("{key}: {v}"));
+        }
+    }
+    ev
 }
 
 // Scanner config types
@@ -580,6 +670,72 @@ mod tests {
         assert_eq!(FindingCategory::HardcodedKey.to_string(), "hardcoded_key");
         assert_eq!(FindingCategory::MissingPqc.to_string(), "missing_pqc");
         assert_eq!(FindingCategory::PqcReady.to_string(), "pqc_ready");
+    }
+
+    fn golden_finding(at: CryptoAssetType, pqc: PqcStatus) -> Finding {
+        Finding {
+            id: "x".into(),
+            category: FindingCategory::MissingPqc,
+            severity: FindingSeverity::Medium,
+            title: "t".into(),
+            description: "d".into(),
+            asset: CryptoAsset {
+                id: "a".into(),
+                asset_type: at,
+                name: "n".into(),
+                algorithm: Some("RSA-2048".into()),
+                key_length: Some(2048),
+                protocol_version: Some("TLS1.3".into()),
+                location: AssetLocation {
+                    source_type: "s".into(),
+                    path: "host:443".into(),
+                    line: None,
+                },
+                discovered_by: "tls".into(),
+                discovered_at: Utc::now(),
+            },
+            remediation: None,
+            pqc_status: pqc,
+            metadata: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn confidence_golden_corpus() {
+        use CryptoAssetType::*;
+        use PqcStatus::*;
+        // Live measurements -> High.
+        assert_eq!(confidence_of(&golden_finding(TlsConnection, ClassicalSecure)), Confidence::High);
+        assert_eq!(confidence_of(&golden_finding(Certificate, ClassicalWeak)), Confidence::High);
+        assert_eq!(confidence_of(&golden_finding(DataStore, ClassicalWeak)), Confidence::High);
+        // Static / heuristic match -> Medium.
+        assert_eq!(confidence_of(&golden_finding(CryptoLibrary, ClassicalSecure)), Confidence::Medium);
+        // Uncharacterized (port answered, crypto unread) -> Low, whatever the type.
+        assert_eq!(confidence_of(&golden_finding(TlsConnection, Unknown)), Confidence::Low);
+        assert_eq!(confidence_of(&golden_finding(Certificate, Unknown)), Confidence::Low);
+    }
+
+    #[test]
+    fn evidence_records_probe_and_observation() {
+        let ev = evidence_of(&golden_finding(CryptoAssetType::TlsConnection, PqcStatus::ClassicalSecure), "tls");
+        assert!(ev.iter().any(|e| e.contains("Probe: tls")));
+        assert!(ev.iter().any(|e| e.starts_with("Location: host:443")));
+        assert!(ev.iter().any(|e| e.contains("Algorithm: RSA-2048")));
+        assert!(ev.iter().any(|e| e.contains("Key length: 2048")));
+        assert!(ev.iter().any(|e| e.starts_with("Classified: classical_secure")));
+    }
+
+    #[test]
+    fn finding_record_defaults_are_backward_compatible() {
+        // A record serialized before confidence/status existed must still load.
+        let legacy = r#"{"id":"1","scanId":"s","category":"missing_pqc","severity":"medium",
+            "title":"t","description":"d","assetType":"tls_connection","algorithm":null,
+            "pqcStatus":"classical_weak","location":"h:443","remediation":null,
+            "createdAt":"2026-01-01T00:00:00Z"}"#;
+        let r: FindingRecord = serde_json::from_str(legacy).unwrap();
+        assert_eq!(r.status, FindingStatus::Open);
+        assert_eq!(r.confidence, Confidence::Medium);
+        assert!(r.evidence.is_empty());
     }
 
     #[test]

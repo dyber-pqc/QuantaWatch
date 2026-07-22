@@ -381,6 +381,54 @@ pub async fn verify_finding(
     .into_response()
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindingStatusRequest {
+    /// "open" | "acknowledged" | "suppressed".
+    status: String,
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Triage a finding: acknowledge (seen / accepted risk) or suppress (false
+/// positive / won't-fix). A suppressed finding leaves the work list and the
+/// attack-path graph but is retained for the audit trail; reopen with "open".
+pub async fn set_finding_status(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+    Path(finding_id): Path<String>,
+    Json(body): Json<FindingStatusRequest>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    let status = match body.status.as_str() {
+        "open" => qw_scanner::FindingStatus::Open,
+        "acknowledged" => qw_scanner::FindingStatus::Acknowledged,
+        "suppressed" => qw_scanner::FindingStatus::Suppressed,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "status must be open | acknowledged | suppressed" })),
+            )
+                .into_response()
+        }
+    };
+    match state
+        .store
+        .set_finding_status(&tenant, &finding_id, status, body.note.clone())
+    {
+        Some(rec) => {
+            // A suppression removes a path/plan; refresh the graph so it drops.
+            crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
+            Json(json!({ "id": rec.id, "status": rec.status, "note": rec.note })).into_response()
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Finding '{finding_id}' not found") })),
+        )
+            .into_response(),
+    }
+}
+
 /// Return the concrete PQC migration plan for a single finding (without filing
 /// anything) — the target algorithm, rationale, steps, and a proposed patch.
 pub async fn get_migration_plan(
