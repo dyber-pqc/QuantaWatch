@@ -24,6 +24,9 @@ pub enum MigrationStrategy {
     StrengthenSymmetric,
     /// Weak hash -> SHA-384 / SHA3-256.
     ReplaceHash,
+    /// Data at rest is unencrypted or under-encrypted -> encrypt with AES-256.
+    /// This is storage encryption, NOT a transport key exchange.
+    EncryptAtRest,
     /// Secret material exposed in code -> rotate + move to a KMS/HSM.
     RotateKey,
     /// Crypto library is quantum-vulnerable -> upgrade to a PQC-capable one.
@@ -84,7 +87,21 @@ pub struct MigrationPlan {
 
 /// True if this finding warrants a migration (not already PQC / advisory-only).
 fn needs_migration(f: &FindingRecord) -> bool {
-    !matches!(f.pqc_status, PqcStatus::PqcReady | PqcStatus::Hybrid)
+    if matches!(f.pqc_status, PqcStatus::PqcReady | PqcStatus::Hybrid) {
+        return false;
+    }
+    // A data store already encrypted at rest with AES-256 is CNSA-2.0 compliant —
+    // don't manufacture a no-op "migrate aes-256 → AES-256" plan for it.
+    if matches!(
+        f.asset_type,
+        CryptoAssetType::DataStore | CryptoAssetType::EncryptionKey
+    ) {
+        let a = f.algorithm.clone().unwrap_or_default().to_lowercase();
+        if a.contains("aes-256") || a.contains("aes256") {
+            return false;
+        }
+    }
+    true
 }
 
 fn algo_upper(f: &FindingRecord) -> String {
@@ -124,15 +141,27 @@ fn classify(f: &FindingRecord) -> (MigrationStrategy, &'static str) {
             (MigrationStrategy::UpgradeLibrary, "PQC-capable library")
         }
         CryptoAssetType::HashFunction => (MigrationStrategy::ReplaceHash, "SHA-384"),
-        CryptoAssetType::EncryptionKey | CryptoAssetType::DataStore => (
-            MigrationStrategy::HybridKeyExchange,
-            "X25519 + ML-KEM-768 (hybrid)",
-        ),
+        // Data at rest / at-rest keys are a STORAGE-encryption problem, not a
+        // transport key exchange — encrypt with AES-256, don't hand them a TLS
+        // hybrid group.
+        CryptoAssetType::EncryptionKey | CryptoAssetType::DataStore => {
+            (MigrationStrategy::EncryptAtRest, "AES-256-GCM")
+        }
     }
+}
+
+/// True when a data store reports no encryption at rest at all.
+fn is_unencrypted(f: &FindingRecord) -> bool {
+    let a = f.algorithm.clone().unwrap_or_default().to_lowercase();
+    a.is_empty() || matches!(a.as_str(), "none" | "off" | "disabled" | "plaintext" | "false")
 }
 
 fn priority_of(f: &FindingRecord, strategy: MigrationStrategy) -> MigrationPriority {
     // Actively weak or a live secret exposure -> do it now.
+    // Unencrypted data at rest is a live exposure -> do it now.
+    if strategy == MigrationStrategy::EncryptAtRest && is_unencrypted(f) {
+        return MigrationPriority::P0;
+    }
     if matches!(f.pqc_status, PqcStatus::ClassicalWeak)
         || matches!(f.severity, FindingSeverity::Critical)
         || strategy == MigrationStrategy::RotateKey
@@ -140,6 +169,10 @@ fn priority_of(f: &FindingRecord, strategy: MigrationStrategy) -> MigrationPrior
         || strategy == MigrationStrategy::ReplaceHash
     {
         return MigrationPriority::P0;
+    }
+    // An encrypted-but-undersized store is alignment work, not an incident.
+    if strategy == MigrationStrategy::EncryptAtRest {
+        return MigrationPriority::P2;
     }
     // Sound-but-undersized crypto is alignment work, not an incident.
     if strategy == MigrationStrategy::StrengthenSymmetric {
@@ -162,7 +195,9 @@ fn effort_of(strategy: MigrationStrategy) -> &'static str {
         MigrationStrategy::ReplaceHash
         | MigrationStrategy::ReplaceSymmetric
         | MigrationStrategy::StrengthenSymmetric => "low",
-        MigrationStrategy::RotateKey | MigrationStrategy::UpgradeLibrary => "medium",
+        MigrationStrategy::RotateKey
+        | MigrationStrategy::UpgradeLibrary
+        | MigrationStrategy::EncryptAtRest => "medium",
         MigrationStrategy::ReplaceSignature | MigrationStrategy::HybridKeyExchange => "high",
     }
 }
@@ -204,6 +239,17 @@ fn build_patch(
             after: format!("# use {target} (or SHA3-256) and re-sign affected artifacts"),
             note: format!("{a} is no longer collision-resistant; move to {target}."),
         }),
+        MigrationStrategy::EncryptAtRest => Some(MigrationPatch {
+            path: loc.clone(),
+            kind: "encryption-at-rest".into(),
+            before: format!("# encryption at rest: {}", if a == "classical" { "none" } else { &a }),
+            after: "# enable AES-256 at rest, e.g.:\n\
+                    #   storage: { encryption: { algorithm: AES-256-GCM, kms_key: <arn> } }\n\
+                    # BitLocker: -EncryptionMethod XtsAes256 · LUKS: aes-xts-plain64 (512-bit)\n\
+                    # AWS: SSE-KMS on S3/EBS/RDS · GCP/Azure: CMEK at rest"
+                .into(),
+            note: format!("Encrypt {loc} at rest with {target}."),
+        }),
         MigrationStrategy::RotateKey => None, // steps-only; no safe textual patch
         MigrationStrategy::UpgradeLibrary if is_dep => Some(MigrationPatch {
             path: loc.clone(),
@@ -244,10 +290,15 @@ pub fn plan_migration(f: &FindingRecord) -> Option<MigrationPlan> {
     }
     let (strategy, target) = classify(f);
     let priority = priority_of(f, strategy);
-    let current = f
-        .algorithm
-        .clone()
-        .unwrap_or_else(|| "classical/unknown".into());
+    // "none"/empty reads as a mislabel; for a data store it means *unencrypted*.
+    let current = if strategy == MigrationStrategy::EncryptAtRest && is_unencrypted(f) {
+        "unencrypted".to_string()
+    } else {
+        f.algorithm
+            .clone()
+            .filter(|a| !a.is_empty() && a != "none")
+            .unwrap_or_else(|| "classical/unknown".into())
+    };
 
     let rationale = match strategy {
         MigrationStrategy::ReplaceSignature | MigrationStrategy::HybridKeyExchange => format!(
@@ -258,6 +309,17 @@ pub fn plan_migration(f: &FindingRecord) -> Option<MigrationPlan> {
         MigrationStrategy::ReplaceSymmetric | MigrationStrategy::ReplaceHash => {
             format!("{current} is cryptographically weak by today's standards, independent of quantum risk.")
         }
+        MigrationStrategy::EncryptAtRest if is_unencrypted(f) => {
+            "This data store holds data with no encryption at rest — it is readable by anyone with \
+             access to the disk, volume, snapshot or backup. Encrypt it at rest with AES-256-GCM \
+             (CNSA 2.0), which also keeps the data safe against Grover-accelerated brute force."
+                .to_string()
+        }
+        MigrationStrategy::EncryptAtRest => format!(
+            "{current} at rest is below the CNSA 2.0 bar. Grover's algorithm halves symmetric \
+             strength, so re-encrypt this store with AES-256-GCM for data that must stay \
+             confidential into the quantum era."
+        ),
         MigrationStrategy::StrengthenSymmetric => format!(
             "{current} is not broken — this is CNSA 2.0 alignment. Grover's algorithm halves the \
              effective strength of a symmetric key, so CNSA 2.0 mandates AES-256 for data that \
@@ -296,6 +358,13 @@ pub fn plan_migration(f: &FindingRecord) -> Option<MigrationPlan> {
         MigrationStrategy::StrengthenSymmetric => vec![
             "Prefer AES-256 cipher suites ahead of AES-128 in the negotiation order.".into(),
             "Confirm clients still negotiate successfully, then drop AES-128.".into(),
+        ],
+        MigrationStrategy::EncryptAtRest => vec![
+            "Enable encryption at rest with AES-256 (AES-256-GCM, or AES-256-XTS for volumes/disks)."
+                .into(),
+            "Re-encrypt existing data and rotate the data-encryption key so nothing stays under the old state."
+                .into(),
+            "Hold the key in a KMS/HSM, then re-scan to confirm the store reports AES-256.".into(),
         ],
         MigrationStrategy::ReplaceHash => vec![
             "Replace the weak hash with SHA-384 or SHA3-256.".into(),
@@ -438,6 +507,26 @@ mod tests {
         assert_eq!(p.strategy, MigrationStrategy::ReplaceSymmetric);
         assert_eq!(p.target_algorithm, "AES-256-GCM");
         assert_eq!(p.priority, MigrationPriority::P0);
+    }
+
+    #[test]
+    fn unencrypted_data_store_encrypts_at_rest_not_kex() {
+        // Regression: an unencrypted data store was given a TLS hybrid-KEX plan
+        // ("Migrate none -> X25519 + ML-KEM-768") instead of encrypt-at-rest.
+        let f = finding(
+            Some("none"),
+            CryptoAssetType::DataStore,
+            PqcStatus::ClassicalWeak,
+            FindingSeverity::High,
+            FindingCategory::MissingPqc,
+            "backup-vol-07",
+        );
+        let p = plan_migration(&f).unwrap();
+        assert_eq!(p.strategy, MigrationStrategy::EncryptAtRest);
+        assert_eq!(p.target_algorithm, "AES-256-GCM");
+        assert_eq!(p.current_algorithm, "unencrypted");
+        assert_eq!(p.priority, MigrationPriority::P0);
+        assert_eq!(p.patch.unwrap().kind, "encryption-at-rest");
     }
 
     #[test]

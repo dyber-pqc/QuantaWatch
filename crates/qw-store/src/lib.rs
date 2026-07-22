@@ -542,11 +542,18 @@ fn pg_ph(sql: &str) -> String {
     s
 }
 
+/// A stable, deterministic finding id derived from the asset (location) and the
+/// check (title), so the same finding keeps one row across re-scans.
+fn stable_finding_id(location: &str, title: &str) -> String {
+    sha3_256_hex(format!("{location}|{title}").as_bytes())
+}
+
 /// Postgres schema. Same shape as SQLite; `BIGSERIAL` replaces
 /// `INTEGER PRIMARY KEY AUTOINCREMENT` for the append-only sequence.
 const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS scans (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, completed_at TEXT, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS findings (id TEXT, tenant TEXT NOT NULL, scan_id TEXT, created_at TEXT, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_tenant_id ON findings(tenant, id);
     CREATE TABLE IF NOT EXISTS posture (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS remediations (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGINT);
     CREATE TABLE IF NOT EXISTS alerts (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGINT);
@@ -774,6 +781,7 @@ impl Store {
                 id TEXT, tenant TEXT NOT NULL, scan_id TEXT, created_at TEXT, data TEXT NOT NULL,
                 seq INTEGER PRIMARY KEY AUTOINCREMENT
             );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_tenant_id ON findings(tenant, id);
             CREATE TABLE IF NOT EXISTS posture (
                 tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT
             );
@@ -861,6 +869,7 @@ impl Store {
             r#"
             CREATE TABLE scans (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, completed_at TEXT, data TEXT NOT NULL);
             CREATE TABLE findings (id TEXT, tenant TEXT NOT NULL, scan_id TEXT, created_at TEXT, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_tenant_id ON findings(tenant, id);
             CREATE TABLE posture (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE remediations (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER);
             CREATE TABLE alerts (id TEXT PRIMARY KEY, tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER);
@@ -911,8 +920,14 @@ impl Store {
             &[record.id.as_str(), tenant, completed.as_str(), scan_json.as_str()],
         );
         for finding in &result.findings {
+            // Stable identity so re-scanning the same asset/check REPLACES its
+            // finding instead of appending a near-duplicate every scan. Keyed by
+            // (location, title) — the asset and the check — not by status, so a
+            // changed posture updates the same row.
+            let stable_id =
+                stable_finding_id(&finding.asset.location.path, &finding.title);
             let fr = FindingRecord {
-                id: finding.id.clone(),
+                id: stable_id.clone(),
                 scan_id: scan_id.clone(),
                 category: finding.category.clone(),
                 severity: finding.severity.clone(),
@@ -927,8 +942,9 @@ impl Store {
             };
             let fjson = serde_json::to_string(&fr).unwrap_or_default();
             let created = fr.created_at.to_rfc3339();
-            self.exec(
-                "INSERT INTO findings (id, tenant, scan_id, created_at, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            self.exec_pg(
+                "INSERT OR REPLACE INTO findings (id, tenant, scan_id, created_at, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO findings (id, tenant, scan_id, created_at, data) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (tenant, id) DO UPDATE SET scan_id = EXCLUDED.scan_id, created_at = EXCLUDED.created_at, data = EXCLUDED.data",
                 &[fr.id.as_str(), tenant, fr.scan_id.as_str(), created.as_str(), fjson.as_str()],
             );
         }
@@ -979,6 +995,51 @@ impl Store {
             "UPDATE findings SET data = ?1 WHERE tenant = ?2 AND id = ?3",
             &[fjson.as_str(), tenant, record.id.as_str()],
         );
+    }
+
+    /// One-time migration: collapse the historical append-only duplicates (the
+    /// same finding recorded once per scan) down to a single row per
+    /// (location, title), re-keyed by the stable finding id, then enforce
+    /// uniqueness so future scans upsert instead of piling up. Idempotent —
+    /// after the first run there is nothing left to collapse. Returns the number
+    /// of duplicate rows removed.
+    pub fn dedupe_findings(&self) -> usize {
+        let tenants = self.query_col("SELECT DISTINCT tenant FROM findings", &[]);
+        let mut removed = 0usize;
+        for tenant in tenants {
+            let all = self.all_findings(&tenant); // ascending seq: oldest first
+            let before = all.len();
+            // Keep the newest (last-seen) record per stable key.
+            let mut keep: std::collections::BTreeMap<String, FindingRecord> =
+                std::collections::BTreeMap::new();
+            for mut f in all {
+                let sid = stable_finding_id(&f.location, &f.title);
+                f.id = sid.clone();
+                keep.insert(sid, f);
+            }
+            if keep.len() == before {
+                continue; // already deduped for this tenant
+            }
+            self.exec("DELETE FROM findings WHERE tenant = ?1", &[tenant.as_str()]);
+            for f in keep.values() {
+                let fjson = serde_json::to_string(f).unwrap_or_default();
+                let created = f.created_at.to_rfc3339();
+                self.exec(
+                    "INSERT INTO findings (id, tenant, scan_id, created_at, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    &[f.id.as_str(), tenant.as_str(), f.scan_id.as_str(), created.as_str(), fjson.as_str()],
+                );
+            }
+            removed += before - keep.len();
+        }
+        // Enforce uniqueness so record_scan's upsert has a conflict target.
+        self.exec(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_findings_tenant_id ON findings(tenant, id)",
+            &[],
+        );
+        if removed > 0 {
+            tracing::info!(removed, "collapsed duplicate findings");
+        }
+        removed
     }
 
     // ---- Posture history ----

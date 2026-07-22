@@ -26,6 +26,13 @@ where
         "Gateway identity initialized"
     );
 
+    // One-time cleanup of the historical append-only duplicate findings, and
+    // enforce the stable-id uniqueness that keeps re-scans from re-accumulating.
+    let removed = state.store.dedupe_findings();
+    if removed > 0 {
+        tracing::info!(removed, "collapsed duplicate findings at startup");
+    }
+
     crate::background::spawn(state.clone());
 
     let listen_addr = config.gateway.listen.clone();
