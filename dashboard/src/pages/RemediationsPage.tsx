@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge, Group, Box, Text, Progress, Button, Menu, ActionIcon, CopyButton, Checkbox, ScrollArea, Stack, Tooltip } from "@mantine/core";
-import { fetchMigrationPlans, fetchIntegrations, syncRemediations, remediateFinding } from "../api/client";
+import { fetchMigrationPlans, fetchIntegrations, syncRemediations, remediateFinding, verifyFinding } from "../api/client";
+import type { VerifyResult } from "../api/client";
 import type { MigrationPlan, MigrationPriority, RemediationTicket } from "../api/types";
 import { Card, PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 
@@ -64,10 +65,21 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
   const pct = total ? Math.round((done.size / total) * 100) : 0;
   const complete = total > 0 && done.size === total;
   const prio = PRIO[plan.priority] ?? PRIO.p3;
+  const qc = useQueryClient();
   const [ticket, setTicket] = useState<RemediationTicket | null>(null);
+  const [verify, setVerify] = useState<VerifyResult | null>(null);
   const mut = useMutation({
     mutationFn: (integrationId: string) => remediateFinding(plan.findingId, { integrationId }),
     onSuccess: (t) => setTicket(t),
+  });
+  const verifyMut = useMutation({
+    mutationFn: () => verifyFinding(plan.findingId),
+    onSuccess: (r) => {
+      setVerify(r);
+      // A resolved/improved finding changes the work list and the graph.
+      if (r.resolved || r.improved) qc.invalidateQueries({ queryKey: ["migration-plans"] });
+      qc.invalidateQueries({ queryKey: ["attack-paths"] });
+    },
   });
 
   const runbookMd = `# ${plan.title}\n\nPriority: ${prio.label}\nStrategy: ${prettyStrategy(plan.strategy)}\nCurrent: ${plan.currentAlgorithm} → Target: ${plan.targetAlgorithm}\n\n${plan.steps.map((s, i) => `${i + 1}. [${done.has(i) ? "x" : " "}] ${s}`).join("\n")}`;
@@ -132,8 +144,40 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
 
       {plan.patch && <PatchDiff patch={plan.patch} />}
 
+      {/* Verify — actively re-check whether the fix is live */}
+      <Group mt="md" gap={8} align="center">
+        <Button
+          variant="light"
+          color="signal"
+          radius={2}
+          size="compact-sm"
+          loading={verifyMut.isPending}
+          onClick={() => verifyMut.mutate()}
+          leftSection={<svg width={14} height={14} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /></svg>}
+        >
+          Verify fix
+        </Button>
+        {verifyMut.isError && <Text size="xs" c="red.4">re-check failed</Text>}
+        {verify && (
+          verify.verifiable ? (
+            <Group gap={8} align="center" wrap="nowrap">
+              <Badge radius={2} variant="light" tt="none" fw={700}
+                color={verify.resolved ? "signal" : verify.improved ? "orange" : "red"}>
+                {verify.resolved ? "✓ resolved" : verify.improved ? "improved" : "not fixed yet"}
+              </Badge>
+              <Text size="11.5px" c="dimmed" style={{ lineHeight: 1.4 }}>{verify.detail}</Text>
+            </Group>
+          ) : (
+            <Group gap={6} align="center" wrap="nowrap">
+              <Badge radius={2} variant="light" color="gray" tt="none">manual re-check</Badge>
+              <Text size="11.5px" c="dimmed" style={{ lineHeight: 1.4 }}>{verify.guidance}</Text>
+            </Group>
+          )
+        )}
+      </Group>
+
       {/* Actions */}
-      <Group mt="md" gap={8}>
+      <Group mt="sm" gap={8}>
         {ticket ? (
           <Button component="a" href={ticket.externalUrl} target="_blank" rel="noreferrer" variant="light" color="signal" radius={2} size="compact-sm">{ticket.externalId} ↗ opened</Button>
         ) : remediable.length > 0 ? (

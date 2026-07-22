@@ -971,6 +971,16 @@ impl Store {
         )
     }
 
+    /// Update a stored finding in place (e.g. after a re-verify changes its PQC
+    /// status). Keyed by the finding's own id, which is unique per instance.
+    pub fn update_finding(&self, tenant: &str, record: &FindingRecord) {
+        let fjson = serde_json::to_string(record).unwrap_or_default();
+        self.exec(
+            "UPDATE findings SET data = ?1 WHERE tenant = ?2 AND id = ?3",
+            &[fjson.as_str(), tenant, record.id.as_str()],
+        );
+    }
+
     // ---- Posture history ----
 
     pub fn record_posture(&self, tenant: &str, snap: &PostureSnapshot) {

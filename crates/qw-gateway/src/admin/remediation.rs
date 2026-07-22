@@ -9,11 +9,28 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use qw_integrations::RemediationOpts;
-use qw_scanner::{AssetLocation, CryptoAsset, Finding, FindingRecord};
+use qw_scanner::{AssetLocation, CryptoAsset, CryptoAssetType, Finding, FindingRecord, PqcStatus, ScanTarget, Scanner};
 
 use crate::auth::{tenant_of, AuthContext};
 use crate::config::AssetConfig;
 use crate::state::AppState;
+
+/// Trailing `:port` of a location like `host:443`, if present.
+fn port_of(location: &str) -> Option<u16> {
+    location.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
+}
+
+/// Worse posture ranks lower — used to pick the worst finding on a port and to
+/// tell whether a re-verify improved things.
+fn pqc_rank(s: &PqcStatus) -> u8 {
+    match s {
+        PqcStatus::ClassicalWeak => 0,
+        PqcStatus::ClassicalSecure => 1,
+        PqcStatus::Unknown => 2,
+        PqcStatus::Hybrid => 3,
+        PqcStatus::PqcReady => 4,
+    }
+}
 
 /// Reduce an address/location to its host: strip scheme, path, and port.
 fn host_of(s: &str) -> &str {
@@ -219,6 +236,149 @@ pub async fn remediate(
         )
             .into_response(),
     }
+}
+
+/// Re-verify a finding by actively re-checking its underlying asset, closing the
+/// loop after a fix. For a network endpoint (host:port) this re-runs the network
+/// scanner and reports whether the live posture improved — updating the stored
+/// finding so a resolved item drops out of the work list. Findings that can't be
+/// re-checked from here (source code, dependencies, host firmware) return
+/// `verifiable:false` with guidance to re-run the relevant scanner.
+pub async fn verify_finding(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+    Path(finding_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    let Some(mut record) = state.store.get_finding(&tenant, &finding_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Finding '{finding_id}' not found") })),
+        )
+            .into_response();
+    };
+
+    let location = record.location.clone();
+    let port = port_of(&location);
+    let host = host_of(&location).to_string();
+    let network_checkable = port.is_some()
+        && !host.is_empty()
+        && matches!(
+            record.asset_type,
+            CryptoAssetType::TlsConnection
+                | CryptoAssetType::ProtocolEndpoint
+                | CryptoAssetType::Certificate
+        );
+
+    if !network_checkable {
+        // e.g. a code finding or firmware component — the gateway can't reach in
+        // to re-test it; point at the scan that would refresh it.
+        let how = match record.asset_type {
+            CryptoAssetType::CryptoLibrary => {
+                "Re-scan the code repository / dependencies (Scans → run, or the connector) to confirm this fix."
+            }
+            _ => "Re-run the host agent or the relevant connector scan to refresh this finding.",
+        };
+        return Json(json!({
+            "verifiable": false,
+            "before": record.pqc_status,
+            "reason": "This finding isn't an active network endpoint the gateway can re-probe.",
+            "guidance": how,
+        }))
+        .into_response();
+    }
+
+    // Actively re-probe the endpoint's host with the network scanner (a declared
+    // finding is authorized to re-check). It port-scans and fingerprints
+    // TLS/SSH/RDP just like the Estate sweep.
+    let scanner = qw_scanner::scanners::network::NetworkScanner::new(
+        qw_scanner::NetworkScannerConfig {
+            enabled: true,
+            connect_timeout_ms: 1500,
+            ports: qw_scanner::NetworkScannerConfig::default().ports,
+            targets: vec![],
+        },
+    );
+    let result = match scanner.scan(&ScanTarget::network_host(&host)).await {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": format!("re-check failed: {e}") })),
+            )
+                .into_response()
+        }
+    };
+
+    let before = record.pqc_status.clone();
+    // Worst fresh posture seen on the same port. `None` means nothing crypto-
+    // relevant answered on that port during the re-check — which could be a
+    // removed service OR simply an unreachable host. We must NOT treat that as
+    // "fixed": a connection failure isn't a resolution, and an overlay fix lives
+    // on a *different* port so the original endpoint stays classical anyway.
+    let fresh: Option<PqcStatus> = result
+        .findings
+        .iter()
+        .filter(|f| port_of(&f.asset.location.path) == port)
+        .map(|f| f.pqc_status.clone())
+        .min_by_key(pqc_rank);
+
+    let (after, resolved, improved, detail) = match fresh {
+        Some(after) => {
+            let resolved = matches!(after, PqcStatus::Hybrid | PqcStatus::PqcReady);
+            let improved = pqc_rank(&after) > pqc_rank(&before);
+            let detail = if resolved {
+                format!("{location} now negotiates a post-quantum (hybrid) channel.")
+            } else if improved {
+                format!("{location} improved from {before} to {after}, but isn't post-quantum yet.")
+            } else {
+                format!("{location} still reports {after} — the fix isn't live on this endpoint yet. (An overlay fix runs on a separate port; point clients there.)")
+            };
+            // Persist the fresh posture so a resolved finding leaves the list.
+            record.pqc_status = after.clone();
+            state.store.update_finding(&tenant, &record);
+            (after, resolved, improved, detail)
+        }
+        None => (
+            before.clone(),
+            false,
+            false,
+            format!(
+                "Nothing answered on port {} during the re-check — the service is closed, moved, or unreachable, so the fix couldn't be confirmed live.",
+                port.unwrap_or(0)
+            ),
+        ),
+    };
+
+    let _ = state
+        .audit_logger
+        .log(
+            "system",
+            qw_audit::AuditEvent::ScanCompleted {
+                scan_id: format!("verify:{finding_id}"),
+                scanner_id: "verify".to_string(),
+                target: location.clone(),
+                finding_count: result.findings.len() as u32,
+                status: if resolved { "resolved" } else if improved { "improved" } else { "unchanged" }.to_string(),
+            },
+        )
+        .await;
+
+    // Refresh the attack-path graph so a fixed endpoint stops showing as a path.
+    if resolved || improved {
+        crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
+    }
+
+    Json(json!({
+        "verifiable": true,
+        "resolved": resolved,
+        "improved": improved,
+        "before": before,
+        "after": after,
+        "port": port,
+        "detail": detail,
+    }))
+    .into_response()
 }
 
 /// Return the concrete PQC migration plan for a single finding (without filing

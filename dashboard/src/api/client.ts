@@ -923,6 +923,22 @@ export async function remediateFinding(
   });
 }
 
+export interface VerifyResult {
+  verifiable: boolean;
+  resolved?: boolean;
+  improved?: boolean;
+  before?: string;
+  after?: string;
+  port?: number | null;
+  detail?: string;
+  reason?: string;
+  guidance?: string;
+}
+/** Re-check a finding's live posture after a fix (closes the loop). */
+export async function verifyFinding(findingId: string): Promise<VerifyResult> {
+  return fetchJSON<VerifyResult>(`/api/findings/${findingId}/verify`, { method: "POST" });
+}
+
 export async function fetchMigrationPlans(): Promise<{ plans: MigrationPlan[]; total: number }> {
   try {
     return await fetchJSON<{ plans: MigrationPlan[]; total: number }>("/api/remediations/plans");
