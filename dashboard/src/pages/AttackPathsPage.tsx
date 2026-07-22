@@ -592,7 +592,19 @@ export default function AttackPathsPage() {
   if (maximized) {
     return (
       <div className="p-3" style={{ height: "calc(100vh - 96px)" }}>
-        <Graph nodes={graphNodes} edges={graphEdges} activeIds={activeIds} focus={focus} selectedNodeId={selectedNode?.id ?? null} onNodeClick={setSelectedNode} maximized onToggleFull={toggleFull} />
+        <div style={{ position: "relative", height: "100%" }}>
+          <Graph nodes={graphNodes} edges={graphEdges} activeIds={activeIds} focus={focus} selectedNodeId={selectedNode?.id ?? null} onNodeClick={setSelectedNode} maximized onToggleFull={toggleFull} />
+          {selectedNode && (
+            <NodeDetail
+              node={selectedNode}
+              nodes={graphNodes}
+              edges={graphEdges}
+              paths={paths}
+              onFocusPath={(id) => setSelected(id)}
+              onClose={() => setSelectedNode(null)}
+            />
+          )}
+        </div>
       </div>
     );
   }
