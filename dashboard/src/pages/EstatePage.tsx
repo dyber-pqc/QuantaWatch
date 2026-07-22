@@ -377,25 +377,94 @@ function DeepScanModal({ target, onClose, onDone }: { target: Target | null; onC
   );
 }
 
+interface AssetTemplate {
+  id: string;
+  label: string;
+  icon: string;
+  kind: string;
+  reachability: string[];
+  placeholder: string;
+  inventory: string;
+  creds: "none" | "optional" | "agent";
+}
+
+// Registration templates: pick what kind of thing you're adding and QuantaWatch
+// pre-fills sensible defaults and tells you exactly how it'll be inventoried —
+// and, importantly, what access (if any) that needs.
+const ASSET_TEMPLATES: AssetTemplate[] = [
+  { id: "linux", label: "Linux / SSH server", icon: "🐧", kind: "server", reachability: ["ssh", "tls"], placeholder: "10.0.0.5   or   host:22",
+    inventory: "Sweep the exposed services with no credentials, or Connect & inventory over SSH. A read-only, non-root account is enough — QuantaWatch only ever runs read-only commands (cat /proc/net/tcp, docker ps, hostname).", creds: "optional" },
+  { id: "docker", label: "Docker host / container", icon: "🐳", kind: "container", reachability: ["ssh"], placeholder: "host:2222   (the published SSH port)",
+    inventory: "Connect & inventory over SSH lists the running containers (docker ps) and their internal services. A user in the docker group is enough — no root.", creds: "optional" },
+  { id: "web", label: "Web / TLS endpoint", icon: "🌐", kind: "endpoint", reachability: ["tls"], placeholder: "example.com:443",
+    inventory: "Sweep fingerprints the TLS key exchange and certificate chain. No credentials required.", creds: "none" },
+  { id: "database", label: "Database", icon: "🗄️", kind: "database", reachability: ["tls"], placeholder: "db.internal:5432",
+    inventory: "Sweep checks the port's transport crypto (Postgres, MySQL, Mongo, MSSQL…). No credentials required.", creds: "none" },
+  { id: "rdp", label: "Windows / RDP", icon: "🪟", kind: "server", reachability: ["rdp"], placeholder: "10.0.0.9:3389",
+    inventory: "Sweep fingerprints the RDP security layer (NLA / TLS). No credentials. For firmware & boot-chain crypto, enrol the read-only host agent under Endpoints.", creds: "none" },
+  { id: "network", label: "Network device", icon: "📡", kind: "network_device", reachability: ["tls", "ssh"], placeholder: "192.168.1.1",
+    inventory: "Sweep the management interface's transport crypto. No credentials required.", creds: "none" },
+  { id: "vm", label: "VM / bare-metal", icon: "🖥️", kind: "vm", reachability: ["ssh", "tls"], placeholder: "host or IP",
+    inventory: "Sweep from the outside, or install the read-only host agent (Endpoints) so nothing ever leaves the host.", creds: "agent" },
+  { id: "agent", label: "Agent-only — no access", icon: "🛡️", kind: "endpoint", reachability: [], placeholder: "hostname (just a label)",
+    inventory: "Give QuantaWatch no access at all. Install the read-only agent on the host (Endpoints → Enroll) and it reports its own crypto posture back. No scanning, no credentials, no keys shared — ever.", creds: "none" },
+];
+
+const CRED_BADGE: Record<AssetTemplate["creds"], { label: string; color: string }> = {
+  none: { label: "No credentials", color: "signal" },
+  optional: { label: "Credentials optional", color: "teal" },
+  agent: { label: "Agent — no keys shared", color: "cyan" },
+};
+
 function AddTarget({ onAdded }: { onAdded: () => void }) {
+  const [tpl, setTpl] = useState<AssetTemplate>(ASSET_TEMPLATES[0]);
   const [host, setHost] = useState("");
   const [name, setName] = useState("");
-  const [kind, setKind] = useState<string>("server");
   const [env, setEnv] = useState("production");
 
   const add = useMutation({
-    mutationFn: () => registerTarget({ name: name || host, host, kind, reachability: ["tls", "ssh"], environment: env, tags: [] }),
+    mutationFn: () =>
+      registerTarget({ name: name || host, host, kind: tpl.kind, reachability: tpl.reachability, environment: env, tags: [tpl.id] }),
     onSuccess: () => { setHost(""); setName(""); onAdded(); },
   });
+  const cred = CRED_BADGE[tpl.creds];
 
   return (
-    <Box style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }} px="sm" py="xs">
-      <Group gap="sm" wrap="wrap">
-        <TextInput size="xs" radius={2} placeholder="host or host:port" value={host} onChange={(e) => setHost(e.currentTarget.value)} w={200} />
-        <TextInput size="xs" radius={2} placeholder="name (optional)" value={name} onChange={(e) => setName(e.currentTarget.value)} w={160} />
-        <Select size="xs" radius={2} value={kind} onChange={(v) => setKind(v ?? "server")} data={["server", "vm", "network_device", "container", "database", "endpoint"]} w={140} comboboxProps={{ radius: 2 }} />
-        <Select size="xs" radius={2} value={env} onChange={(v) => setEnv(v ?? "production")} data={["production", "staging", "development", "default"]} w={130} comboboxProps={{ radius: 2 }} />
-        <Button size="xs" radius={2} color="brand" loading={add.isPending} disabled={!host.trim()} onClick={() => add.mutate()}>Add target</Button>
+    <Box style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }} p="sm">
+      <Text fw={700} c="gray.1" size="sm">Register an asset</Text>
+      <Text size="11px" c="dimmed" mb="sm">Pick a template, then point QuantaWatch at it. Nothing here requires credentials to start — a sweep needs none, and you can inventory hosts with a read-only agent instead of sharing a key.</Text>
+
+      {/* Template picker */}
+      <Group gap={6} mb="sm">
+        {ASSET_TEMPLATES.map((t) => {
+          const active = t.id === tpl.id;
+          return (
+            <Button key={t.id} size="compact-xs" radius={2}
+              variant={active ? "filled" : "default"} color={active ? "brand" : "gray"}
+              onClick={() => setTpl(t)}
+              leftSection={<span style={{ fontSize: 12 }}>{t.icon}</span>}
+              styles={{ root: { fontWeight: active ? 700 : 500 } }}>
+              {t.label}
+            </Button>
+          );
+        })}
+      </Group>
+
+      {/* How it'll be inventoried + what access that needs */}
+      <Box mb="sm" px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-6)" }}>
+        <Group gap={8} mb={4} wrap="wrap">
+          <Badge color={cred.color} radius={2} size="xs" variant="light">{cred.label}</Badge>
+          {tpl.reachability.length > 0 && <Text size="10px" c="dark.2">reaches via {tpl.reachability.join(", ")}</Text>}
+        </Group>
+        <Text size="11.5px" c="dark.1" style={{ lineHeight: 1.5 }}>{tpl.inventory}</Text>
+      </Box>
+
+      {/* Details */}
+      <Group gap="sm" wrap="wrap" align="flex-end">
+        <TextInput size="xs" radius={2} label="Host" placeholder={tpl.placeholder} value={host} onChange={(e) => setHost(e.currentTarget.value)} w={240} />
+        <TextInput size="xs" radius={2} label="Name (optional)" placeholder={tpl.label} value={name} onChange={(e) => setName(e.currentTarget.value)} w={170} />
+        <Select size="xs" radius={2} label="Environment" value={env} onChange={(v) => setEnv(v ?? "production")} data={["production", "staging", "development", "default"]} w={130} comboboxProps={{ radius: 2 }} />
+        <Button size="xs" radius={2} color="brand" loading={add.isPending} disabled={!host.trim()} onClick={() => add.mutate()}>Add asset</Button>
       </Group>
     </Box>
   );
