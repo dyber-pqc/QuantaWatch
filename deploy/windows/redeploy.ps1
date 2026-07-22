@@ -4,7 +4,7 @@
   service. Run from an ELEVATED PowerShell after `cargo build --release
   -p qw-gateway` and `npm run build` (or let CI build them).
 
-  This is the "I just want to see my changes" script: stop → wait → copy → start.
+  This is the "I just want to see my changes" script: stop -> wait -> copy -> start.
 #>
 [CmdletBinding()]
 param(
@@ -16,8 +16,8 @@ $ErrorActionPreference = "Stop"
 
 $exe  = Join-Path $Repo "target\release\quantawatch.exe"
 $dist = Join-Path $Repo "dashboard\dist"
-if (-not (Test-Path $exe))  { throw "Missing $exe — run: cargo build --release -p qw-gateway" }
-if (-not (Test-Path (Join-Path $dist 'index.html'))) { throw "Missing dashboard build — run: (cd dashboard) npm run build" }
+if (-not (Test-Path $exe))  { throw "Missing $exe - run: cargo build --release -p qw-gateway" }
+if (-not (Test-Path (Join-Path $dist 'index.html'))) { throw "Missing dashboard build - run: (cd dashboard) npm run build" }
 
 Write-Host "Stopping $ServiceName..."
 Stop-Service $ServiceName -Force -ErrorAction SilentlyContinue
@@ -36,5 +36,5 @@ $bytes = (Get-Item (Join-Path $InstallDir "quantawatch.exe")).Length
 Write-Host "Deployed. exe = $bytes bytes"
 try {
   $code = (Invoke-WebRequest "http://127.0.0.1:9091/" -UseBasicParsing -TimeoutSec 8).StatusCode
-  Write-Host "Dashboard: http://localhost:9091  (HTTP $code)  — hard-refresh with Ctrl+F5"
-} catch { Write-Warning "Service started but the dashboard didn't answer: $_" }
+  Write-Host "Dashboard: http://localhost:9091  (HTTP $code)  - hard-refresh with Ctrl+F5"
+} catch { Write-Warning "Service started but the dashboard did not answer: $_" }
