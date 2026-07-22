@@ -8,6 +8,7 @@ import {
   fetchAuditEntries, fetchThreats, fetchMe, fetchPosture, fetchTenants, getTenant, setTenant, logout,
   syncRemediations, verifyAuditChain, triggerScan, fetchFrameworks, fetchFramework, openAuthed,
   fetchAttackPaths, fetchMigrationPlans, fetchEndpoints, fetchAlerts,
+  fetchTargets, fetchCertificates, ctScan, seedDemo, fetchSettings, saveSettings, fetchAssets,
   BOARD_REPORT_URL, CBOM_DOWNLOAD_URL,
 } from "../api/client";
 
@@ -147,15 +148,35 @@ export default function IdeShell({ children }: { children: ReactNode }) {
     const [name, ...args] = cmd.split(/\s+/);
     try {
       switch (name.toLowerCase()) {
-        case "help": push("commands: help · clear · posture · verify · sync · scan · frameworks · gate <id> · threats · open <view>"); break;
+        case "help": {
+          push("core:    help · clear · whoami · posture · scan · sync · verify");
+          push("inventory: targets · assets · endpoints · certs · paths · plans · alerts · threats");
+          push("compliance: frameworks · gate <id> · evidence · cbom");
+          push("actions: ct <domain> · seed · pause · resume · settings · open <view>");
+          break;
+        }
         case "clear": setTerm([]); break;
+        case "whoami": { const m = await fetchMe(); push(`${m.username ?? "anonymous"} · role ${m.role ?? "—"} · auth ${m.authEnabled ? "on" : "off"}`); break; }
         case "posture": { const p = await fetchPosture(); push(`posture ${Math.round(p.overallScore)}/100 · ${p.totalAssets} assets`); break; }
         case "verify": { const v = await verifyAuditChain(); push(v.valid ? `audit chain VALID · ${v.checked} entries` : `audit chain INVALID: ${v.errors.join("; ")}`); break; }
         case "sync": { const r = await syncRemediations(); push(`remediation sync · ${r.changed} updated`); break; }
         case "scan": { push("running full scan…"); const r = await triggerScan([]); push(`scan complete · ${r.scans_completed} scans · ${r.total_findings} findings`); break; }
+        case "targets": case "estate": { const t = await fetchTargets(); push(`${t.total} target(s) · ${t.exposedServices} services · ${t.quantumVulnerable} vulnerable`); t.targets.slice(0, 8).forEach((x) => push(`  ${x.name.padEnd(22)} ${x.host.padEnd(24)} ${x.pqcStatus}`)); break; }
+        case "assets": { const a = await fetchAssets(); push(`${a.total} asset(s) · ${a.vulnerable} vulnerable · ${a.connectors.length} connector(s)`); break; }
+        case "endpoints": { const e = await fetchEndpoints(); push(`${e.total} endpoint(s) · ${e.quantumVulnerable} quantum-vulnerable`); break; }
+        case "certs": { const c = await fetchCertificates(); push(`${c.total} cert(s) · ${c.active} active · ${c.hybrid} hybrid · ${c.revoked} revoked`); break; }
+        case "paths": { const g = await fetchAttackPaths(); push(`${g.summary.total} path(s) · ${g.summary.critical} critical · ${g.summary.hndl} HNDL`); g.paths.slice(0, 6).forEach((p) => push(`  [${p.severity}] ${p.title.slice(0, 62)}`)); break; }
+        case "plans": case "remediate": { const r = await fetchMigrationPlans(); push(`${r.total} migration plan(s) open`); break; }
+        case "alerts": { const a = await fetchAlerts(20); push(`${a.alerts.length} alert(s)`); a.alerts.slice(0, 6).forEach((x) => push(`  [${x.severity}] ${x.title}`)); break; }
         case "frameworks": { const f = await fetchFrameworks(); f.frameworks.forEach((fr) => push(`  ${fr.name.padEnd(22)} ${fr.verdict}  ${fr.summary.enforced}/${fr.summary.total}`)); break; }
         case "gate": { if (!args[0]) { push("usage: gate <id>  (cnsa-2.0 | nist-800-53 | pci-dss | fedramp)"); break; } const d = await fetchFramework(args[0]); push(`${d.name} · ${d.verdict} · ${d.summary.gaps} gap(s)`); break; }
         case "threats": { const t = await fetchThreats(); push(`${t.length} threat(s)`); t.slice(0, 6).forEach((x) => push(`  [${x.severity}] ${x.threat_type}${x.blocked ? " (blocked)" : ""}`)); break; }
+        case "ct": { if (!args[0]) { push("usage: ct <domain>"); break; } push(`querying CT logs for ${args[0]}…`); const r = await ctScan(args[0], 25); push(`  ${r.certificatesFound} cert(s) · ${r.weak} weak · issuers: ${r.issuers.slice(0, 3).join(", ") || "—"}`); break; }
+        case "seed": { const r = await seedDemo(false); push(`demo estate seeded · ${r.targets} targets · ${r.findings} findings`); qc.invalidateQueries(); break; }
+        case "settings": { const s = await fetchSettings(); const st = s.settings; push(`scanning ${st.scanningPaused ? "PAUSED" : "active"} · disabled: [${st.disabledScanners.join(", ") || "none"}] · external-lookups ${st.externalLookupsEnabled ? "on" : "off"}`); break; }
+        case "pause": case "resume": { const cur = await fetchSettings(); const paused = name.toLowerCase() === "pause"; await saveSettings({ ...cur.settings, scanningPaused: paused }); qc.invalidateQueries({ queryKey: ["settings"] }); push(`scanning ${paused ? "PAUSED" : "resumed"}`); break; }
+        case "evidence": { push("downloading signed evidence pack…"); openAuthed("/api/evidence", "quantawatch-evidence.json"); break; }
+        case "cbom": { push("downloading CBOM…"); openAuthed(CBOM_DOWNLOAD_URL, "quantawatch-cbom.json"); break; }
         case "open": { if (args[0]) { const to = args[0].startsWith("/") ? args[0] : "/" + args[0]; navigate(to); push(`opened ${to}`); } else push("usage: open <view>"); break; }
         default: push(`unknown command: ${name} — try 'help'`);
       }
