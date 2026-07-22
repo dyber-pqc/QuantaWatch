@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Badge,
@@ -45,6 +46,9 @@ function PqcBadge({ status, size = "sm" }: { status: string; size?: string }) {
 
 export default function EstatePage() {
   const qc = useQueryClient();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const maximized = location.pathname.endsWith("/map");
   const { openMenu, menu } = useContextMenu();
   const [selected, setSelected] = useState<string | null>(null);
   const [deepFor, setDeepFor] = useState<Target | null>(null);
@@ -54,6 +58,7 @@ export default function EstatePage() {
   const { data: epBoard } = useQuery({ queryKey: ["endpoints"], queryFn: fetchEndpoints });
   const targets = board?.targets ?? [];
   const endpoints = epBoard?.endpoints ?? [];
+  const toggleFull = () => navigate(maximized ? "/estate" : "/estate/map");
   const activeId = selected ?? targets[0]?.id ?? null;
   const active = targets.find((t) => t.id === activeId) ?? null;
 
@@ -64,6 +69,16 @@ export default function EstatePage() {
   const scan = useMutation({ mutationFn: scanTarget, onSuccess: invalidate });
   const del = useMutation({ mutationFn: deleteTarget, onSuccess: invalidate });
   const seed = useMutation({ mutationFn: () => seedDemo(false), onSuccess: invalidate });
+
+  // Maximized: the estate map gets its own editor tab, filling the pane.
+  if (maximized) {
+    return (
+      <div className="p-3" style={{ height: "calc(100vh - 96px)" }}>
+        <EstateMap targets={targets} endpoints={endpoints} onDeepScan={(t) => setDeepFor(t)} maximized onToggleFull={toggleFull} />
+        <DeepScanModal target={deepFor} onClose={() => setDeepFor(null)} onDone={invalidate} />
+      </div>
+    );
+  }
 
   const containersTotal = targets.reduce((n, t) => n + (t.containers?.length ?? 0), 0);
 
@@ -123,7 +138,7 @@ export default function EstatePage() {
           </Group>
         </Box>
       ) : view === "map" ? (
-        <EstateMap targets={targets} endpoints={endpoints} onDeepScan={(t) => setDeepFor(t)} />
+        <EstateMap targets={targets} endpoints={endpoints} onDeepScan={(t) => setDeepFor(t)} maximized={false} onToggleFull={toggleFull} />
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,340px)_1fr]">
           <Stack gap={8}>

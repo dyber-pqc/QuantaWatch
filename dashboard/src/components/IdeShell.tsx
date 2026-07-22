@@ -20,7 +20,13 @@ import {
 
 interface FlatItem { to: string; label: string; icon: ReactNode; section: string }
 const FLAT: FlatItem[] = navSections.flatMap((s) => s.items.map((i) => ({ ...i, section: s.label ?? "" })));
-const labelFor = (path: string) => FLAT.find((i) => i.to === path)?.label ?? (path.replace(/^\//, "") || "Dashboard");
+// Maximized graph sub-routes get their own friendly tab name.
+const VIEW_TITLES: Record<string, string> = {
+  "/attack-paths/graph": "Attack Graph",
+  "/estate/map": "Estate Map",
+};
+const labelFor = (path: string) =>
+  VIEW_TITLES[path] ?? FLAT.find((i) => i.to === path)?.label ?? (path.replace(/^\//, "") || "Dashboard");
 const iconFor = (path: string) => FLAT.find((i) => i.to === path)?.icon;
 
 const I = {

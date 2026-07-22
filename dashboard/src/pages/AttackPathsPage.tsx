@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis, CartesianGrid } from "recharts";
 import { fetchAttackPaths, fetchAttackPathTimeline, simulateAttackPaths, fetchIntegrations, remediateAttackPath, openAuthed, BOARD_REPORT_URL } from "../api/client";
@@ -34,7 +35,7 @@ function nodeColor(node: GraphNode): string {
   return riskColor(node.risk);
 }
 
-function Graph({ nodes, edges, activeIds, focus, selectedNodeId, onNodeClick }: { nodes: GraphNode[]; edges: { source: string; target: string; observed: boolean }[]; activeIds: Set<string> | null; focus: { id: string; nodeIds: string[] } | null; selectedNodeId: string | null; onNodeClick: (n: GraphNode | null) => void }) {
+function Graph({ nodes, edges, activeIds, focus, selectedNodeId, onNodeClick, maximized = false, onToggleFull }: { nodes: GraphNode[]; edges: { source: string; target: string; observed: boolean }[]; activeIds: Set<string> | null; focus: { id: string; nodeIds: string[] } | null; selectedNodeId: string | null; onNodeClick: (n: GraphNode | null) => void; maximized?: boolean; onToggleFull?: () => void }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   // Pan/zoom is applied IMPERATIVELY (ref + setAttribute), never through React
   // state — a wheel/trackpad can fire 100+ events/sec, and re-rendering the
@@ -137,21 +138,8 @@ function Graph({ nodes, edges, activeIds, focus, selectedNodeId, onNodeClick }: 
 
   const dim = (id: string) => (activeIds && !activeIds.has(id) ? 0.14 : 1);
 
-  // Fullscreen: pop the graph into a fixed viewport overlay so panning/zooming
-  // doesn't move the page underneath. Esc exits.
-  const [full, setFull] = useState(false);
-  useEffect(() => {
-    if (!full) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [full]);
-
   return (
-    <div
-      className="relative overflow-hidden border border-white/[0.06] bg-gradient-to-b from-surface-950/60 to-surface-900/30"
-      style={full ? { position: "fixed", inset: 0, zIndex: 9999, borderRadius: 0, height: "100vh" } : { borderRadius: 8 }}
-    >
+    <div className="relative overflow-hidden rounded-lg border border-white/[0.06] bg-gradient-to-b from-surface-950/60 to-surface-900/30" style={{ height: maximized ? "100%" : undefined }}>
       {/* Zoom controls */}
       <div className="absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-lg border border-white/10 bg-surface-900/95 p-1">
         <button type="button" onClick={() => zoomBy(1.3)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title="Zoom in">
@@ -163,8 +151,8 @@ function Graph({ nodes, edges, activeIds, focus, selectedNodeId, onNodeClick }: 
         <button type="button" onClick={reset} className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-white/10" title="Reset view">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M20.25 20.25v-4.5m0 4.5h-4.5m4.5 0L15 15M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75v4.5m0-4.5h-4.5m4.5 0L15 9" /></svg>
         </button>
-        <button type="button" onClick={() => setFull((v) => !v)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title={full ? "Exit full screen (Esc)" : "Full screen"}>
-          {full ? (
+        <button type="button" onClick={onToggleFull} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title={maximized ? "Close full-screen tab" : "Open in a full-screen tab"}>
+          {maximized ? (
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" /></svg>
           ) : (
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M20.25 20.25v-4.5m0 4.5h-4.5m4.5 0L15 15M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75v4.5m0-4.5h-4.5m4.5 0L15 9" /></svg>
@@ -179,7 +167,7 @@ function Graph({ nodes, edges, activeIds, focus, selectedNodeId, onNodeClick }: 
         ref={svgRef}
         viewBox={`0 0 ${VBW} ${layout.height}`}
         className="w-full cursor-grab touch-none active:cursor-grabbing"
-        style={{ height: full ? "100vh" : 480 }}
+        style={{ height: maximized ? "calc(100vh - 150px)" : 480 }}
         preserveAspectRatio="xMidYMid meet"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -578,6 +566,10 @@ export default function AttackPathsPage() {
   const [sim, setSim] = useState<SimulateResponse | null>(null);
   const [hardened, setHardened] = useState<Set<string>>(new Set());
   const [simBusy, setSimBusy] = useState(false);
+  const { pathname } = useLocation();
+  const navigate = useNavigate();
+  const maximized = pathname.endsWith("/graph");
+  const toggleFull = () => navigate(maximized ? "/attack-paths" : "/attack-paths/graph");
 
   if (isLoading) return <Spinner className="h-64" />;
 
@@ -594,6 +586,16 @@ export default function AttackPathsPage() {
   const selectedPath = paths.find((p) => p.id === selected);
   const focus = selectedPath ? { id: selectedPath.id, nodeIds: selectedPath.nodeIds } : null;
   const toggleSelect = (id: string) => setSelected((cur) => (cur === id ? null : id));
+
+  // Maximized: the graph gets its own editor tab, filling the pane. Panning and
+  // zooming stay inside the graph instead of scrolling the page.
+  if (maximized) {
+    return (
+      <div className="p-3" style={{ height: "calc(100vh - 96px)" }}>
+        <Graph nodes={graphNodes} edges={graphEdges} activeIds={activeIds} focus={focus} selectedNodeId={selectedNode?.id ?? null} onNodeClick={setSelectedNode} maximized onToggleFull={toggleFull} />
+      </div>
+    );
+  }
 
   const vulnProviders = Array.from(
     new Set((data?.nodes ?? []).filter((n) => n.type === "provider" && n.risk > 20).map((n) => n.label)),
@@ -674,7 +676,7 @@ export default function AttackPathsPage() {
                 {activePath && <div className="max-w-[55%] truncate text-[11px] text-gray-500">{activePath.title}</div>}
               </div>
               <div style={{ position: "relative" }}>
-                <Graph nodes={graphNodes} edges={graphEdges} activeIds={activeIds} focus={focus} selectedNodeId={selectedNode?.id ?? null} onNodeClick={setSelectedNode} />
+                <Graph nodes={graphNodes} edges={graphEdges} activeIds={activeIds} focus={focus} selectedNodeId={selectedNode?.id ?? null} onNodeClick={setSelectedNode} maximized={false} onToggleFull={toggleFull} />
                 {selectedNode && (
                   <NodeDetail
                     node={selectedNode}

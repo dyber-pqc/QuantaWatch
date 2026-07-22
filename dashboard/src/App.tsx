@@ -31,6 +31,7 @@ export default function App() {
         <Route path="/posture" element={<PosturePage />} />
         <Route path="/agents" element={<AgentsPage />} />
         <Route path="/attack-paths" element={<AttackPathsPage />} />
+        <Route path="/attack-paths/graph" element={<AttackPathsPage />} />
         <Route path="/remediations" element={<RemediationsPage />} />
         <Route path="/assets" element={<AssetsPage />} />
         <Route path="/scans" element={<ScansPage />} />
@@ -40,6 +41,7 @@ export default function App() {
         <Route path="/crypto-policies" element={<CryptoPoliciesPage />} />
         <Route path="/overlay" element={<OverlayPage />} />
         <Route path="/estate" element={<EstatePage />} />
+        <Route path="/estate/map" element={<EstatePage />} />
         <Route path="/endpoints" element={<EndpointsPage />} />
         <Route path="/certificates" element={<CertificatesPage />} />
         <Route path="/rbac" element={<RbacPage />} />
