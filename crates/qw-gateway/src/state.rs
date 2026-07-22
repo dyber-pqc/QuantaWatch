@@ -121,15 +121,43 @@ impl AppState {
         // Expand `${VAR}` from the environment so a DB password (e.g. for
         // FortressQL) can live in a Secret/env var, not inline in the config.
         let store_path = expand_env_vars(&config.scanner.store_path);
-        let store = Arc::new(
+        let store_raw =
             if store_path.starts_with("postgres://") || store_path.starts_with("postgresql://") {
                 tracing::info!("store backend: Postgres (shared, HA-capable)");
                 Store::open_postgres(&store_path)?
             } else {
                 let scan_dir = std::path::PathBuf::from(&store_path);
                 Store::open(&scan_dir.join("quantawatch.db"))?
+            };
+
+        // Secrets-at-rest: encrypt stored integration tokens with a key derived
+        // from `QW_SECRET_KEY`. Without a key we fall back to plaintext storage
+        // (dev/back-compat) but warn loudly once auth is enabled — a production
+        // deployment must set this.
+        let secret_cipher = match std::env::var("QW_SECRET_KEY") {
+            Ok(k) if !k.trim().is_empty() => match qw_crypto::SecretCipher::from_key_material(&k) {
+                Ok(c) => {
+                    tracing::info!(
+                        "secrets-at-rest: integration tokens encrypted (ChaCha20-Poly1305)"
+                    );
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "QW_SECRET_KEY is invalid; secrets will be stored UNENCRYPTED");
+                    None
+                }
             },
-        );
+            _ => {
+                if config.auth.enabled {
+                    tracing::warn!(
+                        "QW_SECRET_KEY is not set: integration tokens are stored UNENCRYPTED at \
+                         rest. Set QW_SECRET_KEY to a strong random value before production use."
+                    );
+                }
+                None
+            }
+        };
+        let store = Arc::new(store_raw.with_secret_cipher(secret_cipher));
 
         // Initialize the audit logger. Entries are sharded per replica and live
         // in the shared store, so multiple replicas write to one verifiable

@@ -4,6 +4,7 @@ pub mod identity;
 pub mod kem;
 pub mod merkle;
 pub mod password;
+pub mod secret;
 pub mod signing;
 
 pub use error::CryptoError;
@@ -12,4 +13,5 @@ pub use identity::{GatewayIdentity, SessionIdentity};
 pub use kem::KemKeyPair;
 pub use merkle::MerkleTree;
 pub use password::{hash_password, random_token, verify_password};
+pub use secret::SecretCipher;
 pub use signing::{sign, verify, SigningKeyPair};

@@ -482,20 +482,70 @@ impl rustls::client::danger::ServerCertVerifier for EncryptOnlyVerifier {
     }
 }
 
+/// Read a `key=value` parameter out of a Postgres connection URL's query string
+/// (e.g. `sslmode`, `sslrootcert`). Returns the raw value up to the next `&`.
+fn pg_url_param<'a>(url: &'a str, key: &str) -> Option<&'a str> {
+    let q = url.split_once('?').map(|(_, q)| q).unwrap_or("");
+    q.split('&').find_map(|kv| {
+        let (k, v) = kv.split_once('=')?;
+        (k == key).then_some(v)
+    })
+}
+
+/// Load a CA bundle (one or more PEM certificates) into a rustls root store.
+fn load_pg_roots(path: &str) -> anyhow::Result<rustls::RootCertStore> {
+    let pem = std::fs::read(path)
+        .map_err(|e| anyhow::anyhow!("reading sslrootcert '{path}': {e}"))?;
+    let mut reader = std::io::BufReader::new(&pem[..]);
+    let mut roots = rustls::RootCertStore::empty();
+    let mut added = 0usize;
+    for cert in rustls_pemfile::certs(&mut reader) {
+        let cert = cert.map_err(|e| anyhow::anyhow!("parsing sslrootcert '{path}': {e}"))?;
+        roots
+            .add(cert)
+            .map_err(|e| anyhow::anyhow!("adding CA cert from '{path}': {e}"))?;
+        added += 1;
+    }
+    if added == 0 {
+        anyhow::bail!("no certificates found in sslrootcert '{path}'");
+    }
+    Ok(roots)
+}
+
 /// Build a PQC-capable rustls TLS connector for Postgres/FortressQL. The
 /// aws-lc-rs provider advertises hybrid ML-KEM groups (X25519MLKEM768) by
 /// default, so a FortressQL server negotiates the post-quantum key exchange;
-/// a classical Postgres server falls back to X25519. Encrypt-only (no CA
-/// verification) — see `EncryptOnlyVerifier`.
-fn build_pg_tls() -> MakeRustlsConnect {
+/// a classical Postgres server falls back to X25519.
+///
+/// Verifier selection follows `sslmode`:
+/// * `verify-ca` / `verify-full` → full CA-chain (and hostname) verification
+///   against the `sslrootcert=<path>` PEM bundle. MITM-resistant.
+/// * anything else (`require`, `prefer`, …) → encrypt-only ([`EncryptOnlyVerifier`]):
+///   the wire is protected but the peer identity is not checked.
+fn build_pg_tls(url: &str) -> anyhow::Result<MakeRustlsConnect> {
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+    let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
-        .expect("rustls default protocol versions are valid")
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(EncryptOnlyVerifier(provider)))
-        .with_no_client_auth();
-    MakeRustlsConnect::new(config)
+        .expect("rustls default protocol versions are valid");
+
+    let sslmode = pg_url_param(url, "sslmode").unwrap_or("");
+    let config = if sslmode == "verify-full" || sslmode == "verify-ca" {
+        let ca_path = pg_url_param(url, "sslrootcert").ok_or_else(|| {
+            anyhow::anyhow!(
+                "sslmode={sslmode} requires sslrootcert=<path to CA PEM bundle> so the \
+                 server certificate chain can be verified"
+            )
+        })?;
+        let roots = load_pg_roots(ca_path)?;
+        tracing::info!(sslmode, ca = %ca_path, "postgres TLS: verifying server certificate chain");
+        builder.with_root_certificates(roots).with_no_client_auth()
+    } else {
+        builder
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(EncryptOnlyVerifier(provider)))
+            .with_no_client_auth()
+    };
+    Ok(MakeRustlsConnect::new(config))
 }
 
 /// A unit of Postgres work, run on the executor thread against the pool.
@@ -543,6 +593,10 @@ enum Backend {
 #[derive(Clone)]
 pub struct Store {
     backend: Arc<Backend>,
+    /// Optional at-rest encryptor for stored secrets (integration tokens). When
+    /// set, secret-bearing fields are sealed before they touch the database and
+    /// unsealed on read; when unset, values are stored verbatim (dev/back-compat).
+    secret_cipher: Option<Arc<qw_crypto::SecretCipher>>,
 }
 
 /// Translate SQLite placeholders (`?1`) to Postgres (`$1`). Our SQL only uses
@@ -599,6 +653,40 @@ impl Store {
     fn sqlite(conn: Connection) -> Self {
         Self {
             backend: Arc::new(Backend::Sqlite(Mutex::new(conn))),
+            secret_cipher: None,
+        }
+    }
+
+    /// Attach an at-rest encryptor for stored secrets. Returns the store so it
+    /// can be chained after an `open*` call. Passing `None` is a no-op (secrets
+    /// stored verbatim). Idempotent: secret fields are only ever sealed once.
+    pub fn with_secret_cipher(mut self, cipher: Option<qw_crypto::SecretCipher>) -> Self {
+        self.secret_cipher = cipher.map(Arc::new);
+        self
+    }
+
+    /// Seal a secret for storage if an at-rest cipher is configured, else pass
+    /// it through. Encryption failures fall back to the plaintext value so a
+    /// transient RNG error can never silently drop a customer's credential.
+    fn seal_secret(&self, plaintext: &str) -> String {
+        match &self.secret_cipher {
+            Some(c) => c.encrypt(plaintext).unwrap_or_else(|e| {
+                tracing::error!(error = %e, "failed to seal secret at rest; storing verbatim");
+                plaintext.to_string()
+            }),
+            None => plaintext.to_string(),
+        }
+    }
+
+    /// Reverse [`Store::seal_secret`]. Legacy plaintext (no cipher tag) reads
+    /// through unchanged even when a cipher is configured.
+    fn unseal_secret(&self, stored: &str) -> String {
+        match &self.secret_cipher {
+            Some(c) => c.decrypt(stored).unwrap_or_else(|e| {
+                tracing::error!(error = %e, "failed to unseal stored secret");
+                stored.to_string()
+            }),
+            None => stored.to_string(),
         }
     }
 
@@ -608,19 +696,18 @@ impl Store {
     /// at a FortressQL instance with `sslmode=require` negotiates a post-quantum
     /// hybrid key exchange (X25519MLKEM768). `sslmode=disable` stays plaintext;
     /// `sslmode=prefer` (the default) encrypts opportunistically and falls back
-    /// to plaintext if the server has no TLS. Encrypt-only: CA verification
-    /// (`sslmode=verify-ca` / `verify-full`) isn't supported by this client yet.
+    /// to plaintext if the server has no TLS.
+    ///
+    /// `sslmode=verify-full` (and `verify-ca`) turn on full CA-chain
+    /// verification against the PEM bundle named by `sslrootcert=<path>` —
+    /// closing the MITM gap that plain `require` leaves open. Verification
+    /// includes the server hostname, so point the URL host at a name present in
+    /// the certificate.
     pub fn open_postgres(url: &str) -> anyhow::Result<Self> {
-        if url.contains("sslmode=verify-ca") || url.contains("sslmode=verify-full") {
-            anyhow::bail!(
-                "sslmode=verify-ca/verify-full is not yet supported by this client; use \
-                 sslmode=require for encrypted (PQC-capable) transport"
-            );
-        }
         let config: postgres::Config = url
             .parse()
             .map_err(|e| anyhow::anyhow!("invalid postgres url: {e}"))?;
-        let connector = build_pg_tls();
+        let connector = build_pg_tls(url)?;
 
         // The sync postgres client nests a tokio runtime, so it must never run on
         // an async worker thread. Own the pool on a dedicated thread and drive all
@@ -677,6 +764,7 @@ impl Store {
 
         Ok(Self {
             backend: Arc::new(Backend::Pg(PgExecutor { tx: job_tx })),
+            secret_cipher: None,
         })
     }
 
@@ -1578,26 +1666,40 @@ impl Store {
     // ---- External connections (UI-managed integrations with stored secrets) ----
 
     pub fn upsert_connection(&self, tenant: &str, conn: &ConnectionRow) {
-        let json = serde_json::to_string(conn).unwrap_or_default();
+        // Seal the token before it is serialized into the row blob, so the
+        // credential is never written to the database in the clear.
+        let mut row = conn.clone();
+        row.token = self.seal_secret(&row.token);
+        let json = serde_json::to_string(&row).unwrap_or_default();
         self.exec_pg(
             "INSERT OR REPLACE INTO connections (id, tenant, data) VALUES (?1, ?2, ?3)",
             "INSERT INTO connections (id, tenant, data) VALUES ($1, $2, $3) ON CONFLICT (tenant, id) DO UPDATE SET data = EXCLUDED.data",
-            &[conn.id.as_str(), tenant, json.as_str()],
+            &[row.id.as_str(), tenant, json.as_str()],
         );
     }
 
     pub fn list_connections(&self, tenant: &str) -> Vec<ConnectionRow> {
-        self.list_de(
+        self.list_de::<ConnectionRow>(
             "SELECT data FROM connections WHERE tenant = ?1 ORDER BY id LIMIT 10000",
             &[tenant],
         )
+        .into_iter()
+        .map(|mut r| {
+            r.token = self.unseal_secret(&r.token);
+            r
+        })
+        .collect()
     }
 
     pub fn get_connection(&self, tenant: &str, id: &str) -> Option<ConnectionRow> {
-        self.one_de(
+        self.one_de::<ConnectionRow>(
             "SELECT data FROM connections WHERE tenant = ?1 AND id = ?2",
             &[tenant, id],
         )
+        .map(|mut r| {
+            r.token = self.unseal_secret(&r.token);
+            r
+        })
     }
 
     pub fn delete_connection(&self, tenant: &str, id: &str) {
@@ -1962,6 +2064,72 @@ mod tests {
             by_status: std::collections::BTreeMap::new(),
             trigger: "test".into(),
         }
+    }
+
+    fn sample_connection(token: &str) -> ConnectionRow {
+        ConnectionRow {
+            id: "conn-1".into(),
+            integration_type: "github".into(),
+            display_name: "Acme GitHub".into(),
+            base_url: None,
+            org: Some("acme".into()),
+            project: None,
+            repo: None,
+            token: token.into(),
+            created_at: Utc::now(),
+            last_tested: None,
+            last_status: None,
+            last_user: None,
+            last_scanned: None,
+            findings_count: None,
+        }
+    }
+
+    #[test]
+    fn connection_token_is_encrypted_at_rest() {
+        let secret = "ghp_SuperSecretToken_0123456789";
+        let cipher = qw_crypto::SecretCipher::from_key_material("unit-test-master-key").unwrap();
+        let store = Store::open_in_memory()
+            .unwrap()
+            .with_secret_cipher(Some(cipher));
+
+        store.upsert_connection("default", &sample_connection(secret));
+
+        // The raw stored blob must NOT contain the plaintext token, and must
+        // carry the AEAD tag prefix.
+        let raw = store.query_col(
+            "SELECT data FROM connections WHERE tenant = ?1 AND id = ?2",
+            &["default", "conn-1"],
+        );
+        assert_eq!(raw.len(), 1);
+        assert!(
+            !raw[0].contains(secret),
+            "plaintext token must not be persisted: {}",
+            raw[0]
+        );
+        assert!(
+            raw[0].contains("qwsec1:"),
+            "stored token must be AEAD-sealed"
+        );
+
+        // Reading back through the API transparently decrypts.
+        let got = store.get_connection("default", "conn-1").unwrap();
+        assert_eq!(got.token, secret);
+        assert_eq!(store.list_connections("default")[0].token, secret);
+    }
+
+    #[test]
+    fn connection_token_plaintext_without_cipher() {
+        // With no cipher configured, behaviour is unchanged (back-compat).
+        let secret = "plain-token";
+        let store = Store::open_in_memory().unwrap();
+        store.upsert_connection("default", &sample_connection(secret));
+        let raw = store.query_col(
+            "SELECT data FROM connections WHERE tenant = ?1 AND id = ?2",
+            &["default", "conn-1"],
+        );
+        assert!(raw[0].contains(secret));
+        assert_eq!(store.get_connection("default", "conn-1").unwrap().token, secret);
     }
 
     /// Regression: the Postgres backend must work when opened and queried from

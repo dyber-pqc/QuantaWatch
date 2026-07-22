@@ -28,6 +28,8 @@ r2d2_postgres = "0.18"
 # tokio-postgres-rustls bridges it to the (sync) postgres client.
 rustls = "0.23"
 tokio-postgres-rustls = "0.13"
+# Parse the CA PEM bundle named by sslrootcert for verify-ca/verify-full.
+rustls-pemfile = "2"
 
 [dev-dependencies]
 tempfile = "3"

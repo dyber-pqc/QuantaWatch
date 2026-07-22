@@ -23,6 +23,8 @@ base64 = "0.22"
 getrandom.workspace = true
 rand_core.workspace = true
 argon2 = "0.5"
+# AEAD for secrets at rest (integration tokens / stored credentials).
+chacha20poly1305 = "0.10"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

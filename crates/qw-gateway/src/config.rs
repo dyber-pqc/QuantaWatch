@@ -490,6 +490,21 @@ pub struct ServerConfig {
     /// Defaults to `<exe dir>/dashboard` if that exists.
     #[serde(default)]
     pub dashboard_dir: Option<String>,
+    /// Optional HTTPS termination for both listeners. When set, the proxy and
+    /// admin listeners serve TLS (rustls / aws-lc-rs) instead of plain HTTP.
+    /// Leave unset only when TLS is terminated by a trusted reverse proxy in
+    /// front of the gateway.
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
+}
+
+/// PEM certificate + private key for the gateway's HTTPS listeners.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// Path to the PEM certificate chain (leaf first).
+    pub cert_file: String,
+    /// Path to the PEM private key (PKCS#8 or RSA).
+    pub key_file: String,
 }
 
 fn default_gateway() -> ServerConfig {
@@ -497,6 +512,7 @@ fn default_gateway() -> ServerConfig {
         listen: default_listen(),
         admin_listen: default_admin_listen(),
         dashboard_dir: None,
+        tls: None,
     }
 }
 
@@ -663,6 +679,22 @@ pub struct AgentConfig {
     pub offline: bool,
 }
 
+/// Argon2id hashes shipped in the demo/example configs (all seeded users share
+/// one). Binding a public interface with any of these is refused — see
+/// [`GatewayConfig::assert_deployment_safe`].
+const KNOWN_DEMO_PASSWORD_HASHES: &[&str] = &[
+    "$argon2id$v=19$m=19456,t=2,p=1$y+c9QhEj8VLbf+QRdDuw3Q$PpaXX3epVs7e5MkGrlflmwECJkCQzljfqvQ+WH9HKu8",
+];
+
+/// True if `addr` (host:port) binds anything other than the loopback interface,
+/// i.e. it may be reachable from another host. `0.0.0.0` / `::` count as public.
+fn is_public_bind(addr: &str) -> bool {
+    // Strip the port; handle bracketed IPv6 (`[::1]:9091`).
+    let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr).trim();
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    !(host == "127.0.0.1" || host.starts_with("127.") || host == "localhost" || host == "::1")
+}
+
 impl GatewayConfig {
     pub fn load(path: &str) -> Result<Self> {
         let content = match std::fs::read_to_string(path) {
@@ -674,6 +706,123 @@ impl GatewayConfig {
         };
         let config: Self = serde_yaml::from_str(&content)?;
         Ok(config)
+    }
+
+    /// Fail closed before a public bind with insecure credentials. Refuses to
+    /// start when a non-loopback listener is combined with authentication that
+    /// is disabled, uses a known demo password hash, or reuses one hash across
+    /// users (the copy-pasted-demo-credentials signature). Loopback-only
+    /// deployments (the local demo) are always allowed. Set
+    /// `QW_ALLOW_DEMO_CREDENTIALS=1` to override for a deliberate lab exposure.
+    pub fn assert_deployment_safe(&self) -> Result<()> {
+        let public =
+            is_public_bind(&self.gateway.listen) || is_public_bind(&self.gateway.admin_listen);
+        if !public {
+            return Ok(());
+        }
+        if std::env::var("QW_ALLOW_DEMO_CREDENTIALS").is_ok() {
+            tracing::warn!(
+                "QW_ALLOW_DEMO_CREDENTIALS is set: skipping the insecure-credential check on a \
+                 public listener. Do NOT use this in production."
+            );
+            return Ok(());
+        }
+
+        if !self.auth.enabled {
+            anyhow::bail!(
+                "refusing to bind a non-loopback interface ({} / {}) with authentication \
+                 DISABLED. Enable `auth` with real users, bind to 127.0.0.1 behind a trusted \
+                 proxy, or set QW_ALLOW_DEMO_CREDENTIALS=1 to override.",
+                self.gateway.listen,
+                self.gateway.admin_listen
+            );
+        }
+
+        let mut seen = std::collections::HashSet::new();
+        for u in &self.auth.users {
+            if KNOWN_DEMO_PASSWORD_HASHES.contains(&u.password_hash.as_str()) {
+                anyhow::bail!(
+                    "refusing to bind a public interface: user '{}' uses a well-known DEMO \
+                     password hash. Set a real password with `qw hash-password` (per user), or \
+                     set QW_ALLOW_DEMO_CREDENTIALS=1 to override.",
+                    u.username
+                );
+            }
+            if !seen.insert(u.password_hash.as_str()) {
+                anyhow::bail!(
+                    "refusing to bind a public interface: multiple users share the same \
+                     password hash (copied demo credentials). Give each user a unique password \
+                     with `qw hash-password`, or set QW_ALLOW_DEMO_CREDENTIALS=1 to override."
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod deployment_safety_tests {
+    use super::*;
+
+    fn user(name: &str, hash: &str) -> UserConfig {
+        UserConfig {
+            username: name.to_string(),
+            password_hash: hash.to_string(),
+            role: "admin".to_string(),
+            org: "default".to_string(),
+        }
+    }
+
+    fn cfg(listen: &str, users: Vec<UserConfig>) -> GatewayConfig {
+        let mut c = GatewayConfig::default();
+        c.gateway.listen = listen.to_string();
+        c.gateway.admin_listen = "127.0.0.1:9091".to_string();
+        c.auth.enabled = true;
+        c.auth.users = users;
+        c
+    }
+
+    #[test]
+    fn loopback_demo_is_allowed() {
+        let c = cfg(
+            "127.0.0.1:9090",
+            vec![user("admin", KNOWN_DEMO_PASSWORD_HASHES[0])],
+        );
+        assert!(c.assert_deployment_safe().is_ok());
+    }
+
+    #[test]
+    fn public_bind_with_demo_hash_is_refused() {
+        let c = cfg(
+            "0.0.0.0:9090",
+            vec![user("admin", KNOWN_DEMO_PASSWORD_HASHES[0])],
+        );
+        assert!(c.assert_deployment_safe().is_err());
+    }
+
+    #[test]
+    fn public_bind_with_shared_hash_is_refused() {
+        let c = cfg(
+            "0.0.0.0:9090",
+            vec![user("a", "$argon2id$unique-real-1"), user("b", "$argon2id$unique-real-1")],
+        );
+        assert!(c.assert_deployment_safe().is_err());
+    }
+
+    #[test]
+    fn public_bind_with_unique_real_hashes_is_allowed() {
+        let c = cfg(
+            "0.0.0.0:9090",
+            vec![user("a", "$argon2id$unique-real-1"), user("b", "$argon2id$unique-real-2")],
+        );
+        assert!(c.assert_deployment_safe().is_ok());
+    }
+
+    #[test]
+    fn public_bind_with_auth_disabled_is_refused() {
+        let mut c = cfg("0.0.0.0:9090", vec![]);
+        c.auth.enabled = false;
+        assert!(c.assert_deployment_safe().is_err());
     }
 }
 

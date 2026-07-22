@@ -48,6 +48,9 @@ http = "1"
 # self-signed cert for the client-facing leg when none is configured.
 rustls = "0.23"
 tokio-rustls = "0.26"
+# Optional HTTPS termination on the proxy + admin listeners (rustls / aws-lc-rs,
+# so the client leg can negotiate the X25519MLKEM768 hybrid group).
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 # x509-parser feature lets the CA reload its persisted cert to keep issuing.
 rcgen = { version = "0.13", features = ["x509-parser"] }
 time = "0.3"
