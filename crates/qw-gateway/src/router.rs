@@ -184,6 +184,10 @@ fn admin_routes() -> Router<AppState> {
             "/api/onboarding/scan",
             post(crate::admin::onboarding::onboarding_scan),
         )
+        .route(
+            "/api/onboarding/seed-demo",
+            post(crate::admin::onboarding::seed_demo),
+        )
         .route("/api/audit", get(crate::admin::audit_api::list_audit))
         .route(
             "/api/audit/export",

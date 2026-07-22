@@ -19,7 +19,7 @@ import {
   ActionIcon,
   Tooltip,
 } from "@mantine/core";
-import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget, protectService, issueServiceCert, fetchEndpoints } from "../api/client";
+import { fetchTargets, registerTarget, scanTarget, deleteTarget, deepScanTarget, protectService, issueServiceCert, fetchEndpoints, seedDemo } from "../api/client";
 import type { Target, ExposedService } from "../api/types";
 import { PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 import { useContextMenu, type ContextMenuItem } from "../components/ContextMenu";
@@ -63,6 +63,7 @@ export default function EstatePage() {
   };
   const scan = useMutation({ mutationFn: scanTarget, onSuccess: invalidate });
   const del = useMutation({ mutationFn: deleteTarget, onSuccess: invalidate });
+  const seed = useMutation({ mutationFn: () => seedDemo(false), onSuccess: invalidate });
 
   const containersTotal = targets.reduce((n, t) => n + (t.containers?.length ?? 0), 0);
 
@@ -114,7 +115,12 @@ export default function EstatePage() {
         <Spinner className="py-16" />
       ) : targets.length === 0 && endpoints.length === 0 ? (
         <Box style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2 }} py="xl">
-          <EmptyState title="No targets yet">Add a host above and scan it, or enrol a host agent under Endpoints.</EmptyState>
+          <EmptyState title="No targets yet">Add a host above and scan it, enrol a host agent under Endpoints — or load a sample estate to explore.</EmptyState>
+          <Group justify="center" mt="md">
+            <Button size="xs" radius={2} color="brand" variant="light" loading={seed.isPending} onClick={() => seed.mutate()}>
+              Load demo estate
+            </Button>
+          </Group>
         </Box>
       ) : view === "map" ? (
         <EstateMap targets={targets} endpoints={endpoints} onDeepScan={(t) => setDeepFor(t)} />

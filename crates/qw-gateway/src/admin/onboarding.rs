@@ -198,6 +198,185 @@ pub async fn onboarding_scan(
     .into_response()
 }
 
+// ---- Seeded demo estate ----
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SeedDemoRequest {
+    /// Seed even if the tenant already has real data (default false).
+    #[serde(default)]
+    pub force: bool,
+}
+
+fn demo_svc(port: u16, service: &str, pqc: &str, detail: &str) -> qw_store::ExposedService {
+    qw_store::ExposedService {
+        port,
+        service: service.to_string(),
+        pqc_status: pqc.to_string(),
+        detail: detail.to_string(),
+        source: "network".to_string(),
+        exposed: true,
+        protected_listen: None,
+        cert_id: None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn demo_finding(
+    location: &str,
+    title: &str,
+    desc: &str,
+    asset_type: qw_scanner::CryptoAssetType,
+    algorithm: Option<&str>,
+    pqc: PqcStatus,
+    severity: qw_scanner::FindingSeverity,
+    category: qw_scanner::FindingCategory,
+) -> Finding {
+    Finding {
+        id: uuid::Uuid::new_v4().to_string(),
+        category,
+        severity,
+        title: title.to_string(),
+        description: desc.to_string(),
+        asset: qw_scanner::CryptoAsset {
+            id: uuid::Uuid::new_v4().to_string(),
+            asset_type,
+            name: title.to_string(),
+            algorithm: algorithm.map(String::from),
+            key_length: None,
+            protocol_version: None,
+            location: qw_scanner::AssetLocation {
+                source_type: "demo".to_string(),
+                path: location.to_string(),
+                line: None,
+            },
+            discovered_by: "demo".to_string(),
+            discovered_at: Utc::now(),
+        },
+        remediation: None,
+        pqc_status: pqc,
+        metadata: std::collections::HashMap::from([("source".to_string(), "demo-seed".to_string())]),
+    }
+}
+
+/// `POST /api/onboarding/seed-demo` — populate a fresh install with a small,
+/// clearly-labelled sample estate so the dashboard shows value immediately.
+/// Refuses to run against a tenant that already has real data unless `force`.
+pub async fn seed_demo(
+    State(state): State<AppState>,
+    ctx: Option<axum::Extension<crate::auth::AuthContext>>,
+    body: Option<Json<SeedDemoRequest>>,
+) -> impl IntoResponse {
+    use qw_scanner::{CryptoAssetType as AT, FindingCategory as FC, FindingSeverity as FS};
+    let tenant = crate::auth::tenant_of(&ctx);
+    let force = body.map(|b| b.0.force).unwrap_or(false);
+
+    // Guard: don't pollute a real estate.
+    let existing_targets = state.store.list_targets(&tenant).len();
+    let existing_findings = state.store.all_findings(&tenant).len();
+    if !force && (existing_targets > 0 || existing_findings > 5) {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": "This tenant already has data. Pass force=true to seed the demo anyway.",
+                "targets": existing_targets,
+                "findings": existing_findings,
+            })),
+        )
+            .into_response();
+    }
+
+    let now = Utc::now();
+    // Three clearly-labelled demo hosts spanning the crypto spectrum.
+    let targets = vec![
+        qw_store::TargetRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "demo-web-01".into(),
+            host: "demo-web-01.acme.example".into(),
+            kind: "server".into(),
+            reachability: vec!["tls".into()],
+            environment: "production".into(),
+            tags: vec!["demo".into()],
+            exposed_services: vec![demo_svc(443, "https", "classical_secure", "TLS 1.3 with a classical (X25519) key exchange — harvestable today.")],
+            containers: vec![],
+            host_info: None,
+            deep_scanned: false,
+            pqc_status: "classical_secure".into(),
+            last_scanned: Some(now),
+            created_at: now,
+        },
+        qw_store::TargetRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "demo-db-01".into(),
+            host: "demo-db-01.acme.example".into(),
+            kind: "database".into(),
+            reachability: vec!["tls".into()],
+            environment: "production".into(),
+            tags: vec!["demo".into()],
+            exposed_services: vec![demo_svc(5432, "postgresql", "classical_weak", "PostgreSQL reachable with data unencrypted at rest.")],
+            containers: vec![],
+            host_info: None,
+            deep_scanned: false,
+            pqc_status: "classical_weak".into(),
+            last_scanned: Some(now),
+            created_at: now,
+        },
+        qw_store::TargetRow {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "demo-legacy-01".into(),
+            host: "demo-legacy-01.acme.example".into(),
+            kind: "server".into(),
+            reachability: vec!["ssh".into(), "rdp".into()],
+            environment: "staging".into(),
+            tags: vec!["demo".into()],
+            exposed_services: vec![
+                demo_svc(22, "ssh", "classical_weak", "SSH offers a deprecated MAC (hmac-sha1)."),
+                demo_svc(3389, "rdp", "classical_secure", "RDP negotiated CredSSP/NLA over classical TLS."),
+            ],
+            containers: vec![],
+            host_info: None,
+            deep_scanned: false,
+            pqc_status: "classical_weak".into(),
+            last_scanned: Some(now),
+            created_at: now,
+        },
+    ];
+    for t in &targets {
+        state.store.upsert_target(&tenant, t);
+    }
+
+    // A synthetic scan spanning the finding spectrum (confidence + evidence are
+    // derived automatically at record time).
+    let findings = vec![
+        demo_finding("demo-web-01.acme.example:443", "TLS 1.3 on demo-web-01", "Classical X25519 key exchange — harvest-now-decrypt-later exposed.", AT::TlsConnection, Some("X25519"), PqcStatus::ClassicalSecure, FS::Medium, FC::MissingPqc),
+        demo_finding("demo-web-01.acme.example:443", "Certificate #1 for demo-web-01", "Leaf signed with RSA-2048 / SHA-256 — forgeable by a quantum computer.", AT::Certificate, Some("RSA-SHA256"), PqcStatus::ClassicalSecure, FS::Medium, FC::ClassicalCrypto),
+        demo_finding("demo-db-01.acme.example", "demo-db-01 data at rest", "Database stores data with no encryption at rest.", AT::DataStore, Some("none"), PqcStatus::ClassicalWeak, FS::High, FC::MissingPqc),
+        demo_finding("./demo-app/Cargo.toml", "Crypto dependency: openssl", "Depends on a classical-only crypto library (no PQC).", AT::CryptoLibrary, Some("openssl"), PqcStatus::ClassicalSecure, FS::Medium, FC::MissingPqc),
+        demo_finding("demo-legacy-01.acme.example:22", "SSH MAC on demo-legacy-01", "SSH server offers deprecated hmac-sha1 MAC.", AT::ProtocolEndpoint, Some("hmac-sha1"), PqcStatus::ClassicalWeak, FS::High, FC::WeakAlgorithm),
+        demo_finding("demo-edge-01.acme.example:443", "TLS 1.3 on demo-edge-01", "Already negotiates X25519MLKEM768 hybrid — post-quantum ready.", AT::TlsConnection, Some("X25519MLKEM768"), PqcStatus::Hybrid, FS::Info, FC::PqcReady),
+    ];
+    let n = findings.len();
+    let result = qw_scanner::ScanResult {
+        scanner_id: "demo".to_string(),
+        target_id: "demo-seed".to_string(),
+        started_at: now,
+        completed_at: Utc::now(),
+        findings,
+        status: qw_scanner::ScanStatus::Completed,
+        error: None,
+    };
+    state.store.record_scan(&tenant, &result, &ScanTarget::network_host("demo-seed"));
+    crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
+
+    Json(json!({
+        "seeded": true,
+        "targets": targets.len(),
+        "findings": n,
+        "note": "Demo estate seeded. Explore Estate, Attack Paths, and Remediate; items are tagged 'demo'.",
+    }))
+    .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

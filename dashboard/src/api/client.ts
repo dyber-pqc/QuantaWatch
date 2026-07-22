@@ -896,6 +896,15 @@ export async function ctScan(domain: string, maxCerts?: number): Promise<CtScanR
     body: JSON.stringify({ domain, maxCerts }),
   });
 }
+
+/** Populate a fresh install with a small, labelled sample estate. */
+export async function seedDemo(force = false): Promise<{ seeded: boolean; targets: number; findings: number }> {
+  return fetchJSON("/api/onboarding/seed-demo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force }),
+  });
+}
 export async function issueCertificate(body: {
   subject: string;
   sans?: string[];
