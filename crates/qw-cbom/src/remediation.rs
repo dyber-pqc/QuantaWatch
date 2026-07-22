@@ -83,6 +83,10 @@ pub struct MigrationPlan {
     pub effort: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch: Option<MigrationPatch>,
+    /// Trust + audit surface carried from the finding.
+    pub confidence: qw_scanner::Confidence,
+    pub evidence: Vec<String>,
+    pub status: qw_scanner::FindingStatus,
 }
 
 /// True if this finding warrants a migration (not already PQC / advisory-only).
@@ -393,6 +397,9 @@ pub fn plan_migration(f: &FindingRecord) -> Option<MigrationPlan> {
         steps,
         effort: effort_of(strategy).to_string(),
         patch: build_patch(f, strategy, target),
+        confidence: f.confidence,
+        evidence: f.evidence.clone(),
+        status: f.status,
     })
 }
 

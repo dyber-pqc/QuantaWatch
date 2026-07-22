@@ -550,6 +550,9 @@ export interface MigrationPlan {
   steps: string[];
   effort: string;
   patch?: MigrationPatch;
+  confidence: "high" | "medium" | "low";
+  evidence: string[];
+  status: "open" | "acknowledged" | "suppressed";
 }
 
 // ---- Crypto-agility policies ----

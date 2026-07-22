@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge, Group, Box, Text, Progress, Button, Menu, ActionIcon, CopyButton, Checkbox, ScrollArea, Stack, Tooltip } from "@mantine/core";
-import { fetchMigrationPlans, fetchIntegrations, syncRemediations, remediateFinding, verifyFinding } from "../api/client";
+import { fetchMigrationPlans, fetchIntegrations, syncRemediations, remediateFinding, verifyFinding, setFindingStatus } from "../api/client";
 import type { VerifyResult } from "../api/client";
 import type { MigrationPlan, MigrationPriority, RemediationTicket } from "../api/types";
 import { Card, PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
@@ -13,6 +13,11 @@ const PRIO: Record<MigrationPriority, { label: string; short: string; color: str
   p3: { label: "P3", short: "P3", color: "gray", order: 3 },
 };
 const prettyStrategy = (s: string) => s.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+const CONF: Record<string, { label: string; color: string }> = {
+  high: { label: "high confidence", color: "signal" },
+  medium: { label: "medium confidence", color: "yellow" },
+  low: { label: "low confidence · characterize", color: "orange" },
+};
 const rbKey = (id: string) => `qw-runbook-${id}`;
 
 function CopyIcon({ copied }: { copied: boolean }) {
@@ -81,6 +86,14 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
       qc.invalidateQueries({ queryKey: ["attack-paths"] });
     },
   });
+  const [showEvidence, setShowEvidence] = useState(false);
+  const triageMut = useMutation({
+    mutationFn: (s: "open" | "acknowledged" | "suppressed") => setFindingStatus(plan.findingId, s),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["migration-plans"] });
+      qc.invalidateQueries({ queryKey: ["attack-paths"] });
+    },
+  });
 
   const runbookMd = `# ${plan.title}\n\nPriority: ${prio.label}\nStrategy: ${prettyStrategy(plan.strategy)}\nCurrent: ${plan.currentAlgorithm} → Target: ${plan.targetAlgorithm}\n\n${plan.steps.map((s, i) => `${i + 1}. [${done.has(i) ? "x" : " "}] ${s}`).join("\n")}`;
 
@@ -92,6 +105,12 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
             <Badge variant="light" color={prio.color} radius={2} size="sm" tt="none" fw={700}>{prio.label}</Badge>
             <Badge variant="light" color="brand" radius={2} size="sm" tt="none" fw={600}>{prettyStrategy(plan.strategy)}</Badge>
             <Badge variant="light" color="gray" radius={2} size="sm" tt="none" fw={600}>effort: {plan.effort}</Badge>
+            <Badge variant="light" color={CONF[plan.confidence]?.color ?? "gray"} radius={2} size="sm" tt="none" fw={600}>
+              {CONF[plan.confidence]?.label ?? "confidence"}
+            </Badge>
+            {plan.status !== "open" && (
+              <Badge variant="light" color={plan.status === "suppressed" ? "gray" : "orange"} radius={2} size="sm" tt="none" fw={700}>{plan.status}</Badge>
+            )}
             {complete && <Badge variant="light" color="signal" radius={2} size="sm" tt="none" fw={700}>✓ complete</Badge>}
           </Group>
           <Text fw={700} ff="heading" fz="1.05rem" c="white">{plan.title}</Text>
@@ -109,6 +128,36 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
       </Group>
 
       <Text size="12.5px" c="dimmed" mt="sm" style={{ lineHeight: 1.5 }}>{plan.rationale}</Text>
+
+      {/* Evidence trail — what the probe actually observed */}
+      {plan.evidence?.length > 0 && (
+        <Box mt="sm">
+          <Button size="compact-xs" variant="subtle" color="gray" radius={2} onClick={() => setShowEvidence((v) => !v)}
+            leftSection={<span style={{ fontFamily: "monospace" }}>{showEvidence ? "▾" : "▸"}</span>}>
+            Evidence ({plan.evidence.length})
+          </Button>
+          {showEvidence && (
+            <Box mt={4} px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
+              {plan.evidence.map((e, i) => (
+                <Text key={i} ff="monospace" size="11px" c="dark.1" style={{ lineHeight: 1.6 }}>{e}</Text>
+              ))}
+            </Box>
+          )}
+        </Box>
+      )}
+
+      {/* Triage — acknowledge (accepted risk) or suppress (false positive) */}
+      <Group gap={6} mt="sm">
+        <Text size="10px" fw={700} tt="uppercase" c="dimmed" style={{ letterSpacing: "0.06em" }}>Triage</Text>
+        {(["open", "acknowledged", "suppressed"] as const).map((s) => (
+          <Button key={s} size="compact-xs" radius={2} loading={triageMut.isPending && triageMut.variables === s}
+            variant={plan.status === s ? "filled" : "default"}
+            color={s === "suppressed" ? "gray" : s === "acknowledged" ? "orange" : "brand"}
+            onClick={() => triageMut.mutate(s)} disabled={plan.status === s}>
+            {s === "open" ? "Reopen" : s === "acknowledged" ? "Acknowledge" : "Suppress"}
+          </Button>
+        ))}
+      </Group>
 
       {/* Progress */}
       <Group justify="space-between" mt="md" mb={4}>

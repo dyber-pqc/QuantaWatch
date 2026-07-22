@@ -939,6 +939,19 @@ export async function verifyFinding(findingId: string): Promise<VerifyResult> {
   return fetchJSON<VerifyResult>(`/api/findings/${findingId}/verify`, { method: "POST" });
 }
 
+/** Triage a finding: acknowledge (accepted risk) or suppress (false positive). */
+export async function setFindingStatus(
+  findingId: string,
+  status: "open" | "acknowledged" | "suppressed",
+  note?: string,
+): Promise<{ id: string; status: string; note?: string }> {
+  return fetchJSON(`/api/findings/${findingId}/status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status, note }),
+  });
+}
+
 export async function fetchMigrationPlans(): Promise<{ plans: MigrationPlan[]; total: number }> {
   try {
     return await fetchJSON<{ plans: MigrationPlan[]; total: number }>("/api/remediations/plans");
