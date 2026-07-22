@@ -69,6 +69,8 @@ export default function SettingsPage() {
             label="Require approval for active scans" description="Intrusive (network/SSH/RDP) scans must be approved before they run." />
           <Switch checked={draft.externalLookupsEnabled} onChange={(e) => set("externalLookupsEnabled", e.currentTarget.checked)}
             label="Allow outbound lookups" description="Third-party lookups (certificate-transparency / crt.sh, connector APIs). Disable in restricted environments." color="cyan" />
+          <Switch checked={draft.k8sAdmissionEnforce} onChange={(e) => set("k8sAdmissionEnforce", e.currentTarget.checked)}
+            label="Kubernetes admission: enforce" description="When the admission webhook is installed, DENY workloads with quantum-vulnerable crypto (TLS secrets / ingresses). Off = monitor (admit with a warning)." color="red" />
           <Group gap="lg" wrap="wrap">
             <NumberInput size="xs" radius={2} label="Max scan concurrency" description="0 = unlimited" value={draft.maxScanConcurrency} onChange={(v) => set("maxScanConcurrency", typeof v === "number" ? v : 0)} min={0} max={256} w={180} />
             <NumberInput size="xs" radius={2} label="Finding retention (days)" description="0 = keep forever" value={draft.findingRetentionDays} onChange={(v) => set("findingRetentionDays", typeof v === "number" ? v : 0)} min={0} max={3650} w={180} />

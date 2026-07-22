@@ -70,6 +70,8 @@ async fn auth_layer(
         || path.contains("/api/webhooks/")
         // Host-agent report: authenticated by the enrollment token in-handler.
         || path.ends_with("/api/endpoints/report")
+        // K8s admission webhook: caller is the apiserver over mTLS, no bearer.
+        || path.ends_with("/api/k8s/admission")
     {
         return next.run(req).await;
     }
@@ -353,6 +355,12 @@ fn admin_routes() -> Router<AppState> {
         )
         // Certificate-transparency monitoring for a domain.
         .route("/api/ct/scan", post(crate::admin::ct_api::ct_scan))
+        // Kubernetes ValidatingAdmissionWebhook (called by the apiserver; auth
+        // is mTLS at the cluster edge, so this route is exempt from bearer auth).
+        .route(
+            "/api/k8s/admission",
+            post(crate::admin::k8s_admission::admission_review),
+        )
         // Host-agent endpoints (firmware / boot-chain crypto inventory).
         .route("/api/endpoints", get(crate::admin::endpoints_api::list_endpoints))
         .route("/api/endpoints/enroll", get(crate::admin::endpoints_api::enroll_info))

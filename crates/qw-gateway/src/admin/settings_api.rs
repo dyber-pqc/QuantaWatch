@@ -33,6 +33,9 @@ pub struct RuntimeSettings {
     pub require_approval_for_active_scans: bool,
     /// Allow outbound lookups to third parties (crt.sh CT logs, connector APIs).
     pub external_lookups_enabled: bool,
+    /// Kubernetes admission: when true, DENY workloads with quantum-vulnerable
+    /// crypto; when false (default) admit them but return a warning (monitor).
+    pub k8s_admission_enforce: bool,
 }
 
 impl Default for RuntimeSettings {
@@ -45,6 +48,7 @@ impl Default for RuntimeSettings {
             finding_retention_days: 0,
             require_approval_for_active_scans: false,
             external_lookups_enabled: true,
+            k8s_admission_enforce: false,
         }
     }
 }

@@ -1,0 +1,82 @@
+# QuantaWatch Kubernetes admission webhook.
+#
+# Registers QuantaWatch as a ValidatingAdmissionWebhook so the apiserver checks
+# the crypto a resource carries before admitting it. In MONITOR mode (default)
+# a quantum-vulnerable workload is admitted with a warning; flip Settings →
+# "Kubernetes admission: enforce" (or set runtime setting k8sAdmissionEnforce)
+# to DENY instead.
+#
+# Prerequisites
+# -------------
+# 1. QuantaWatch reachable from the apiserver over HTTPS at /api/k8s/admission.
+#    The apiserver ONLY calls webhooks over TLS, so terminate TLS in front of the
+#    gateway (or run the PQC overlay) and put that CA cert in caBundle below.
+# 2. Replace <CA_BUNDLE_BASE64> with `base64 -w0` of the serving CA cert, and
+#    point clientConfig at your gateway (url for out-of-cluster, or service for
+#    in-cluster).
+#
+# failurePolicy: Ignore is deliberate — a webhook outage must never wedge the
+# cluster. Change to Fail only once you trust the deployment.
+
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: quantawatch-pqc
+  labels:
+    app.kubernetes.io/name: quantawatch
+    app.kubernetes.io/component: admission
+webhooks:
+  - name: pqc.quantawatch.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore          # never wedge the cluster on a webhook outage
+    timeoutSeconds: 5
+    matchPolicy: Equivalent
+    # Only the resources that carry crypto we can evaluate.
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["secrets"]
+      - apiGroups: ["networking.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["ingresses"]
+    # Skip QuantaWatch's own namespace and kube-system to avoid bootstrap loops.
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: ["kube-system", "quantawatch"]
+    clientConfig:
+      # OUT-OF-CLUSTER gateway: use url (must be https). Example:
+      url: "https://quantawatch.example.com/api/k8s/admission"
+      # IN-CLUSTER gateway: comment out url above and use service instead:
+      # service:
+      #   namespace: quantawatch
+      #   name: quantawatch
+      #   path: /api/k8s/admission
+      #   port: 9091
+      caBundle: "<CA_BUNDLE_BASE64>"
+---
+# Quick manual test (no cluster required) — POST an AdmissionReview directly:
+#
+#   curl -sk -X POST https://<gateway>/api/k8s/admission \
+#     -H 'Content-Type: application/json' -d @review.json
+#
+# where review.json is:
+# {
+#   "apiVersion": "admission.k8s.io/v1", "kind": "AdmissionReview",
+#   "request": {
+#     "uid": "1", "kind": {"group":"","version":"v1","kind":"Secret"},
+#     "name": "web-tls", "namespace": "prod", "operation": "CREATE",
+#     "object": {
+#       "metadata": {"name":"web-tls","namespace":"prod"},
+#       "type": "kubernetes.io/tls",
+#       "data": {"tls.crt": "<base64 of the PEM certificate>"}
+#     }
+#   }
+# }
+#
+# Monitor mode -> response.allowed=true with a warning; enforce mode ->
+# response.allowed=false, status.code=403.

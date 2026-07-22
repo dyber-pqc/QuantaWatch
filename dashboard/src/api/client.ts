@@ -922,6 +922,7 @@ export interface RuntimeSettings {
   findingRetentionDays: number;
   requireApprovalForActiveScans: boolean;
   externalLookupsEnabled: boolean;
+  k8sAdmissionEnforce: boolean;
 }
 export interface SettingsResponse {
   settings: RuntimeSettings;
