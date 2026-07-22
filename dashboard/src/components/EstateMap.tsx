@@ -158,6 +158,15 @@ export function EstateMap({ targets, endpoints = [], onDeepScan }: { targets: Ta
   };
   const reset = () => { viewRef.current = { k: 1, tx: 0, ty: 0 }; applyView(); };
 
+  // Fullscreen overlay so panning/zooming doesn't move the page. Esc exits.
+  const [full, setFull] = useState(false);
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setFull(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [full]);
+
   const nodeColor = (n: MapNode) =>
     n.kind === "host" ? pqcHex(n.t.pqcStatus)
       : n.kind === "service" ? pqcHex(n.s.pqcStatus)
@@ -167,7 +176,10 @@ export function EstateMap({ targets, endpoints = [], onDeepScan }: { targets: Ta
   const nodeR = (n: MapNode) => (n.kind === "host" || n.kind === "endpoint" ? 22 : n.kind === "container" ? 14 : 16);
 
   return (
-    <div className="relative overflow-hidden rounded-lg border border-white/[0.06] bg-gradient-to-b from-surface-950/60 to-surface-900/30">
+    <div
+      className="relative overflow-hidden border border-white/[0.06] bg-gradient-to-b from-surface-950/60 to-surface-900/30"
+      style={full ? { position: "fixed", inset: 0, zIndex: 9999, borderRadius: 0, height: "100vh" } : { borderRadius: 8 }}
+    >
       <div className="absolute right-3 top-3 z-10 flex flex-col gap-1 rounded-lg border border-white/10 bg-surface-900/95 p-1">
         <button type="button" onClick={() => zoomBy(1.3)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title="Zoom in">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" d="M12 5v14M5 12h14" /></svg>
@@ -178,6 +190,13 @@ export function EstateMap({ targets, endpoints = [], onDeepScan }: { targets: Ta
         <button type="button" onClick={reset} className="flex h-7 w-7 items-center justify-center rounded text-gray-400 hover:bg-white/10" title="Reset view">
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M20.25 20.25v-4.5m0 4.5h-4.5m4.5 0L15 15M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75v4.5m0-4.5h-4.5m4.5 0L15 9" /></svg>
         </button>
+        <button type="button" onClick={() => setFull((v) => !v)} className="flex h-7 w-7 items-center justify-center rounded text-gray-300 hover:bg-white/10" title={full ? "Exit full screen (Esc)" : "Full screen"}>
+          {full ? (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25" /></svg>
+          ) : (
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" strokeWidth={1.7} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M20.25 20.25v-4.5m0 4.5h-4.5m4.5 0L15 15M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75v4.5m0-4.5h-4.5m4.5 0L15 9" /></svg>
+          )}
+        </button>
       </div>
       <div className="pointer-events-none absolute left-3 top-3 z-10 rounded bg-surface-900/90 px-2 py-0.5 text-[10px] text-gray-500">
         <span ref={labelRef}>100%</span> · click a node for details · scroll to zoom
@@ -187,7 +206,7 @@ export function EstateMap({ targets, endpoints = [], onDeepScan }: { targets: Ta
         ref={svgRef}
         viewBox={`0 0 ${VBW} ${layout.height}`}
         className="w-full cursor-grab touch-none active:cursor-grabbing"
-        style={{ height: 460 }}
+        style={{ height: full ? "100vh" : 460 }}
         preserveAspectRatio="xMidYMid meet"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

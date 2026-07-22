@@ -60,6 +60,37 @@ class Boundary extends Component<{ children: ReactNode; label: string }, { err: 
 
 type PanelTab = "problems" | "output" | "terminal";
 
+// Console command reference — drives `help`, `help <cmd>`, and `<cmd> --help`.
+const CMD_HELP: Record<string, { usage: string; desc: string }> = {
+  help: { usage: "help [command]", desc: "list commands, or show usage for one" },
+  clear: { usage: "clear", desc: "clear the terminal" },
+  whoami: { usage: "whoami", desc: "current user, role and auth status" },
+  posture: { usage: "posture", desc: "overall PQC posture score" },
+  scan: { usage: "scan", desc: "run a full scan now" },
+  sync: { usage: "sync", desc: "reconcile remediation ticket status" },
+  verify: { usage: "verify", desc: "verify the audit hash chain" },
+  targets: { usage: "targets", desc: "list Estate targets (alias: estate)" },
+  estate: { usage: "estate", desc: "alias for targets" },
+  assets: { usage: "assets", desc: "asset inventory summary" },
+  endpoints: { usage: "endpoints", desc: "host-agent endpoints summary" },
+  certs: { usage: "certs", desc: "issued certificate summary" },
+  paths: { usage: "paths", desc: "top attack paths" },
+  plans: { usage: "plans", desc: "open migration plans (alias: remediate)" },
+  remediate: { usage: "remediate", desc: "alias for plans" },
+  alerts: { usage: "alerts", desc: "recent alerts" },
+  threats: { usage: "threats", desc: "recent threats" },
+  frameworks: { usage: "frameworks", desc: "compliance framework verdicts" },
+  gate: { usage: "gate <id>", desc: "one framework (cnsa-2.0|nist-800-53|pci-dss|fedramp)" },
+  evidence: { usage: "evidence", desc: "download the signed evidence pack" },
+  cbom: { usage: "cbom", desc: "download the CBOM" },
+  ct: { usage: "ct <domain>", desc: "certificate-transparency lookup" },
+  seed: { usage: "seed", desc: "load the demo estate" },
+  pause: { usage: "pause", desc: "pause automated scanning" },
+  resume: { usage: "resume", desc: "resume automated scanning" },
+  settings: { usage: "settings", desc: "show runtime settings" },
+  open: { usage: "open <view>", desc: "navigate to a page, e.g. open estate" },
+};
+
 export default function IdeShell({ children }: { children: ReactNode }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
@@ -145,16 +176,33 @@ export default function IdeShell({ children }: { children: ReactNode }) {
     if (!cmd) return;
     setPanelOpen(true); setPanelTab("terminal");
     push(`qw> ${cmd}`);
-    const [name, ...args] = cmd.split(/\s+/);
+    let name = (cmd.split(/\s+/)[0] || "").toLowerCase();
+    const args = cmd.split(/\s+/).slice(1);
+    // Normalize help aliases so `--help`, `-h`, `?` all work.
+    if (["--help", "-h", "-help", "?", "commands"].includes(name)) name = "help";
+    const wantsHelp = args.some((a) => a === "--help" || a === "-h");
+
+    // Per-command usage: `<cmd> --help`, or `help <cmd>`.
+    if (name === "help") {
+      const target = (args[0] || "").toLowerCase().replace(/^-+/, "");
+      if (target && CMD_HELP[target]) {
+        push(`usage: ${CMD_HELP[target].usage}  —  ${CMD_HELP[target].desc}`);
+      } else if (target) {
+        push(`no such command '${target}'. type 'help' for the list.`);
+      } else {
+        push("commands (run '<command> --help' for usage):");
+        Object.entries(CMD_HELP).forEach(([n, h]) => push(`  ${n.padEnd(11)} ${h.desc}`));
+      }
+      return;
+    }
+    if (wantsHelp) {
+      if (CMD_HELP[name]) push(`usage: ${CMD_HELP[name].usage}  —  ${CMD_HELP[name].desc}`);
+      else push(`no such command '${name}'. type 'help' for the list.`);
+      return;
+    }
+
     try {
-      switch (name.toLowerCase()) {
-        case "help": {
-          push("core:    help · clear · whoami · posture · scan · sync · verify");
-          push("inventory: targets · assets · endpoints · certs · paths · plans · alerts · threats");
-          push("compliance: frameworks · gate <id> · evidence · cbom");
-          push("actions: ct <domain> · seed · pause · resume · settings · open <view>");
-          break;
-        }
+      switch (name) {
         case "clear": setTerm([]); break;
         case "whoami": { const m = await fetchMe(); push(`${m.username ?? "anonymous"} · role ${m.role ?? "—"} · auth ${m.authEnabled ? "on" : "off"}`); break; }
         case "posture": { const p = await fetchPosture(); push(`posture ${Math.round(p.overallScore)}/100 · ${p.totalAssets} assets`); break; }
@@ -450,10 +498,11 @@ function BottomPanel({ open, tab, onTab, onToggle, term, run, onProblem }: { ope
             </div>
           )}
           {tab === "terminal" && (
-            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }} onClick={() => inputRef.current?.focus()}>
-              <div ref={termRef} style={{ flex: 1, overflow: "auto", padding: "6px 12px 2px", fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6 }}>
+            <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+              onClick={() => { if (!window.getSelection()?.toString()) inputRef.current?.focus(); }}>
+              <div ref={termRef} style={{ flex: 1, overflow: "auto", padding: "6px 12px 2px", fontFamily: "var(--font-mono)", fontSize: 11.5, lineHeight: 1.6, userSelect: "text", cursor: "text" }}>
                 {term.map((l, i) => (
-                  <div key={i} style={{ whiteSpace: "pre-wrap", color: l.startsWith("qw>") ? "var(--mantine-color-brand-3)" : l.startsWith("error:") ? "var(--mantine-color-red-4)" : "var(--mantine-color-dark-1)" }}>{l}</div>
+                  <div key={i} style={{ whiteSpace: "pre-wrap", userSelect: "text", color: l.startsWith("qw>") ? "var(--mantine-color-brand-3)" : l.startsWith("error:") ? "var(--mantine-color-red-4)" : "var(--mantine-color-dark-1)" }}>{l}</div>
                 ))}
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 12px 8px", borderTop: `1px solid ${C.border}` }}>

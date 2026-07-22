@@ -1,7 +1,63 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Badge, Box, Group, Stack, Text, Button, Divider } from "@mantine/core";
 import { fetchAlerts, sendTestAlert, fetchAttestation } from "../api/client";
 import type { AlertEvent, AlertSeverity } from "../api/types";
 import { Card, PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
+import { OverlayModal } from "../components/OverlayModal";
+
+// Which page a given alert kind links to, for "View related".
+const KIND_LINK: Record<string, { to: string; label: string }> = {
+  new_attack_path: { to: "/attack-paths", label: "Open attack paths" },
+  new_critical: { to: "/scans", label: "Open findings" },
+  posture_drop: { to: "/posture", label: "Open PQC posture" },
+  cert_expiring: { to: "/certificates", label: "Open certificates" },
+  slo_breach: { to: "/frameworks", label: "Open frameworks" },
+  remediation_resolved: { to: "/remediations", label: "Open remediation" },
+};
+const SEV_COLOR: Record<string, string> = { critical: "red", warning: "orange", info: "brand" };
+
+function AlertDetail({ alert, onClose }: { alert: AlertEvent | null; onClose: () => void }) {
+  const navigate = useNavigate();
+  if (!alert) return null;
+  const link = KIND_LINK[alert.kind];
+  const meta = Object.entries(alert.metadata ?? {});
+  return (
+    <OverlayModal opened={!!alert} onClose={onClose} width={560} title={alert.title}>
+      <Stack gap="sm">
+        <Group gap={8} wrap="wrap">
+          <Badge color={SEV_COLOR[alert.severity] ?? "gray"} radius={2} variant="light">{alert.severity}</Badge>
+          <Badge color="gray" radius={2} variant="outline" tt="none">{alert.kind}</Badge>
+          <Text size="11px" c="dimmed">{new Date(alert.timestamp).toLocaleString()}</Text>
+          <Text size="11px" c="dimmed">· delivered to {alert.delivered} channel(s)</Text>
+        </Group>
+        <Box>
+          <Text size="10px" fw={700} tt="uppercase" c="dimmed" mb={3} style={{ letterSpacing: "0.06em" }}>Details</Text>
+          <Text size="13px" c="gray.3" style={{ lineHeight: 1.6 }}>{alert.message}</Text>
+        </Box>
+        {meta.length > 0 && (
+          <Box>
+            <Text size="10px" fw={700} tt="uppercase" c="dimmed" mb={4} style={{ letterSpacing: "0.06em" }}>Metadata</Text>
+            <Box px="sm" py="xs" style={{ border: "1px solid var(--mantine-color-dark-4)", borderRadius: 2, background: "var(--mantine-color-dark-7)" }}>
+              {meta.map(([k, v]) => (
+                <Group key={k} justify="space-between" gap={12} wrap="nowrap">
+                  <Text ff="monospace" size="11px" c="dark.2">{k}</Text>
+                  <Text ff="monospace" size="11px" c="gray.3" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{v}</Text>
+                </Group>
+              ))}
+            </Box>
+          </Box>
+        )}
+        <Divider my={2} />
+        <Group justify="flex-end" gap="sm">
+          <Button size="xs" radius={2} variant="default" onClick={onClose}>Close</Button>
+          {link && <Button size="xs" radius={2} color="brand" onClick={() => { onClose(); navigate(link.to); }}>{link.label}</Button>}
+        </Group>
+      </Stack>
+    </OverlayModal>
+  );
+}
 
 const severityStyle: Record<AlertSeverity, { chip: string; dot: string }> = {
   critical: { chip: "bg-rose-500/15 text-rose-300", dot: "bg-rose-400" },
@@ -16,10 +72,10 @@ const kindLabel: Record<string, string> = {
   test: "Test",
 };
 
-function AlertRow({ alert }: { alert: AlertEvent }) {
+function AlertRow({ alert, onClick }: { alert: AlertEvent; onClick: () => void }) {
   const s = severityStyle[alert.severity] ?? severityStyle.info;
   return (
-    <div className="flex items-start gap-3 px-4 py-3">
+    <div className="flex items-start gap-3 px-4 py-3 cursor-pointer transition-colors hover:bg-white/[0.04]" onClick={onClick}>
       <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${s.dot}`} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
@@ -80,6 +136,7 @@ function Field({ label, value, mono = false }: { label: string; value: string; m
 
 export default function AlertsPage() {
   const queryClient = useQueryClient();
+  const [sel, setSel] = useState<AlertEvent | null>(null);
   const { data, isLoading } = useQuery({ queryKey: ["alerts"], queryFn: () => fetchAlerts(100) });
 
   const testMutation = useMutation({
@@ -94,9 +151,10 @@ export default function AlertsPage() {
 
   return (
     <div className="space-y-5">
+      <AlertDetail alert={sel} onClose={() => setSel(null)} />
       <PageHeader
         title="Alerts"
-        subtitle="Continuous-attestation notifications on posture drops, critical findings, and cert expiry"
+        subtitle="Continuous-attestation notifications on posture drops, critical findings, and cert expiry — click an alert for detail"
         actions={
           <button onClick={() => testMutation.mutate()} disabled={testMutation.isPending} className="qw-btn-ghost">
             {testMutation.isPending ? "Sending…" : "Send Test Alert"}
@@ -136,7 +194,7 @@ export default function AlertsPage() {
             ) : (
               <div className="divide-y divide-white/5">
                 {alerts.map((a) => (
-                  <AlertRow key={a.id} alert={a} />
+                  <AlertRow key={a.id} alert={a} onClick={() => setSel(a)} />
                 ))}
               </div>
             )}
