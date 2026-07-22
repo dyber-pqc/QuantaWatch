@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Badge, Group, Box, Text, Progress, Button, Menu, ActionIcon, CopyButton, Checkbox, ScrollArea, Stack, Tooltip } from "@mantine/core";
-import { fetchMigrationPlans, fetchIntegrations, syncRemediations, remediateFinding, verifyFinding, setFindingStatus } from "../api/client";
-import type { VerifyResult } from "../api/client";
+import { fetchMigrationPlans, fetchIntegrations, syncRemediations, remediateFinding, verifyFinding, setFindingStatus, applyFix } from "../api/client";
+import type { VerifyResult, ApplyFixResult } from "../api/client";
 import type { MigrationPlan, MigrationPriority, RemediationTicket } from "../api/types";
 import { Card, PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
 
@@ -87,6 +87,19 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
     },
   });
   const [showEvidence, setShowEvidence] = useState(false);
+  const [applied, setApplied] = useState<ApplyFixResult | null>(null);
+  const applyMut = useMutation({
+    mutationFn: () => applyFix(plan.findingId),
+    onSuccess: (r) => {
+      setApplied(r);
+      if (r.applied) {
+        qc.invalidateQueries({ queryKey: ["attack-paths"] });
+        qc.invalidateQueries({ queryKey: ["overlay"] });
+        qc.invalidateQueries({ queryKey: ["pki"] });
+        qc.invalidateQueries({ queryKey: ["targets"] });
+      }
+    },
+  });
   const triageMut = useMutation({
     mutationFn: (s: "open" | "acknowledged" | "suppressed") => setFindingStatus(plan.findingId, s),
     onSuccess: () => {
@@ -193,8 +206,19 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
 
       {plan.patch && <PatchDiff patch={plan.patch} />}
 
-      {/* Verify — actively re-check whether the fix is live */}
+      {/* Apply + Verify — auto-remediate, then re-check whether the fix is live */}
       <Group mt="md" gap={8} align="center">
+        <Button
+          variant="filled"
+          color="brand"
+          radius={2}
+          size="compact-sm"
+          loading={applyMut.isPending}
+          onClick={() => applyMut.mutate()}
+          leftSection={<svg width={14} height={14} fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" d="m3.75 13.5 10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" /></svg>}
+        >
+          Apply fix
+        </Button>
         <Button
           variant="light"
           color="signal"
@@ -206,6 +230,20 @@ function Runbook({ plan, doneArr, toggle, markAll, remediable }: {
         >
           Verify fix
         </Button>
+        {applyMut.isError && <Text size="xs" c="red.4">apply failed</Text>}
+        {applied && (
+          applied.applied ? (
+            <Group gap={6} align="center" wrap="nowrap">
+              <Badge radius={2} variant="light" color="signal" tt="none" fw={700}>{applied.action === "issue-cert" ? "✓ cert issued" : "✓ overlay up"}</Badge>
+              <Text size="11.5px" c="dimmed" style={{ lineHeight: 1.4 }}>{applied.detail}</Text>
+            </Group>
+          ) : (
+            <Group gap={6} align="center" wrap="nowrap">
+              <Badge radius={2} variant="light" color="gray" tt="none">not auto-fixable</Badge>
+              <Text size="11.5px" c="dimmed" style={{ lineHeight: 1.4 }}>{applied.guidance ?? applied.reason}</Text>
+            </Group>
+          )
+        )}
         {verifyMut.isError && <Text size="xs" c="red.4">re-check failed</Text>}
         {verify && (
           verify.verifiable ? (

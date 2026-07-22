@@ -429,6 +429,134 @@ pub async fn set_finding_status(
     }
 }
 
+/// One-click auto-remediation for a finding that maps to a registered Estate
+/// service: front it with the PQC overlay (or, for a certificate finding, issue
+/// a hybrid ML-DSA cert). Reports honestly — the overlay creates a NEW
+/// post-quantum front; the original endpoint stays classical until traffic moves
+/// to it. Findings that don't map to a known service return a clear reason.
+pub async fn apply_fix(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+    Path(finding_id): Path<String>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    let Some(record) = state.store.get_finding(&tenant, &finding_id) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("Finding '{finding_id}' not found") })),
+        )
+            .into_response();
+    };
+
+    let location = record.location.clone();
+    let port = port_of(&location);
+    let host = host_of(&location).to_string();
+
+    // Find a registered target on this host that exposes the finding's port.
+    let target = port.and_then(|p| {
+        state
+            .store
+            .list_targets(&tenant)
+            .into_iter()
+            .find(|t| t.host == host && t.exposed_services.iter().any(|s| s.port == p))
+    });
+
+    let (Some(mut target), Some(port)) = (target, port) else {
+        return Json(json!({
+            "applied": false,
+            "reason": "This finding doesn't map to a registered Estate service the gateway can act on.",
+            "guidance": "Register the host in Estate (so it has this service), then apply the fix — or remediate it manually with the runbook.",
+        }))
+        .into_response();
+    };
+
+    // A certificate finding → issue a hybrid ML-DSA cert; anything else → front
+    // the service with the PQC overlay.
+    let is_cert = matches!(record.asset_type, CryptoAssetType::Certificate);
+    if is_cert {
+        let Some(ca) = &state.ca else {
+            return Json(json!({ "applied": false, "reason": "The internal PKI/CA is not configured (set pki.enabled)." })).into_response();
+        };
+        match ca.issue(&host, &[host.clone()], state.config.pki.default_validity_days, true) {
+            Ok((row, _key_pem)) => {
+                state.store.record_certificate(&tenant, &row);
+                for s in target.exposed_services.iter_mut() {
+                    if s.port == port {
+                        s.cert_id = Some(row.id.clone());
+                    }
+                }
+                state.store.upsert_target(&tenant, &target);
+                return Json(json!({
+                    "applied": true,
+                    "action": "issue-cert",
+                    "certificateId": row.id,
+                    "subject": row.subject,
+                    "detail": format!("Issued a hybrid ML-DSA certificate for {host}. Deploy it on {host}:{port} and re-verify."),
+                }))
+                .into_response();
+            }
+            Err(e) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "applied": false, "reason": format!("cert issuance failed: {e}") }))).into_response();
+            }
+        }
+    }
+
+    // Overlay path: mint a PQC-terminating front for host:port.
+    let svc_name = target
+        .exposed_services
+        .iter()
+        .find(|s| s.port == port)
+        .map(|s| s.service.clone())
+        .unwrap_or_default();
+    let upstream_tls = matches!(
+        svc_name.as_str(),
+        "https" | "https-alt" | "imaps" | "ldaps" | "smtps" | "pop3s" | "dns-over-tls"
+    );
+    let upstream = format!("{host}:{port}");
+    let route_id = format!("target:{}:{}", target.id, port);
+    match state
+        .overlay
+        .add_route(&route_id, "0.0.0.0:0", &upstream, upstream_tls, "hybrid")
+        .await
+    {
+        Ok(stats) => {
+            let listen_addr = stats.listen.clone();
+            for s in target.exposed_services.iter_mut() {
+                if s.port == port {
+                    s.protected_listen = Some(listen_addr.clone());
+                }
+            }
+            state.store.upsert_target(&tenant, &target);
+            state.store.record_overlay_route(
+                &tenant,
+                &qw_store::OverlayRouteRow {
+                    id: route_id,
+                    target_id: Some(target.id.clone()),
+                    listen: listen_addr.clone(),
+                    upstream: upstream.clone(),
+                    upstream_tls,
+                    mode: "hybrid".to_string(),
+                    created_at: chrono::Utc::now(),
+                },
+            );
+            crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
+            Json(json!({
+                "applied": true,
+                "action": "overlay",
+                "protectedListen": listen_addr,
+                "hybridGroup": "X25519MLKEM768",
+                "detail": format!("Fronted {upstream} with the PQC overlay at {listen_addr} (X25519MLKEM768). Point clients there. The original endpoint stays classical until traffic moves to the overlay or you enable hybrid on it directly — verify with 'Verify fix'."),
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({ "applied": false, "reason": format!("could not protect service: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
 /// Return the concrete PQC migration plan for a single finding (without filing
 /// anything) — the target algorithm, rationale, steps, and a proposed patch.
 pub async fn get_migration_plan(

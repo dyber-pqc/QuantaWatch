@@ -150,6 +150,10 @@ pub fn route_permission(method: &Method, path: &str) -> String {
     if path.contains("/findings/") && path.contains("/verify") {
         return "scans:write".to_string();
     }
+    // Auto-remediation applies an overlay / issues a cert.
+    if path.contains("/findings/") && path.contains("/apply-fix") {
+        return "remediation:write".to_string();
+    }
     // Triage (acknowledge / suppress) mutates the finding.
     if path.contains("/findings/") && path.contains("/status") {
         return "findings:write".to_string();

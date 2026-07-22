@@ -1013,6 +1013,21 @@ export async function verifyFinding(findingId: string): Promise<VerifyResult> {
   return fetchJSON<VerifyResult>(`/api/findings/${findingId}/verify`, { method: "POST" });
 }
 
+export interface ApplyFixResult {
+  applied: boolean;
+  action?: "overlay" | "issue-cert";
+  protectedListen?: string;
+  hybridGroup?: string;
+  certificateId?: string;
+  detail?: string;
+  reason?: string;
+  guidance?: string;
+}
+/** Auto-remediate a finding that maps to a registered service (overlay / cert). */
+export async function applyFix(findingId: string): Promise<ApplyFixResult> {
+  return fetchJSON<ApplyFixResult>(`/api/findings/${findingId}/apply-fix`, { method: "POST" });
+}
+
 /** Triage a finding: acknowledge (accepted risk) or suppress (false positive). */
 export async function setFindingStatus(
   findingId: string,

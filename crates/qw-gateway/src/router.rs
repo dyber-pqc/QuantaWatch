@@ -334,6 +334,10 @@ fn admin_routes() -> Router<AppState> {
             post(crate::admin::remediation::verify_finding),
         )
         .route(
+            "/api/findings/{id}/apply-fix",
+            post(crate::admin::remediation::apply_fix),
+        )
+        .route(
             "/api/findings/{id}/status",
             post(crate::admin::remediation::set_finding_status),
         )
