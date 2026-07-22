@@ -566,6 +566,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
+    CREATE TABLE IF NOT EXISTS settings (tenant TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
@@ -821,6 +822,7 @@ impl Store {
             CREATE TABLE IF NOT EXISTS policy_snapshots (
                 tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id)
             );
+            CREATE TABLE IF NOT EXISTS settings (tenant TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS certificates (
                 id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
             );
@@ -882,6 +884,7 @@ impl Store {
             CREATE TABLE slo_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
+            CREATE TABLE settings (tenant TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
@@ -1438,6 +1441,26 @@ impl Store {
             "SELECT data FROM policy_snapshots WHERE tenant = ?1 AND policy_id = ?2 LIMIT 1",
             &[tenant, policy_id],
         )
+    }
+
+    // ---- Runtime settings (admin-tunable knobs) ----
+
+    /// Raw settings JSON for a tenant (the gateway owns the shape). None until set.
+    pub fn get_settings(&self, tenant: &str) -> Option<String> {
+        self.query_col(
+            "SELECT data FROM settings WHERE tenant = ?1 LIMIT 1",
+            &[tenant],
+        )
+        .into_iter()
+        .next()
+    }
+
+    pub fn put_settings(&self, tenant: &str, json: &str) {
+        self.exec_pg(
+            "INSERT OR REPLACE INTO settings (tenant, data) VALUES (?1, ?2)",
+            "INSERT INTO settings (tenant, data) VALUES ($1, $2) ON CONFLICT (tenant) DO UPDATE SET data = EXCLUDED.data",
+            &[tenant, json],
+        );
     }
 
     // ---- Issued certificates (internal PQC CA) ----

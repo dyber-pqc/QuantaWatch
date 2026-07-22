@@ -897,6 +897,39 @@ export async function ctScan(domain: string, maxCerts?: number): Promise<CtScanR
   });
 }
 
+export interface RuntimeSettings {
+  scanningPaused: boolean;
+  disabledScanners: string[];
+  maxScanConcurrency: number;
+  scanAllowlist: string[];
+  findingRetentionDays: number;
+  requireApprovalForActiveScans: boolean;
+  externalLookupsEnabled: boolean;
+}
+export interface SettingsResponse {
+  settings: RuntimeSettings;
+  adminCenter: {
+    identity: string;
+    role: string;
+    tenant: string;
+    authEnabled: boolean;
+    users: { username: string; role: string; org: string }[];
+    apiKeys: { name: string; role: string; org: string }[];
+    scanners: { id: string; label: string; enabled: boolean }[];
+    airGapped: boolean;
+  };
+}
+export async function fetchSettings(): Promise<SettingsResponse> {
+  return fetchJSON<SettingsResponse>("/api/settings");
+}
+export async function saveSettings(settings: RuntimeSettings): Promise<{ saved: boolean; settings: RuntimeSettings }> {
+  return fetchJSON("/api/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+}
+
 /** Populate a fresh install with a small, labelled sample estate. */
 export async function seedDemo(force = false): Promise<{ seeded: boolean; targets: number; findings: number }> {
   return fetchJSON("/api/onboarding/seed-demo", {

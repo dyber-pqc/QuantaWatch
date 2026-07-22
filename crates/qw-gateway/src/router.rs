@@ -198,6 +198,11 @@ fn admin_routes() -> Router<AppState> {
             post(crate::admin::audit_api::verify_audit),
         )
         .route("/api/config", get(crate::admin::config_api::get_config))
+        .route(
+            "/api/settings",
+            get(crate::admin::settings_api::get_settings)
+                .put(crate::admin::settings_api::put_settings),
+        )
         .route("/api/stats", get(crate::admin::stats::get_stats))
         .route("/api/threats", get(crate::admin::threats::get_threats))
         // Agent-aware posture

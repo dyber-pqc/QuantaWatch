@@ -21,6 +21,7 @@ import EstatePage from "./pages/EstatePage";
 import EndpointsPage from "./pages/EndpointsPage";
 import CertificatesPage from "./pages/CertificatesPage";
 import RemediationsPage from "./pages/RemediationsPage";
+import SettingsPage from "./pages/SettingsPage";
 
 export default function App() {
   return (
@@ -47,6 +48,7 @@ export default function App() {
         <Route path="/threats" element={<ThreatsPage />} />
         <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/integrations" element={<IntegrationsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
       </Routes>
     </IdeShell>
   );

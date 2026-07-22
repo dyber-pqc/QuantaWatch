@@ -7,6 +7,7 @@ import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import {
   fetchAuditEntries, fetchThreats, fetchMe, fetchPosture, fetchTenants, getTenant, setTenant, logout,
   syncRemediations, verifyAuditChain, triggerScan, fetchFrameworks, fetchFramework, openAuthed,
+  fetchAttackPaths, fetchMigrationPlans, fetchEndpoints, fetchAlerts,
   BOARD_REPORT_URL, CBOM_DOWNLOAD_URL,
 } from "../api/client";
 
@@ -28,6 +29,7 @@ const I = {
   bug: <path strokeLinecap="round" strokeLinejoin="round" d="M12 12.75c1.148 0 2.278.08 3.383.237 1.037.146 1.866.966 1.866 2.013 0 3.728-2.35 6.75-5.25 6.75S6.75 18.728 6.75 15c0-1.047.83-1.867 1.866-2.013A24.204 24.204 0 0 1 12 12.75Zm0 0c2.883 0 5.647.508 8.207 1.44a23.91 23.91 0 0 1-1.152 6.06M12 12.75c-2.883 0-5.647.508-8.208 1.44.125 2.104.52 4.136 1.153 6.06M12 12.75a2.25 2.25 0 0 0 2.248-2.354M12 12.75a2.25 2.25 0 0 1-2.248-2.354M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />,
   terminal: <path strokeLinecap="round" strokeLinejoin="round" d="m6.75 7.5 3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" />,
   chevron: <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />,
+  plus: <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />,
   close: <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />,
   signout: <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75" />,
   gear: <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.43.992a6.759 6.759 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 0 1 0-.255c.007-.378-.138-.75-.43-.991l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.281Z" />,
@@ -68,6 +70,19 @@ export default function IdeShell({ children }: { children: ReactNode }) {
   const [panelTab, setPanelTab] = useState<PanelTab>("terminal");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+
+  // Live counts for the nav badges (reuse the pages' query keys so nothing is
+  // fetched twice). Only kept if > 0.
+  const { data: apData } = useQuery({ queryKey: ["attack-paths"], queryFn: fetchAttackPaths, staleTime: 15000 });
+  const { data: planData } = useQuery({ queryKey: ["migration-plans"], queryFn: fetchMigrationPlans, staleTime: 15000 });
+  const { data: epData } = useQuery({ queryKey: ["endpoints"], queryFn: fetchEndpoints, staleTime: 15000 });
+  const { data: alertData } = useQuery({ queryKey: ["alerts-nav"], queryFn: () => fetchAlerts(100), staleTime: 15000 });
+  const navBadges: Record<string, { count: number; color: string }> = {
+    criticalPaths: { count: apData?.summary?.critical ?? 0, color: "#f04438" },
+    openPlans: { count: planData?.total ?? 0, color: "#f79009" },
+    vulnerableEndpoints: { count: epData?.quantumVulnerable ?? 0, color: "#f04438" },
+    alerts: { count: alertData?.alerts?.length ?? 0, color: "#f79009" },
+  };
   const [term, setTerm] = useState<string[]>(["QuantaWatch console ready — type 'help' for commands."]);
 
   useEffect(() => { setOpenPaths((prev) => (prev.includes(pathname) ? prev : [...prev, pathname])); }, [pathname]);
@@ -168,7 +183,7 @@ export default function IdeShell({ children }: { children: ReactNode }) {
           <ActIcon d={I.terminal} title="Terminal (Ctrl+`)" onClick={() => openPanel("terminal")} />
           <div style={{ flex: 1 }} />
           <ActIcon d={I.signout} title="Sign out" onClick={signOut} />
-          <ActIcon d={I.gear} title="Dashboard" onClick={() => navigate("/")} />
+          <ActIcon d={I.gear} active={pathname.startsWith("/settings")} title="Settings" onClick={() => navigate("/settings")} />
         </div>
 
         {/* Explorer */}
@@ -190,10 +205,27 @@ export default function IdeShell({ children }: { children: ReactNode }) {
                       )}
                       {!isCol && s.items.map((item) => {
                         const active = item.to === "/" ? pathname === "/" : pathname.startsWith(item.to);
+                        const badge = item.badge ? navBadges[item.badge] : undefined;
+                        const qa = item.quickAction;
                         return (
-                          <button key={item.to} onClick={() => navigate(item.to)} style={treeRow(active)}>
-                            <span style={{ width: 16, height: 16, display: "grid", placeItems: "center", opacity: 0.85 }}>{item.icon}</span>
-                            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                          <button key={item.to} onClick={() => navigate(item.to)} style={treeRow(active)} className="qw-navrow" title={item.label}>
+                            <span style={{ width: 16, height: 16, display: "grid", placeItems: "center", opacity: 0.85, flexShrink: 0 }}>{item.icon}</span>
+                            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.label}</span>
+                            {qa && (
+                              <span
+                                className="qw-navaction"
+                                title={qa.label}
+                                onClick={(e) => { e.stopPropagation(); navigate(qa.to); }}
+                                style={{ display: "none", flexShrink: 0, width: 16, height: 16, placeItems: "center", opacity: 0.7 }}
+                              >
+                                <Ic d={I.plus} size={13} w={2} />
+                              </span>
+                            )}
+                            {badge && badge.count > 0 && (
+                              <span style={{ flexShrink: 0, minWidth: 16, height: 15, padding: "0 5px", display: "grid", placeItems: "center", borderRadius: 8, fontSize: 9.5, fontWeight: 700, fontFamily: "var(--font-mono)", color: "#fff", background: badge.color }}>
+                                {badge.count > 99 ? "99+" : badge.count}
+                              </span>
+                            )}
                           </button>
                         );
                       })}

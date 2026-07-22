@@ -88,6 +88,11 @@ body {
     border-color: color-mix(in srgb, var(--color-brand-400) 45%, transparent);
   }
 
+  /* Nav rows: reveal the per-item quick action on hover */
+  .qw-navrow:hover .qw-navaction {
+    display: grid !important;
+  }
+
   /* Clickable rows (e.g. endpoint components) — subtle lift on hover */
   .qw-hoverable {
     @apply transition-colors duration-150;

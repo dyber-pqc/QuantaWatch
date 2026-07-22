@@ -51,6 +51,11 @@ pub fn spawn(state: AppState) {
             loop {
                 ticker.tick().await;
                 for tenant in all_tenants(&s) {
+                    // Respect the admin "pause scanning" switch (Settings → Scanning).
+                    if crate::admin::settings_api::load(&s, &tenant).scanning_paused {
+                        tracing::debug!(%tenant, "scanning paused by settings; skipping scheduled scan");
+                        continue;
+                    }
                     // Re-run cloud/K8s discovery so newly-created KMS keys, certs,
                     // and ingresses surface without a restart, then scan.
                     if rediscover {

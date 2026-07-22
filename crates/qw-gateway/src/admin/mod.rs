@@ -26,6 +26,7 @@ pub mod remediation;
 pub mod report;
 pub mod scans;
 pub mod sessions;
+pub mod settings_api;
 pub mod slos;
 pub mod soc2;
 pub mod stats;
