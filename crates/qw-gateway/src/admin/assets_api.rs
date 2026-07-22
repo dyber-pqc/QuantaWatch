@@ -1,10 +1,76 @@
 //! Asset inventory API.
 
-use axum::{extract::State, response::IntoResponse, Extension, Json};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Extension, Json};
+use serde::Deserialize;
 use serde_json::json;
 
 use crate::auth::{tenant_of, AuthContext};
 use crate::state::AppState;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NewAsset {
+    /// Free-form identifier (host, ARN, key id, endpoint…).
+    address: String,
+    #[serde(default = "default_kind")]
+    kind: String,
+    #[serde(default = "default_env")]
+    environment: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Optional known posture; defaults to "unknown" until scanned.
+    #[serde(default)]
+    pqc_status: Option<String>,
+    #[serde(default)]
+    tls_version: Option<String>,
+}
+
+fn default_kind() -> String {
+    "endpoint".to_string()
+}
+fn default_env() -> String {
+    "production".to_string()
+}
+
+/// POST /api/assets — manually register an infrastructure crypto asset.
+pub async fn create_asset(
+    State(state): State<AppState>,
+    ctx: Option<Extension<AuthContext>>,
+    Json(body): Json<NewAsset>,
+) -> impl IntoResponse {
+    let tenant = tenant_of(&ctx);
+    let address = body.address.trim().to_string();
+    if address.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "address is required" })),
+        )
+            .into_response();
+    }
+    let status = body.pqc_status.filter(|s| !s.is_empty()).unwrap_or_else(|| "unknown".to_string());
+    let asset = qw_store::AssetRow {
+        // Stable id from the address so re-adding the same asset updates it.
+        id: format!("manual:{address}"),
+        kind: body.kind,
+        address: address.clone(),
+        environment: body.environment,
+        tags: {
+            let mut t = body.tags;
+            if !t.iter().any(|x| x == "manual") {
+                t.push("manual".to_string());
+            }
+            t
+        },
+        pqc_status: status,
+        tls_version: body.tls_version,
+        last_scanned: None,
+        source: "manual".to_string(),
+    };
+    state.store.upsert_asset(&tenant, &asset);
+    // Fold the new asset into the attack-path graph immediately.
+    crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
+    (StatusCode::CREATED, Json(asset)).into_response()
+}
 
 pub async fn list_assets(
     State(state): State<AppState>,

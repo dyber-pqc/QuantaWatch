@@ -713,6 +713,23 @@ export async function syncAssets(): Promise<{ total: number; scanned: number }> 
   return fetchJSON("/api/assets/sync", { method: "POST" });
 }
 
+export interface NewAsset {
+  address: string;
+  kind?: string;
+  environment?: string;
+  tags?: string[];
+  pqcStatus?: string;
+  tlsVersion?: string;
+}
+/** Manually register an infrastructure crypto asset. */
+export async function createAsset(body: NewAsset): Promise<unknown> {
+  return fetchJSON("/api/assets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** URL of the print-ready executive quantum-risk board report. */
 export const BOARD_REPORT_URL = "/api/report/board";
 

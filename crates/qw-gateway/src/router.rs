@@ -225,7 +225,10 @@ fn admin_routes() -> Router<AppState> {
             post(crate::admin::graph::remediate_path),
         )
         // Asset inventory (agentless connectors)
-        .route("/api/assets", get(crate::admin::assets_api::list_assets))
+        .route(
+            "/api/assets",
+            get(crate::admin::assets_api::list_assets).post(crate::admin::assets_api::create_asset),
+        )
         .route(
             "/api/assets/sync",
             post(crate::admin::assets_api::sync_assets),

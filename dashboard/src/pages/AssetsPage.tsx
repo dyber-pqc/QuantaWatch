@@ -1,23 +1,52 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchAssets, syncAssets } from "../api/client";
+import { Group, TextInput, Select, Button, Text, Box } from "@mantine/core";
+import { fetchAssets, syncAssets, createAsset } from "../api/client";
 import { Card, PageHeader, Stat, Spinner, EmptyState, PqcBadge } from "../components/ui";
 
 const KIND_ICON: Record<string, string> = {
   tls_endpoint: "🌐", k8s_ingress: "☸", load_balancer: "⚖", kms_key: "🔑", certificate: "🔏", private_ca: "🏛",
 };
 
+function AddAssetCard({ onAdded }: { onAdded: () => void }) {
+  const [address, setAddress] = useState("");
+  const [kind, setKind] = useState("tls_endpoint");
+  const [env, setEnv] = useState("production");
+  const [status, setStatus] = useState("unknown");
+  const add = useMutation({
+    mutationFn: () => createAsset({ address: address.trim(), kind, environment: env, pqcStatus: status === "unknown" ? undefined : status }),
+    onSuccess: () => { setAddress(""); onAdded(); },
+  });
+  return (
+    <Card className="p-4">
+      <Text fw={700} c="gray.1" size="sm">Add an asset</Text>
+      <Text size="12px" c="dimmed" mb="sm">Manually register an infrastructure crypto asset (an endpoint, KMS key, load balancer, certificate…). It joins the inventory and the attack-path graph; Sync or a scan updates its posture.</Text>
+      <Group gap="sm" align="flex-end" wrap="wrap">
+        <TextInput size="xs" radius={2} label="Address / identifier" placeholder="payments.internal:443  ·  arn:aws:kms:…" value={address} onChange={(e) => setAddress(e.currentTarget.value)} w={260}
+          onKeyDown={(e) => { if (e.key === "Enter" && address.trim()) add.mutate(); }} />
+        <Select size="xs" radius={2} label="Kind" value={kind} onChange={(v) => setKind(v ?? "tls_endpoint")} w={150} comboboxProps={{ radius: 2 }}
+          data={[{ value: "tls_endpoint", label: "TLS endpoint" }, { value: "load_balancer", label: "Load balancer" }, { value: "k8s_ingress", label: "K8s ingress" }, { value: "kms_key", label: "KMS key" }, { value: "certificate", label: "Certificate" }, { value: "private_ca", label: "Private CA" }, { value: "endpoint", label: "Other endpoint" }]} />
+        <Select size="xs" radius={2} label="Environment" value={env} onChange={(v) => setEnv(v ?? "production")} w={130} comboboxProps={{ radius: 2 }}
+          data={["production", "staging", "development", "default"]} />
+        <Select size="xs" radius={2} label="Known posture" value={status} onChange={(v) => setStatus(v ?? "unknown")} w={150} comboboxProps={{ radius: 2 }}
+          data={[{ value: "unknown", label: "Unknown (scan it)" }, { value: "classical_weak", label: "Classical — weak" }, { value: "classical_secure", label: "Classical — secure" }, { value: "hybrid", label: "Hybrid" }, { value: "pqc_ready", label: "PQC-ready" }]} />
+        <Button size="xs" radius={2} color="brand" loading={add.isPending} disabled={!address.trim()} onClick={() => add.mutate()}>Add asset</Button>
+      </Group>
+      {add.isError && <Box mt="xs"><Text size="11px" c="red.4">{(add.error as Error)?.message ?? "Failed to add asset."}</Text></Box>}
+    </Card>
+  );
+}
+
 export default function AssetsPage() {
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["assets"], queryFn: fetchAssets });
 
-  const sync = useMutation({
-    mutationFn: syncAssets,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["assets"] });
-      queryClient.invalidateQueries({ queryKey: ["attack-paths"] });
-      queryClient.invalidateQueries({ queryKey: ["posture"] });
-    },
-  });
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["assets"] });
+    queryClient.invalidateQueries({ queryKey: ["attack-paths"] });
+    queryClient.invalidateQueries({ queryKey: ["posture"] });
+  };
+  const sync = useMutation({ mutationFn: syncAssets, onSuccess: invalidate });
 
   if (isLoading) return <Spinner className="h-64" />;
 
@@ -48,6 +77,8 @@ export default function AssetsPage() {
         <Stat label="Environments" value={envs.length} accent="violet" />
         <Stat label="Connectors" value={data?.connectors.length ?? 0} accent="brand" />
       </div>
+
+      <AddAssetCard onAdded={invalidate} />
 
       {(data?.connectors.length ?? 0) > 0 && (
         <Card className="p-4">
