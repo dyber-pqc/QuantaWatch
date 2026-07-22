@@ -881,6 +881,21 @@ export async function fetchCa(): Promise<CaInfo | null> {
     return null;
   }
 }
+
+export interface CtScanResult {
+  domain: string;
+  certificatesFound: number;
+  weak: number;
+  issuers: string[];
+}
+/** Monitor a domain's certificate-transparency footprint (public CT logs). */
+export async function ctScan(domain: string, maxCerts?: number): Promise<CtScanResult> {
+  return fetchJSON<CtScanResult>("/api/ct/scan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, maxCerts }),
+  });
+}
 export async function issueCertificate(body: {
   subject: string;
   sans?: string[];

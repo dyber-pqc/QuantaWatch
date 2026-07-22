@@ -5,7 +5,7 @@ import {
   Alert, Tooltip, Code, Divider,
 } from "@mantine/core";
 import {
-  fetchCertificates, fetchCa, issueCertificate, verifyCertBinding, renewCertificate, revokeCertificate,
+  fetchCertificates, fetchCa, issueCertificate, verifyCertBinding, renewCertificate, revokeCertificate, ctScan,
 } from "../api/client";
 import type { Certificate, IssueResult } from "../api/types";
 import { Card, PageHeader, Stat, Spinner, EmptyState } from "../components/ui";
@@ -152,6 +152,35 @@ function IssueCard({ onIssued }: { onIssued: () => void }) {
   );
 }
 
+function CtMonitorCard() {
+  const [domain, setDomain] = useState("");
+  const scan = useMutation({ mutationFn: () => ctScan(domain.trim(), 25) });
+  return (
+    <Card className="p-4">
+      <Text fw={700} c="gray.1" mb={2}>Certificate-transparency monitoring</Text>
+      <Text size="12px" c="dimmed" mb="sm">
+        Query public CT logs for every certificate issued for a domain and its subdomains — surfacing shadow IT, forgotten subdomains, or mis-issuance, and their post-quantum posture. Reads only public log data; no credentials. Discovered certs land in <b>Remediate</b>.
+      </Text>
+      <Group gap="sm" align="flex-end" wrap="wrap">
+        <TextInput size="xs" radius={2} label="Domain" placeholder="example.com" value={domain} onChange={(e) => setDomain(e.currentTarget.value)} w={220}
+          onKeyDown={(e) => { if (e.key === "Enter" && domain.trim()) scan.mutate(); }} />
+        <Button size="xs" radius={2} color="brand" loading={scan.isPending} disabled={!domain.trim()} onClick={() => scan.mutate()}>Scan CT logs</Button>
+      </Group>
+      {scan.isError && <Alert color="red" radius={2} variant="light" p="xs" mt="sm"><Text size="11px">{(scan.error as Error)?.message ?? "CT lookup failed (crt.sh may be temporarily down)."}</Text></Alert>}
+      {scan.isSuccess && (
+        <Alert color={scan.data.weak > 0 ? "orange" : "teal"} radius={2} variant="light" mt="sm">
+          <Text size="12px">
+            Found <b>{scan.data.certificatesFound}</b> certificate(s) for <b>{scan.data.domain}</b>
+            {scan.data.weak > 0 ? <> · <b style={{ color: "var(--mantine-color-red-4)" }}>{scan.data.weak} weak</b></> : null}
+            {scan.data.issuers.length > 0 && <> · issuers: {scan.data.issuers.slice(0, 3).join(", ")}{scan.data.issuers.length > 3 ? "…" : ""}</>}
+          </Text>
+          {scan.data.certificatesFound > 0 && <Text size="11px" c="dimmed" mt={2}>See the new findings under Remediate — each carries its confidence and evidence trail.</Text>}
+        </Alert>
+      )}
+    </Card>
+  );
+}
+
 function CaCard() {
   const { data: ca } = useQuery({ queryKey: ["pki-ca"], queryFn: fetchCa });
   if (!ca) return null;
@@ -193,6 +222,7 @@ export default function CertificatesPage() {
       </div>
 
       <CaCard />
+      <CtMonitorCard />
       <IssueCard onIssued={refresh} />
 
       {isLoading ? (
