@@ -335,6 +335,8 @@ fn admin_routes() -> Router<AppState> {
             "/api/connectors",
             get(crate::admin::connectors_api::get_connectors),
         )
+        // Certificate-transparency monitoring for a domain.
+        .route("/api/ct/scan", post(crate::admin::ct_api::ct_scan))
         // Host-agent endpoints (firmware / boot-chain crypto inventory).
         .route("/api/endpoints", get(crate::admin::endpoints_api::list_endpoints))
         .route("/api/endpoints/enroll", get(crate::admin::endpoints_api::enroll_info))

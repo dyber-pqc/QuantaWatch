@@ -46,6 +46,9 @@ pub enum TargetType {
     /// A Remote Desktop (RDP, 3389) endpoint: negotiate the security layer
     /// (Standard RDP Security vs TLS vs CredSSP/NLA), then fingerprint the TLS.
     RdpEndpoint,
+    /// A domain to monitor in public Certificate-Transparency logs — surface
+    /// every certificate issued for it (incl. subdomains) and its crypto posture.
+    CtDomain,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +74,15 @@ impl ScanTarget {
             id: uuid::Uuid::new_v4().to_string(),
             target_type: TargetType::DependencyFile,
             address: path.to_string(),
+            metadata: HashMap::new(),
+        }
+    }
+
+    pub fn ct_domain(domain: &str) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            target_type: TargetType::CtDomain,
+            address: domain.to_string(),
             metadata: HashMap::new(),
         }
     }

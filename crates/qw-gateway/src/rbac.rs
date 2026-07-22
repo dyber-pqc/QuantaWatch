@@ -154,6 +154,10 @@ pub fn route_permission(method: &Method, path: &str) -> String {
     if path.contains("/findings/") && path.contains("/status") {
         return "findings:write".to_string();
     }
+    // Certificate-transparency monitoring runs a scan.
+    if path.contains("/api/ct/") {
+        return "scans:write".to_string();
+    }
     if path.contains("/api/remediations") {
         return format!("remediation:{}", act(write));
     }
