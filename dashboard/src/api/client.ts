@@ -914,6 +914,28 @@ export async function ctScan(domain: string, maxCerts?: number): Promise<CtScanR
   });
 }
 
+export interface ManagedUser {
+  username: string;
+  role: string;
+  org: string;
+  source: "config" | "db";
+  editable: boolean;
+  isSelf: boolean;
+  createdAt?: string;
+}
+export async function fetchUsers(): Promise<{ users: ManagedUser[]; roles: string[] }> {
+  return fetchJSON("/api/users");
+}
+export async function createUser(body: { username: string; password: string; role: string; org?: string }): Promise<unknown> {
+  return fetchJSON("/api/users", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+export async function updateUser(username: string, body: { role?: string; password?: string }): Promise<unknown> {
+  return fetchJSON(`/api/users/${encodeURIComponent(username)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+}
+export async function deleteUser(username: string): Promise<unknown> {
+  return fetchJSON(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+}
+
 export interface RuntimeSettings {
   scanningPaused: boolean;
   disabledScanners: string[];

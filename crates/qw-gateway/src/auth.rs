@@ -177,20 +177,30 @@ impl AuthManager {
             }
         }
 
-        let user = self.config.users.iter().find(|u| u.username == username);
-        let ok = user
-            .map(|u| verify_password(password, &u.password_hash))
-            .unwrap_or(false);
-        if !ok {
+        // Config-declared users first, then runtime-managed (DB) users.
+        let (role_name, org) = if let Some(u) = self.config.users.iter().find(|u| u.username == username) {
+            if verify_password(password, &u.password_hash) {
+                (u.role.clone(), u.org.clone())
+            } else {
+                self.record_login_failure(username, now);
+                return LoginOutcome::BadCredentials;
+            }
+        } else if let Some(u) = self.store.get_user(username) {
+            if verify_password(password, &u.password_hash) {
+                (u.role, u.org)
+            } else {
+                self.record_login_failure(username, now);
+                return LoginOutcome::BadCredentials;
+            }
+        } else {
             self.record_login_failure(username, now);
             return LoginOutcome::BadCredentials;
-        }
+        };
 
         // Success — clear any accumulated failures.
         self.store.clear_login_lockout(username);
-        let user = user.expect("user present when ok");
-        let role = Role::parse(&user.role);
-        let (token, ttl) = self.issue_session(username, role, &user.org);
+        let role = Role::parse(&role_name);
+        let (token, ttl) = self.issue_session(username, role, &org);
         LoginOutcome::Ok { token, role, ttl }
     }
 

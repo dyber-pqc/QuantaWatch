@@ -160,6 +160,17 @@ pub struct AssetRow {
     pub source: String,
 }
 
+/// A user managed at runtime (in addition to any declared in the config).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DbUser {
+    pub username: String,
+    pub role: String,
+    pub org: String,
+    pub password_hash: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A point-in-time snapshot of SLO evaluation (for breach trends).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -567,6 +578,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq BIGSERIAL PRIMARY KEY);
     CREATE TABLE IF NOT EXISTS policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
     CREATE TABLE IF NOT EXISTS settings (tenant TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS auth_users (username TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
     CREATE TABLE IF NOT EXISTS connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
@@ -823,6 +835,7 @@ impl Store {
                 tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id)
             );
             CREATE TABLE IF NOT EXISTS settings (tenant TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS auth_users (username TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS certificates (
                 id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id)
             );
@@ -885,6 +898,7 @@ impl Store {
             CREATE TABLE governance_snapshots (tenant TEXT NOT NULL, data TEXT NOT NULL, seq INTEGER PRIMARY KEY AUTOINCREMENT);
             CREATE TABLE policy_snapshots (tenant TEXT NOT NULL, policy_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, policy_id));
             CREATE TABLE settings (tenant TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
+            CREATE TABLE auth_users (username TEXT NOT NULL PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE certificates (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE targets (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
             CREATE TABLE connections (id TEXT NOT NULL, tenant TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY (tenant, id));
@@ -1190,6 +1204,21 @@ impl Store {
         )
     }
 
+    /// Revoke every live session belonging to a user (used when their account is
+    /// deleted or their role changes). Matches the username inside the JSON blob.
+    pub fn delete_sessions_for_user(&self, username: &str) {
+        let esc = username
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%\"username\":\"{esc}\"%");
+        self.exec_pg(
+            "DELETE FROM auth_sessions WHERE data LIKE ?1 ESCAPE '\\'",
+            "DELETE FROM auth_sessions WHERE data LIKE $1 ESCAPE '\\'",
+            &[pattern.as_str()],
+        );
+    }
+
     pub fn delete_auth_session(&self, token_hash: &str) {
         self.exec(
             "DELETE FROM auth_sessions WHERE token_hash = ?1",
@@ -1461,6 +1490,32 @@ impl Store {
             "INSERT INTO settings (tenant, data) VALUES ($1, $2) ON CONFLICT (tenant) DO UPDATE SET data = EXCLUDED.data",
             &[tenant, json],
         );
+    }
+
+    // ---- Runtime-managed users ----
+
+    pub fn list_users(&self) -> Vec<DbUser> {
+        self.list_de("SELECT data FROM auth_users ORDER BY username", &[])
+    }
+
+    pub fn get_user(&self, username: &str) -> Option<DbUser> {
+        self.one_de(
+            "SELECT data FROM auth_users WHERE username = ?1 LIMIT 1",
+            &[username],
+        )
+    }
+
+    pub fn upsert_user(&self, user: &DbUser) {
+        let json = serde_json::to_string(user).unwrap_or_default();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO auth_users (username, data) VALUES (?1, ?2)",
+            "INSERT INTO auth_users (username, data) VALUES ($1, $2) ON CONFLICT (username) DO UPDATE SET data = EXCLUDED.data",
+            &[user.username.as_str(), json.as_str()],
+        );
+    }
+
+    pub fn delete_user(&self, username: &str) {
+        self.exec("DELETE FROM auth_users WHERE username = ?1", &[username]);
     }
 
     // ---- Issued certificates (internal PQC CA) ----

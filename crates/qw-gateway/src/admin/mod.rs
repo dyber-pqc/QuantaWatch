@@ -32,4 +32,5 @@ pub mod slos;
 pub mod soc2;
 pub mod stats;
 pub mod threats;
+pub mod users_api;
 pub mod webhooks;

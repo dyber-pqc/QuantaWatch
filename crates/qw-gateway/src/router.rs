@@ -265,6 +265,16 @@ fn admin_routes() -> Router<AppState> {
         .route("/api/soc2", get(crate::admin::soc2::get_soc2_report))
         // RBAC role -> permission matrix (read-only introspection)
         .route("/api/rbac", get(crate::admin::rbac_api::get_rbac))
+        // Runtime user management (add / remove / re-role).
+        .route(
+            "/api/users",
+            get(crate::admin::users_api::list_users).post(crate::admin::users_api::create_user),
+        )
+        .route(
+            "/api/users/{username}",
+            axum::routing::put(crate::admin::users_api::update_user)
+                .delete(crate::admin::users_api::delete_user),
+        )
         // Multi-framework compliance controls (CNSA 2.0, NIST 800-53, PCI, FedRAMP)
         .route(
             "/api/frameworks",
