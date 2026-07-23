@@ -28,6 +28,27 @@ use qw_store::{
 
 const TENANT: &str = DEFAULT_TENANT;
 
+/// Add-asset templates: (label, kind, default environment).
+const ASSET_TEMPLATES: &[(&str, &str, &str)] = &[
+    ("TLS endpoint", "tls_endpoint", "production"),
+    ("Load balancer", "load_balancer", "production"),
+    ("K8s ingress", "k8s_ingress", "production"),
+    ("Object store (S3/GCS)", "object_store", "production"),
+    ("Database", "database", "production"),
+    ("KMS key", "kms_key", "production"),
+    ("Certificate", "certificate", "production"),
+];
+
+/// Register-host templates: (label, kind, default environment).
+const HOST_TEMPLATES: &[(&str, &str, &str)] = &[
+    ("Server (SSH/TLS)", "server", "production"),
+    ("Database host", "database", "production"),
+    ("Network device", "network_device", "production"),
+    ("Container host", "container", "production"),
+    ("Endpoint / workstation", "endpoint", "corp"),
+    ("VM", "vm", "production"),
+];
+
 fn main() -> eframe::Result<()> {
     let data_dir = std::env::args().nth(1).unwrap_or_else(|| "./data".to_string());
     let db_path = std::path::Path::new(&data_dir).join("quantawatch.db");
@@ -235,7 +256,16 @@ enum Page {
     Threats,
     Audit,
     Access,
+    Settings,
     About,
+}
+
+enum TabAction {
+    Select(Page),
+    Close(Page),
+    CloseRight(usize),
+    CloseOthers(Page),
+    CloseAll,
 }
 
 #[derive(Default)]
@@ -268,6 +298,7 @@ struct App {
     // IDE shell: editor tabs + bottom terminal.
     open_tabs: Vec<Page>,
     terminal_open: bool,
+    terminal_float: bool,
     terminal_input: String,
     terminal_lines: Vec<String>,
     asset_form: AssetForm,
@@ -294,6 +325,7 @@ impl App {
             export_status: String::new(),
             open_tabs: vec![Page::Overview],
             terminal_open: false,
+            terminal_float: false,
             terminal_input: String::new(),
             terminal_lines: vec!["QuantaWatch console — type 'help' for commands.".to_string()],
             asset_form: AssetForm::default(),
@@ -450,6 +482,7 @@ impl eframe::App for App {
             self.terminal_open = !self.terminal_open;
         }
         self.top_bar(ctx);
+        self.activity_bar(ctx);
         self.side_nav(ctx);
         // The active page is always an open editor tab.
         if !self.open_tabs.contains(&self.page) {
@@ -478,6 +511,7 @@ impl eframe::App for App {
             Page::Threats => self.threats(ui),
             Page::Audit => self.audit(ui),
             Page::Access => self.access(ui),
+            Page::Settings => self.settings(ui),
             Page::About => self.about(ui),
         });
         // While a scan runs, keep the frame loop alive so poll_scan sees the result.
@@ -556,6 +590,7 @@ impl App {
 
                     nav_group(ui, "ADMIN");
                     nav_item(ui, &mut self.page, Page::Access, "🔑  Access (RBAC)", Some(d.users.len()));
+                    nav_item(ui, &mut self.page, Page::Settings, "⚙  Settings", None);
                     nav_item(ui, &mut self.page, Page::About, "ⓘ  About", None);
                     ui.add_space(12.0);
                     ui.separator();
@@ -568,15 +603,14 @@ impl App {
     fn tab_strip(&mut self, ctx: &egui::Context) {
         let tabs = self.open_tabs.clone();
         let active = self.page;
-        let multi = tabs.len() > 1;
-        let mut select: Option<Page> = None;
-        let mut close: Option<Page> = None;
+        let mut act: Option<TabAction> = None;
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.add_space(2.0);
             egui::ScrollArea::horizontal().show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    for tab in &tabs {
-                        let is_active = *tab == active;
+                    for (idx, tab) in tabs.iter().enumerate() {
+                        let tab = *tab;
+                        let is_active = tab == active;
                         egui::Frame::none()
                             .fill(if is_active { theme::BG } else { theme::PANEL })
                             .inner_margin(egui::Margin::symmetric(9.0, 4.0))
@@ -584,18 +618,41 @@ impl App {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let col = if is_active { theme::TEXT } else { theme::MUTED };
+                                    let resp = ui.add(
+                                        egui::Label::new(egui::RichText::new(page_title(tab)).color(col))
+                                            .sense(egui::Sense::click()),
+                                    );
+                                    if resp.clicked() {
+                                        act = Some(TabAction::Select(tab));
+                                    }
+                                    if resp.middle_clicked() {
+                                        act = Some(TabAction::Close(tab));
+                                    }
+                                    resp.context_menu(|ui| {
+                                        if ui.button("Close").clicked() {
+                                            act = Some(TabAction::Close(tab));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Close to the right").clicked() {
+                                            act = Some(TabAction::CloseRight(idx));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Close others").clicked() {
+                                            act = Some(TabAction::CloseOthers(tab));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Close all").clicked() {
+                                            act = Some(TabAction::CloseAll);
+                                            ui.close_menu();
+                                        }
+                                    });
+                                    // A readable close affandance (× renders where ✕ didn't).
                                     if ui
-                                        .add(egui::Label::new(egui::RichText::new(page_title(*tab)).color(col)).sense(egui::Sense::click()))
+                                        .add(egui::Label::new(egui::RichText::new(" ×").color(theme::MUTED)).sense(egui::Sense::click()))
+                                        .on_hover_text("close (or middle-click the tab)")
                                         .clicked()
                                     {
-                                        select = Some(*tab);
-                                    }
-                                    if multi
-                                        && ui
-                                            .add(egui::Label::new(egui::RichText::new(" ✕").color(theme::MUTED).small()).sense(egui::Sense::click()))
-                                            .clicked()
-                                    {
-                                        close = Some(*tab);
+                                        act = Some(TabAction::Close(tab));
                                     }
                                 });
                             });
@@ -604,11 +661,24 @@ impl App {
             });
             ui.add_space(2.0);
         });
-        if let Some(t) = select {
-            self.page = t;
-        }
-        if let Some(t) = close {
-            self.close_tab(t);
+        match act {
+            Some(TabAction::Select(t)) => self.page = t,
+            Some(TabAction::Close(t)) => self.close_tab(t),
+            Some(TabAction::CloseRight(i)) => {
+                self.open_tabs.truncate(i + 1);
+                if !self.open_tabs.contains(&self.page) {
+                    self.page = *self.open_tabs.last().unwrap();
+                }
+            }
+            Some(TabAction::CloseOthers(t)) => {
+                self.open_tabs = vec![t];
+                self.page = t;
+            }
+            Some(TabAction::CloseAll) => {
+                self.open_tabs = vec![Page::Overview];
+                self.page = Page::Overview;
+            }
+            None => {}
         }
     }
 
@@ -626,55 +696,74 @@ impl App {
         if !self.terminal_open {
             return;
         }
-        egui::TopBottomPanel::bottom("terminal")
-            .resizable(true)
-            .default_height(220.0)
-            .min_height(120.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("TERMINAL").small().strong().color(theme::MUTED));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("✕").on_hover_text("close").clicked() {
-                            self.terminal_open = false;
-                        }
-                        if ui.small_button("clear").clicked() {
-                            self.terminal_lines.clear();
-                        }
-                    });
-                });
-                ui.separator();
-                let mut submit: Option<String> = None;
-                egui::ScrollArea::vertical()
-                    .stick_to_bottom(true)
-                    .auto_shrink([false, false])
-                    .max_height(ui.available_height() - 28.0)
-                    .show(ui, |ui| {
-                        for line in &self.terminal_lines {
-                            ui.label(
-                                egui::RichText::new(line)
-                                    .monospace()
-                                    .size(12.0)
-                                    .color(if line.starts_with('›') { theme::ACCENT } else { theme::TEXT }),
-                            );
-                        }
-                    });
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("›").monospace().color(theme::ACCENT));
-                    let resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.terminal_input)
-                            .desired_width(f32::INFINITY)
-                            .font(egui::TextStyle::Monospace)
-                            .hint_text("type 'help'"),
-                    );
-                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        submit = Some(std::mem::take(&mut self.terminal_input));
-                        resp.request_focus();
-                    }
-                });
-                if let Some(line) = submit {
-                    self.run_terminal(line, ui.ctx());
+        if self.terminal_float {
+            // Moveable + resizable floating window.
+            egui::Window::new("Terminal")
+                .id(egui::Id::new("terminal_window"))
+                .default_size([580.0, 280.0])
+                .min_width(320.0)
+                .resizable(true)
+                .collapsible(false)
+                .show(ctx, |ui| self.terminal_body(ui));
+        } else {
+            // Docked, resizable bottom panel.
+            egui::TopBottomPanel::bottom("terminal")
+                .resizable(true)
+                .default_height(220.0)
+                .min_height(120.0)
+                .show(ctx, |ui| self.terminal_body(ui));
+        }
+    }
+
+    fn terminal_body(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("TERMINAL").small().strong().color(theme::MUTED));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.small_button("✕").on_hover_text("close").clicked() {
+                    self.terminal_open = false;
+                }
+                let float_lbl = if self.terminal_float { "dock" } else { "float" };
+                if ui.small_button(float_lbl).on_hover_text("dock / float the terminal").clicked() {
+                    self.terminal_float = !self.terminal_float;
+                }
+                if ui.small_button("clear").clicked() {
+                    self.terminal_lines.clear();
                 }
             });
+        });
+        ui.separator();
+        let mut submit: Option<String> = None;
+        egui::ScrollArea::vertical()
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .max_height((ui.available_height() - 28.0).max(60.0))
+            .show(ui, |ui| {
+                for line in &self.terminal_lines {
+                    ui.label(
+                        egui::RichText::new(line)
+                            .monospace()
+                            .size(12.0)
+                            .color(if line.starts_with('›') { theme::ACCENT } else { theme::TEXT }),
+                    );
+                }
+            });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("›").monospace().color(theme::ACCENT));
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut self.terminal_input)
+                    .desired_width(f32::INFINITY)
+                    .font(egui::TextStyle::Monospace)
+                    .hint_text("type 'help'"),
+            );
+            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                submit = Some(std::mem::take(&mut self.terminal_input));
+                resp.request_focus();
+            }
+        });
+        if let Some(line) = submit {
+            let ctx = ui.ctx().clone();
+            self.run_terminal(line, &ctx);
+        }
     }
 
     fn run_terminal(&mut self, line: String, ctx: &egui::Context) {
@@ -1069,6 +1158,19 @@ impl App {
 
         let mut add = false;
         egui::CollapsingHeader::new("➕ Register host").show(ui, |ui| {
+            let cur = self.target_form.kind.clone();
+            egui::ComboBox::from_label("Template")
+                .selected_text(if cur.is_empty() { "— choose —".to_string() } else { cur })
+                .show_ui(ui, |ui| {
+                    for (name, kind, env) in HOST_TEMPLATES {
+                        if ui.selectable_label(false, *name).clicked() {
+                            self.target_form.kind = kind.to_string();
+                            if self.target_form.environment.is_empty() {
+                                self.target_form.environment = env.to_string();
+                            }
+                        }
+                    }
+                });
             egui::Grid::new("targetform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                 ui.label("Name");
                 ui.text_edit_singleline(&mut self.target_form.name);
@@ -1104,7 +1206,20 @@ impl App {
             data_table(ui, "estate", &["Name", "Host", "Kind", "Env", "PQC", "Exposure", ""],
                 d.targets.len(), "No registered hosts. Register one above.", |ui, i| {
                 let t = &d.targets[i];
-                ui.label(&t.name);
+                ui.label(&t.name).context_menu(|ui| {
+                    let air = has_tag(&t.tags, "air-gapped");
+                    if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
+                        toggle = Some(t.id.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Scan from Overview").clicked() {
+                        ui.close_menu();
+                    }
+                    if ui.button("Delete host").clicked() {
+                        del = Some(t.id.clone());
+                        ui.close_menu();
+                    }
+                });
                 ui.label(egui::RichText::new(&t.host).color(theme::MUTED));
                 ui.label(&t.kind);
                 ui.label(&t.environment);
@@ -1321,6 +1436,19 @@ impl App {
 
         let mut add = false;
         egui::CollapsingHeader::new("➕ Add asset").show(ui, |ui| {
+            let cur = self.asset_form.kind.clone();
+            egui::ComboBox::from_label("Template")
+                .selected_text(if cur.is_empty() { "— choose —".to_string() } else { cur })
+                .show_ui(ui, |ui| {
+                    for (name, kind, env) in ASSET_TEMPLATES {
+                        if ui.selectable_label(false, *name).clicked() {
+                            self.asset_form.kind = kind.to_string();
+                            if self.asset_form.environment.is_empty() {
+                                self.asset_form.environment = env.to_string();
+                            }
+                        }
+                    }
+                });
             egui::Grid::new("assetform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
                 ui.label("ID");
                 ui.text_edit_singleline(&mut self.asset_form.id);
@@ -1356,7 +1484,17 @@ impl App {
             data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Exposure", ""],
                 d.assets.len(), "No declared assets. Add one above.", |ui, i| {
                 let a = &d.assets[i];
-                ui.label(&a.id);
+                ui.label(&a.id).context_menu(|ui| {
+                    let air = has_tag(&a.tags, "air-gapped");
+                    if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
+                        toggle = Some(a.id.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Delete asset").clicked() {
+                        del = Some(a.id.clone());
+                        ui.close_menu();
+                    }
+                });
                 ui.label(&a.kind);
                 ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
                 ui.label(&a.environment);
@@ -1690,6 +1828,70 @@ impl App {
         });
     }
 
+    fn settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Settings");
+        ui.label(egui::RichText::new("App-local settings for this desktop client. Gateway policy (auth, enforcement, alerts, RBAC) is managed by the gateway config, not here.").color(theme::MUTED).small());
+        ui.add_space(10.0);
+        egui::Grid::new("settings").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
+            ui.label("Store");
+            ui.label(egui::RichText::new(&self.source).monospace().small().color(theme::MUTED));
+            ui.end_row();
+            ui.label("Default scan directory");
+            ui.text_edit_singleline(&mut self.scan_path);
+            ui.end_row();
+            ui.label("Terminal");
+            ui.checkbox(&mut self.terminal_open, "open");
+            ui.end_row();
+            ui.label("Terminal mode");
+            ui.checkbox(&mut self.terminal_float, "floating window (else docked)");
+            ui.end_row();
+        });
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("Data").strong());
+        if ui.button("⟳ Refresh from store").clicked() {
+            self.refresh();
+        }
+        ui.label(egui::RichText::new(format!(
+            "{} findings · {} hosts · {} assets · {} certs loaded",
+            self.data.findings.len(), self.data.targets.len(), self.data.assets.len(), self.data.certs.len()
+        )).color(theme::MUTED).small());
+    }
+
+    fn activity_bar(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::left("activity")
+            .exact_width(42.0)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(8.0);
+                    let mut go = |ui: &mut egui::Ui, icon: &str, tip: &str, p: Page, page: &mut Page| {
+                        if ui.selectable_label(*page == p, egui::RichText::new(icon).size(18.0)).on_hover_text(tip).clicked() {
+                            *page = p;
+                        }
+                        ui.add_space(2.0);
+                    };
+                    go(ui, "🏠", "Overview", Page::Overview, &mut self.page);
+                    go(ui, "🕸", "Attack paths", Page::AttackPaths, &mut self.page);
+                    go(ui, "⚠", "Findings", Page::Findings, &mut self.page);
+                    go(ui, "🖧", "Estate", Page::Estate, &mut self.page);
+                    go(ui, "📜", "Audit log", Page::Audit, &mut self.page);
+                    ui.add_space(6.0);
+                    if ui.selectable_label(self.terminal_open, egui::RichText::new("▾").size(18.0)).on_hover_text("Terminal (Ctrl+`)").clicked() {
+                        self.terminal_open = !self.terminal_open;
+                    }
+                });
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    ui.add_space(8.0);
+                    if ui.selectable_label(self.page == Page::Settings, egui::RichText::new("⚙").size(18.0)).on_hover_text("Settings").clicked() {
+                        self.page = Page::Settings;
+                    }
+                });
+            });
+    }
+
     fn about(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("About");
@@ -1743,6 +1945,7 @@ fn page_title(p: Page) -> &'static str {
         Page::Threats => "Threats",
         Page::Audit => "Audit Log",
         Page::Access => "Access (RBAC)",
+        Page::Settings => "Settings",
         Page::About => "About",
     }
 }
@@ -1753,7 +1956,7 @@ fn page_by_name(name: &str) -> Option<Page> {
         Page::Overview, Page::AttackPaths, Page::Estate, Page::Endpoints, Page::Assets,
         Page::Findings, Page::Certificates, Page::Compliance, Page::Frameworks, Page::Soc2,
         Page::Scans, Page::Remediations, Page::Overlay, Page::Connections, Page::Agents,
-        Page::Sessions, Page::Threats, Page::Audit, Page::Access, Page::About,
+        Page::Sessions, Page::Threats, Page::Audit, Page::Access, Page::Settings, Page::About,
     ];
     pages
         .into_iter()
