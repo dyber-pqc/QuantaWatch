@@ -161,12 +161,19 @@ impl GraphView {
         for n in &g.nodes {
             idx.insert(n.id.clone(), nodes.len());
             let radius = 6.0 + (n.risk as f32 / 20.0).min(6.0) + (n.blast_radius as f32).sqrt().min(4.0);
-            let mut detail = format!("{} · {}", n.kind, n.sublabel);
+            // Multi-line, readable detail for the node panel.
+            let mut detail = format!("Type:  {}\n{}", n.kind, n.sublabel);
             if n.pqc_status != "n/a" {
-                detail.push_str(&format!(" · pqc {}", n.pqc_status));
+                detail.push_str(&format!("\nPQC status:  {}", n.pqc_status));
             }
             if n.risk > 0.0 {
-                detail.push_str(&format!(" · risk {:.0}", n.risk));
+                detail.push_str(&format!("\nRisk:  {:.0} / 100", n.risk));
+            }
+            if n.blast_radius > 0.0 {
+                detail.push_str(&format!("\nBlast radius:  {:.0}", n.blast_radius));
+            }
+            if n.observed {
+                detail.push_str("\nObserved in live traffic");
             }
             nodes.push(LNode {
                 label: n.label.clone(),
@@ -320,6 +327,9 @@ impl GraphView {
     pub fn reset_view(&mut self) {
         self.pan = Vec2::ZERO;
         self.zoom = 1.0;
+    }
+    pub fn deselect(&mut self) {
+        self.selected = None;
     }
     pub fn counts(&self) -> (usize, usize) {
         (self.nodes.len(), self.edges.len())

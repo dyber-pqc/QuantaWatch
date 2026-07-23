@@ -739,14 +739,22 @@ impl App {
 
         let sel = self.graph.ui(ui);
         if let Some((label, detail)) = sel {
-            egui::Area::new(egui::Id::new("graph_sel"))
-                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -16.0))
+            egui::Window::new("Node detail")
+                .id(egui::Id::new("graph_node_detail"))
+                .collapsible(false)
+                .resizable(true)
+                .default_width(320.0)
+                .default_pos(egui::pos2(250.0, 130.0))
                 .show(ui.ctx(), |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_max_width(320.0);
-                        ui.label(egui::RichText::new(label).strong());
-                        ui.label(egui::RichText::new(detail).small().color(theme::MUTED));
-                    });
+                    ui.label(egui::RichText::new(&label).strong().size(16.0));
+                    ui.add_space(4.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(&detail).size(13.0));
+                    ui.add_space(6.0);
+                    if ui.button("Close").clicked() {
+                        self.graph.deselect();
+                    }
                 });
         }
     }
