@@ -244,6 +244,7 @@ struct AssetForm {
     address: String,
     kind: String,
     environment: String,
+    air_gapped: bool,
 }
 
 #[derive(Default)]
@@ -252,6 +253,7 @@ struct TargetForm {
     host: String,
     kind: String,
     environment: String,
+    air_gapped: bool,
 }
 
 struct App {
@@ -352,7 +354,7 @@ impl App {
             kind: non_empty(&f.kind, "tls_endpoint"),
             address: addr.to_string(),
             environment: non_empty(&f.environment, "default"),
-            tags: Vec::new(),
+            tags: if f.air_gapped { vec!["air-gapped".to_string()] } else { Vec::new() },
             pqc_status: "unknown".to_string(),
             tls_version: None,
             last_scanned: None,
@@ -380,7 +382,7 @@ impl App {
             kind: non_empty(&f.kind, "server"),
             reachability: vec!["tls".to_string()],
             environment: non_empty(&f.environment, "default"),
-            tags: Vec::new(),
+            tags: if f.air_gapped { vec!["air-gapped".to_string()] } else { Vec::new() },
             exposed_services: Vec::new(),
             containers: Vec::new(),
             host_info: None,
@@ -393,6 +395,26 @@ impl App {
         self.edit_status = format!("Registered host {}", target.name);
         self.target_form = TargetForm::default();
         self.refresh();
+    }
+
+    /// Flip an asset's air-gapped tag and persist.
+    fn toggle_asset_airgap(&mut self, id: &str) {
+        if let Some(mut a) = self.data.assets.iter().find(|a| a.id == id).cloned() {
+            let on = toggle_tag(&mut a.tags, "air-gapped");
+            self.store.upsert_asset(TENANT, &a);
+            self.edit_status = format!("{} is now {}", a.id, if on { "air-gapped" } else { "exposed" });
+            self.refresh();
+        }
+    }
+
+    /// Flip a host's air-gapped tag and persist.
+    fn toggle_target_airgap(&mut self, id: &str) {
+        if let Some(mut t) = self.data.targets.iter().find(|t| t.id == id).cloned() {
+            let on = toggle_tag(&mut t.tags, "air-gapped");
+            self.store.upsert_target(TENANT, &t);
+            self.edit_status = format!("{} is now {}", t.name, if on { "air-gapped" } else { "exposed" });
+            self.refresh();
+        }
     }
 
     /// Drain a finished scan (if any) and refresh from the store.
@@ -842,6 +864,7 @@ impl App {
                 ui.text_edit_singleline(&mut self.target_form.environment);
                 ui.end_row();
             });
+            ui.checkbox(&mut self.target_form.air_gapped, "Air-gapped (no network path — suppresses HNDL risk)");
             ui.label(egui::RichText::new("kind defaults to server, env to default. Scan it from Overview after registering.").color(theme::MUTED).small());
             if ui.button("Register").clicked() {
                 add = true;
@@ -856,9 +879,10 @@ impl App {
         ui.add_space(6.0);
 
         let mut del: Option<String> = None;
+        let mut toggle: Option<String> = None;
         {
             let d = &self.data;
-            data_table(ui, "estate", &["Name", "Host", "Kind", "Env", "PQC", "Svcs", ""],
+            data_table(ui, "estate", &["Name", "Host", "Kind", "Env", "PQC", "Exposure", ""],
                 d.targets.len(), "No registered hosts. Register one above.", |ui, i| {
                 let t = &d.targets[i];
                 ui.label(&t.name);
@@ -866,11 +890,20 @@ impl App {
                 ui.label(&t.kind);
                 ui.label(&t.environment);
                 ui.colored_label(status_str_color(&t.pqc_status), pretty_status(&t.pqc_status));
-                ui.label(t.exposed_services.len().to_string());
+                let air = has_tag(&t.tags, "air-gapped");
+                let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
+                if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+                    .on_hover_text("toggle air-gapped").clicked()
+                {
+                    toggle = Some(t.id.clone());
+                }
                 if ui.small_button("✕").on_hover_text("delete").clicked() {
                     del = Some(t.id.clone());
                 }
             });
+        }
+        if let Some(id) = toggle {
+            self.toggle_target_airgap(&id);
         }
         if let Some(id) = del {
             self.store.delete_target(TENANT, &id);
@@ -1083,6 +1116,7 @@ impl App {
                 ui.text_edit_singleline(&mut self.asset_form.environment);
                 ui.end_row();
             });
+            ui.checkbox(&mut self.asset_form.air_gapped, "Air-gapped (no network path — suppresses HNDL risk)");
             ui.label(egui::RichText::new("kind defaults to tls_endpoint, env to default.").color(theme::MUTED).small());
             if ui.button("Add asset").clicked() {
                 add = true;
@@ -1097,9 +1131,10 @@ impl App {
         ui.add_space(6.0);
 
         let mut del: Option<String> = None;
+        let mut toggle: Option<String> = None;
         {
             let d = &self.data;
-            data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Scanned", ""],
+            data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Exposure", ""],
                 d.assets.len(), "No declared assets. Add one above.", |ui, i| {
                 let a = &d.assets[i];
                 ui.label(&a.id);
@@ -1107,11 +1142,21 @@ impl App {
                 ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
                 ui.label(&a.environment);
                 ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
-                ui.label(egui::RichText::new(fmt_opt_dt(a.last_scanned)).color(theme::MUTED));
+                // Exposure toggle: air-gapped vs internet-facing.
+                let air = has_tag(&a.tags, "air-gapped");
+                let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
+                if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+                    .on_hover_text("toggle air-gapped").clicked()
+                {
+                    toggle = Some(a.id.clone());
+                }
                 if ui.small_button("✕").on_hover_text("delete").clicked() {
                     del = Some(a.id.clone());
                 }
             });
+        }
+        if let Some(id) = toggle {
+            self.toggle_asset_airgap(&id);
         }
         if let Some(id) = del {
             self.store.delete_asset(TENANT, &id);
@@ -1649,6 +1694,21 @@ fn norm_sev(s: &str) -> &'static str {
         "medium" | "warning" => "medium",
         "low" => "low",
         _ => "info",
+    }
+}
+
+fn has_tag(tags: &[String], tag: &str) -> bool {
+    tags.iter().any(|t| t.eq_ignore_ascii_case(tag))
+}
+
+/// Add `tag` if absent, remove it if present. Returns the new state (true = on).
+fn toggle_tag(tags: &mut Vec<String>, tag: &str) -> bool {
+    if let Some(pos) = tags.iter().position(|t| t.eq_ignore_ascii_case(tag)) {
+        tags.remove(pos);
+        false
+    } else {
+        tags.push(tag.to_string());
+        true
     }
 }
 

@@ -206,6 +206,14 @@ fn parse_status(s: &str) -> PqcStatus {
 
 /// Build the full attack-path graph. `overrides` forces a provider's pqc_status
 /// (used by remediation simulation).
+/// An asset/host is air-gapped if tagged `air-gapped`. With no network path
+/// there is no harvestable channel, so harvest-now-decrypt-later doesn't apply
+/// and the quantum-channel attack path is suppressed.
+fn is_air_gapped(tags: &[String]) -> bool {
+    tags.iter()
+        .any(|t| t.eq_ignore_ascii_case("air-gapped") || t.eq_ignore_ascii_case("airgapped"))
+}
+
 pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>) -> Graph {
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
@@ -561,6 +569,7 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
     for a in inputs.assets {
         let status = parse_status(&a.pqc_status);
         let cw = channel_weight(&status);
+        let air = is_air_gapped(&a.tags);
         let aid = format!("asset:{}", a.id);
         push(
             &mut nodes,
@@ -569,14 +578,19 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
                 id: aid.clone(),
                 kind: "asset".into(),
                 label: a.id.clone(),
-                sublabel: format!("{} · {}", a.kind, a.environment),
+                sublabel: if air {
+                    format!("{} · {} · air-gapped", a.kind, a.environment)
+                } else {
+                    format!("{} · {}", a.kind, a.environment)
+                },
                 pqc_status: a.pqc_status.clone(),
-                risk: cw * 100.0,
+                // No network path -> no HNDL exposure, so no channel risk.
+                risk: if air { 0.0 } else { cw * 100.0 },
                 blast_radius: 0.0,
                 observed: false,
             },
         );
-        if cw > 0.0 {
+        if cw > 0.0 && !air {
             let env_weight = if a.environment.to_lowercase().contains("prod")
                 || a.tags
                     .iter()
@@ -634,6 +648,7 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
         // detection. The host address stays in the label/title for readability.
         let host_id = format!("host:{}", t.id);
         let host_status = parse_status(&t.pqc_status);
+        let host_air = is_air_gapped(&t.tags);
         let prod = t.environment.to_lowercase().contains("prod")
             || t.tags.iter().any(|x| x.contains("external") || x.contains("customer"));
         let env_weight = if prod { 0.95 } else { 0.6 };
@@ -644,12 +659,16 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
                 id: host_id.clone(),
                 kind: "host".into(),
                 label: t.name.clone(),
-                sublabel: match &t.host_info {
-                    Some(info) if !info.is_empty() => format!("{} · {}", t.host, info),
-                    _ => format!("{} · {} · {}", t.host, t.kind, t.environment),
+                sublabel: if host_air {
+                    format!("{} · {} · air-gapped", t.host, t.environment)
+                } else {
+                    match &t.host_info {
+                        Some(info) if !info.is_empty() => format!("{} · {}", t.host, info),
+                        _ => format!("{} · {} · {}", t.host, t.kind, t.environment),
+                    }
                 },
                 pqc_status: t.pqc_status.clone(),
-                risk: channel_weight(&host_status) * 100.0,
+                risk: if host_air { 0.0 } else { channel_weight(&host_status) * 100.0 },
                 blast_radius: 0.0,
                 observed: false,
             },
@@ -687,7 +706,8 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
             // services are graph nodes (blast radius on host compromise) but not
             // externally exploitable, so they don't inflate the risk work-list.
             let cw = channel_weight(&svc_status);
-            if !s.exposed || cw <= 0.0 {
+            // Air-gapped host: no reachable channel, so no HNDL attack path.
+            if !s.exposed || cw <= 0.0 || host_air {
                 continue;
             }
             // Unknown crypto (not yet fingerprinted) is a "characterize", not a
