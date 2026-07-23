@@ -312,6 +312,10 @@ struct App {
     net_probes_enabled: bool,
     probe_rx: Option<std::sync::mpsc::Receiver<(String, ProbeState)>>,
     probe_results: std::collections::HashMap<String, ProbeState>,
+    // Async terminal output (e.g. tshark captures push lines here).
+    term_tx: std::sync::mpsc::Sender<String>,
+    term_rx: std::sync::mpsc::Receiver<String>,
+    tshark_ver: Option<String>,
     asset_form: AssetForm,
     target_form: TargetForm,
     edit_status: String,
@@ -325,6 +329,7 @@ struct App {
 impl App {
     fn new(store: Store, source: String) -> Self {
         let data = Snapshot::load(&store);
+        let (term_tx, term_rx) = std::sync::mpsc::channel();
         Self {
             store,
             source,
@@ -342,6 +347,9 @@ impl App {
             net_probes_enabled: false,
             probe_rx: None,
             probe_results: std::collections::HashMap::new(),
+            term_tx,
+            term_rx,
+            tshark_ver: None,
             asset_form: AssetForm::default(),
             target_form: TargetForm::default(),
             edit_status: String::new(),
@@ -527,6 +535,10 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_scan();
         self.poll_probes();
+        // Drain async terminal output (tshark captures, etc.).
+        while let Ok(line) = self.term_rx.try_recv() {
+            self.terminal_lines.push(line);
+        }
         // Ctrl+` toggles the terminal, like the web IDE shell.
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Backtick)) {
             self.terminal_open = !self.terminal_open;
@@ -658,7 +670,9 @@ impl App {
     fn tab_strip(&mut self, ctx: &egui::Context) {
         let tabs = self.open_tabs.clone();
         let active = self.page;
+        let n = tabs.len();
         let mut act: Option<TabAction> = None;
+        let mut reorder: Option<(usize, usize)> = None;
         egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
             ui.add_space(2.0);
             egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -666,56 +680,56 @@ impl App {
                     for (idx, tab) in tabs.iter().enumerate() {
                         let tab = *tab;
                         let is_active = tab == active;
-                        egui::Frame::none()
-                            .fill(if is_active { theme::BG } else { theme::PANEL })
-                            .inner_margin(egui::Margin::symmetric(9.0, 4.0))
-                            .rounding(4.0)
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    let col = if is_active { theme::TEXT } else { theme::MUTED };
-                                    let resp = ui.add(
-                                        egui::Label::new(egui::RichText::new(page_title(tab)).color(col))
-                                            .sense(egui::Sense::click()),
-                                    );
-                                    if resp.clicked() {
-                                        act = Some(TabAction::Select(tab));
-                                    }
-                                    if resp.middle_clicked() {
-                                        act = Some(TabAction::Close(tab));
-                                    }
-                                    resp.context_menu(|ui| {
-                                        if ui.button("Close").clicked() {
+                        // Draggable tab (DnD). Clicks on the inner label/× still work.
+                        let dnd = ui.dnd_drag_source(egui::Id::new(("tabdrag", idx)), idx, |ui| {
+                            egui::Frame::none()
+                                .fill(if is_active { theme::BG } else { theme::PANEL })
+                                .inner_margin(egui::Margin::symmetric(9.0, 4.0))
+                                .rounding(4.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        let col = if is_active { theme::TEXT } else { theme::MUTED };
+                                        let lab = ui.add(
+                                            egui::Label::new(egui::RichText::new(page_title(tab)).color(col))
+                                                .selectable(false)
+                                                .sense(egui::Sense::click()),
+                                        );
+                                        if lab.clicked() {
+                                            act = Some(TabAction::Select(tab));
+                                        }
+                                        if lab.middle_clicked() {
                                             act = Some(TabAction::Close(tab));
-                                            ui.close_menu();
                                         }
-                                        if ui.button("Close to the right").clicked() {
-                                            act = Some(TabAction::CloseRight(idx));
-                                            ui.close_menu();
-                                        }
-                                        if ui.button("Close others").clicked() {
-                                            act = Some(TabAction::CloseOthers(tab));
-                                            ui.close_menu();
-                                        }
-                                        if ui.button("Close all").clicked() {
-                                            act = Some(TabAction::CloseAll);
-                                            ui.close_menu();
+                                        lab.context_menu(|ui| {
+                                            if ui.button("Close").clicked() { act = Some(TabAction::Close(tab)); ui.close_menu(); }
+                                            if ui.button("Close others").clicked() { act = Some(TabAction::CloseOthers(tab)); ui.close_menu(); }
+                                            if ui.button("Close to the right").clicked() { act = Some(TabAction::CloseRight(idx)); ui.close_menu(); }
+                                            if ui.button("Close all").clicked() { act = Some(TabAction::CloseAll); ui.close_menu(); }
+                                            ui.separator();
+                                            if idx > 0 && ui.button("Move left").clicked() { reorder = Some((idx, idx - 1)); ui.close_menu(); }
+                                            if idx + 1 < n && ui.button("Move right").clicked() { reorder = Some((idx, idx + 1)); ui.close_menu(); }
+                                        });
+                                        if ui.small_button("×").on_hover_text("close").clicked() {
+                                            act = Some(TabAction::Close(tab));
                                         }
                                     });
-                                    // A readable close affandance (× renders where ✕ didn't).
-                                    if ui
-                                        .add(egui::Label::new(egui::RichText::new(" ×").color(theme::MUTED)).sense(egui::Sense::click()))
-                                        .on_hover_text("close (or middle-click the tab)")
-                                        .clicked()
-                                    {
-                                        act = Some(TabAction::Close(tab));
-                                    }
                                 });
-                            });
+                        });
+                        // Drop a dragged tab onto this one → reorder.
+                        if let Some(payload) = dnd.response.dnd_release_payload::<usize>() {
+                            reorder = Some((*payload, idx));
+                        }
                     }
                 });
             });
             ui.add_space(2.0);
         });
+        if let Some((from, to)) = reorder {
+            if from < self.open_tabs.len() && from != to {
+                let t = self.open_tabs.remove(from);
+                self.open_tabs.insert(to.min(self.open_tabs.len()), t);
+            }
+        }
         match act {
             Some(TabAction::Select(t)) => self.page = t,
             Some(TabAction::Close(t)) => self.close_tab(t),
@@ -771,49 +785,55 @@ impl App {
     }
 
     fn terminal_body(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("TERMINAL").small().strong().color(theme::MUTED));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("✕").on_hover_text("close").clicked() {
-                    self.terminal_open = false;
-                }
-                let float_lbl = if self.terminal_float { "dock" } else { "float" };
-                if ui.small_button(float_lbl).on_hover_text("dock / float the terminal").clicked() {
-                    self.terminal_float = !self.terminal_float;
-                }
-                if ui.small_button("clear").clicked() {
-                    self.terminal_lines.clear();
+        // Pinned header (top) + input (bottom); output fills the middle. Using
+        // nested panels keeps the height stable instead of drifting each frame.
+        egui::TopBottomPanel::top("term_header").resizable(false).show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("TERMINAL").small().strong().color(theme::MUTED));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("close").clicked() {
+                        self.terminal_open = false;
+                    }
+                    let float_lbl = if self.terminal_float { "dock" } else { "float" };
+                    if ui.small_button(float_lbl).on_hover_text("dock / float the terminal").clicked() {
+                        self.terminal_float = !self.terminal_float;
+                    }
+                    if ui.small_button("clear").clicked() {
+                        self.terminal_lines.clear();
+                    }
+                });
+            });
+        });
+        let mut submit: Option<String> = None;
+        egui::TopBottomPanel::bottom("term_input").resizable(false).show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("›").monospace().color(theme::ACCENT));
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.terminal_input)
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Monospace)
+                        .hint_text("type 'help'"),
+                );
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    submit = Some(std::mem::take(&mut self.terminal_input));
+                    resp.request_focus();
                 }
             });
         });
-        ui.separator();
-        let mut submit: Option<String> = None;
-        egui::ScrollArea::vertical()
-            .stick_to_bottom(true)
-            .auto_shrink([false, false])
-            .max_height((ui.available_height() - 28.0).max(60.0))
-            .show(ui, |ui| {
-                for line in &self.terminal_lines {
-                    ui.label(
-                        egui::RichText::new(line)
-                            .monospace()
-                            .size(12.0)
-                            .color(if line.starts_with('›') { theme::ACCENT } else { theme::TEXT }),
-                    );
-                }
-            });
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("›").monospace().color(theme::ACCENT));
-            let resp = ui.add(
-                egui::TextEdit::singleline(&mut self.terminal_input)
-                    .desired_width(f32::INFINITY)
-                    .font(egui::TextStyle::Monospace)
-                    .hint_text("type 'help'"),
-            );
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                submit = Some(std::mem::take(&mut self.terminal_input));
-                resp.request_focus();
-            }
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            egui::ScrollArea::vertical()
+                .stick_to_bottom(true)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for line in &self.terminal_lines {
+                        ui.label(
+                            egui::RichText::new(line)
+                                .monospace()
+                                .size(12.0)
+                                .color(if line.starts_with('›') { theme::ACCENT } else { theme::TEXT }),
+                        );
+                    }
+                });
         });
         if let Some(line) = submit {
             let ctx = ui.ctx().clone();
@@ -835,9 +855,17 @@ impl App {
                 self.terminal_lines.clear();
                 return;
             }
-            "help" => self.terminal_lines.push(
-                "commands: help · clear · posture · findings [n] · estate · assets · certs · threats · paths · scan <dir> · open <page> · refresh · version".to_string(),
-            ),
+            "help" => {
+                self.terminal_lines.push(
+                    "store:   help · clear · posture · findings [n] · estate · assets · certs · threats · paths · open <page> · refresh · version".to_string(),
+                );
+                self.terminal_lines.push(
+                    "scan:    scan <dir>   (in-process code scan)".to_string(),
+                );
+                self.terminal_lines.push(
+                    "network: wireshark (detect tshark) · ifaces · capture <host> [count]   (needs probes ON + Wireshark)".to_string(),
+                );
+            }
             "posture" => {
                 let msg = match &self.data.posture {
                     Some(p) => format!("posture {:.0}/100 · {} findings · {} assets scored", p.overall_score, self.data.findings.len(), p.total_assets),
@@ -896,6 +924,44 @@ impl App {
             "refresh" => {
                 self.refresh();
                 self.terminal_lines.push("refreshed from store".to_string());
+            }
+            "wireshark" => match tshark_version() {
+                Some(v) => {
+                    self.tshark_ver = Some(v.clone());
+                    self.terminal_lines.push(format!("detected: {v}"));
+                }
+                None => self.terminal_lines.push("tshark not found on PATH — install Wireshark".to_string()),
+            },
+            "ifaces" => match tshark_interfaces() {
+                Ok(list) => self.terminal_lines.extend(list),
+                Err(e) => self.terminal_lines.push(format!("tshark -D: {e}")),
+            },
+            "capture" => {
+                if !self.net_probes_enabled {
+                    self.terminal_lines.push("network probes are off — enable them in Settings first".to_string());
+                } else if arg.is_empty() {
+                    self.terminal_lines.push("usage: capture <host> [count]   (needs Wireshark/tshark + capture perms)".to_string());
+                } else {
+                    let mut a = arg.split_whitespace();
+                    let host = a.next().unwrap_or("").to_string();
+                    let count: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(20);
+                    self.terminal_lines.push(format!("capturing up to {count} packets to/from {host} via tshark (≤8s)…"));
+                    let tx = self.term_tx.clone();
+                    let ctx2 = ctx.clone();
+                    std::thread::spawn(move || {
+                        match tshark_capture(&host, count) {
+                            Ok(lines) => {
+                                for l in lines {
+                                    let _ = tx.send(l);
+                                }
+                            }
+                            Err(e) => {
+                                let _ = tx.send(format!("tshark: {e}"));
+                            }
+                        }
+                        ctx2.request_repaint();
+                    });
+                }
             }
             "version" => self.terminal_lines.push(format!("qw-desktop v{}", env!("CARGO_PKG_VERSION"))),
             other => self.terminal_lines.push(format!("unknown command: {other} (try 'help')")),
@@ -1932,6 +1998,23 @@ impl App {
              to an asset/host to confirm it is actually reachable — and flags any target tagged air-gapped \
              that still answers. Nothing else touches the network.",
         ).color(theme::MUTED).small());
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Wireshark (tshark):");
+            match &self.tshark_ver {
+                Some(v) if v.is_empty() => { ui.colored_label(theme::MUTED, "not detected on PATH"); }
+                Some(v) => { ui.colored_label(theme::GOOD, v); }
+                None => { ui.colored_label(theme::MUTED, "unknown"); }
+            }
+            if ui.small_button("Detect").clicked() {
+                self.tshark_ver = Some(tshark_version().unwrap_or_default());
+            }
+        });
+        ui.label(egui::RichText::new(
+            "Optional deeper check: with probes on and Wireshark installed, run `capture <host>` in the \
+             terminal to sniff live packets to/from a host (tshark). Confirms real traffic beyond a TCP connect. \
+             Requires capture privileges.",
+        ).color(theme::MUTED).small());
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(6.0);
@@ -2240,6 +2323,67 @@ fn norm_sev(s: &str) -> &'static str {
         "low" => "low",
         _ => "info",
     }
+}
+
+// ---- Wireshark / tshark integration (Wireshark's CLI). Optional, opt-in. ----
+
+/// Detect tshark on PATH; returns its version line (empty string if not found).
+fn tshark_version() -> Option<String> {
+    let out = std::process::Command::new("tshark").arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .to_string(),
+    )
+}
+
+/// `tshark -D` — the capture interfaces Wireshark can see.
+fn tshark_interfaces() -> Result<Vec<String>, String> {
+    let out = std::process::Command::new("tshark")
+        .arg("-D")
+        .output()
+        .map_err(|e| format!("could not run tshark ({e}); is Wireshark installed?"))?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr)
+            .lines()
+            .next()
+            .unwrap_or("tshark -D failed")
+            .to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
+}
+
+/// Live packet capture to/from a host via tshark. Bounded by count and an 8s
+/// stop timer. Needs Wireshark installed and capture privileges.
+fn tshark_capture(host: &str, count: usize) -> Result<Vec<String>, String> {
+    let out = std::process::Command::new("tshark")
+        .args([
+            "-a",
+            "duration:8",
+            "-c",
+            &count.to_string(),
+            "-f",
+            &format!("host {host}"),
+        ])
+        .output()
+        .map_err(|e| format!("could not run tshark ({e}); is Wireshark installed and on PATH?"))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        return Err(err.lines().next().unwrap_or("capture failed").to_string());
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut result = vec![format!("captured {} packet(s) to/from {host}", lines.len())];
+    result.extend(lines.into_iter().take(15));
+    if result.len() == 1 {
+        result.push("(no packets — host may be air-gapped, idle, or unreachable)".to_string());
+    }
+    Ok(result)
 }
 
 /// Ensure `host:port` form: strip any scheme, default the port to 443.
