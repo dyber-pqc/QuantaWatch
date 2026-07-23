@@ -18,7 +18,11 @@ use graphview::GraphView;
 use qw_cbom::{PostureEngine, PostureSnapshot};
 use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus, ScanRecord};
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
-use qw_store::{AssetRow, CertificateRow, FlowRow, Store, TargetRow, DEFAULT_TENANT};
+use qw_integrations::RemediationTicket;
+use qw_store::{
+    AssetRow, CertificateRow, ConnectionRow, DbUser, EndpointRow, FlowRow, OverlayRouteRow,
+    SessionRow, Store, TargetRow, DEFAULT_TENANT,
+};
 
 const TENANT: &str = DEFAULT_TENANT;
 
@@ -103,6 +107,12 @@ struct Snapshot {
     scans: Vec<ScanRecord>,
     flows: Vec<FlowRow>,
     assets: Vec<AssetRow>,
+    endpoints: Vec<EndpointRow>,
+    sessions: Vec<SessionRow>,
+    connections: Vec<ConnectionRow>,
+    overlay_routes: Vec<OverlayRouteRow>,
+    remediations: Vec<RemediationTicket>,
+    users: Vec<DbUser>,
     history: Vec<f64>,
     loaded_at: Option<DateTime<Local>>,
 }
@@ -129,6 +139,12 @@ impl Snapshot {
             scans,
             flows: store.list_flows(TENANT),
             assets: store.list_assets(TENANT),
+            endpoints: store.list_endpoints(TENANT),
+            sessions: store.list_sessions(TENANT, 200),
+            connections: store.list_connections(TENANT),
+            overlay_routes: store.list_all_overlay_routes(),
+            remediations: store.list_remediations(TENANT),
+            users: store.list_users(),
             history: hist,
             loaded_at: Some(Utc::now().with_timezone(&Local)),
         }
@@ -198,10 +214,18 @@ fn run_scan_blocking(store: &Store, path: &str) -> ScanOutcome {
 enum Page {
     Overview,
     AttackPaths,
-    Findings,
     Estate,
+    Endpoints,
+    Assets,
+    Findings,
     Certificates,
     Scans,
+    Remediations,
+    Overlay,
+    Connections,
+    Agents,
+    Sessions,
+    Access,
     About,
 }
 
@@ -309,10 +333,18 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| match self.page {
             Page::Overview => self.overview(ui),
             Page::AttackPaths => self.attack_paths(ui),
-            Page::Findings => self.findings(ui),
             Page::Estate => self.estate(ui),
+            Page::Endpoints => self.endpoints(ui),
+            Page::Assets => self.assets(ui),
+            Page::Findings => self.findings(ui),
             Page::Certificates => self.certificates(ui),
             Page::Scans => self.scans(ui),
+            Page::Remediations => self.remediations(ui),
+            Page::Overlay => self.overlay(ui),
+            Page::Connections => self.connections(ui),
+            Page::Agents => self.agents(ui),
+            Page::Sessions => self.sessions(ui),
+            Page::Access => self.access(ui),
             Page::About => self.about(ui),
         });
         // While a scan runs, keep the frame loop alive so poll_scan sees the result.
@@ -353,27 +385,39 @@ impl App {
 
     fn side_nav(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("nav")
-            .exact_width(190.0)
+            .exact_width(200.0)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.add_space(8.0);
-                let n = self.data.findings.len();
-                let t = self.data.targets.len();
-                let c = self.data.certs.len();
-                nav_item(ui, &mut self.page, Page::Overview, "📊  Overview", None);
-                nav_item(ui, &mut self.page, Page::AttackPaths, "🕸  Attack paths", None);
-                nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(n));
-                nav_item(ui, &mut self.page, Page::Estate, "🖧  Estate", Some(t));
-                nav_item(ui, &mut self.page, Page::Certificates, "🔏  Certificates", Some(c));
-                nav_item(ui, &mut self.page, Page::Scans, "🔎  Scans", Some(self.data.scans.len()));
-                ui.add_space(8.0);
-                ui.separator();
-                nav_item(ui, &mut self.page, Page::About, "ⓘ  About", None);
-
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
+                let d = &self.data;
+                egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(&self.source).color(theme::MUTED).small());
+                    nav_item(ui, &mut self.page, Page::Overview, "📊  Overview", None);
+
+                    nav_group(ui, "POSTURE");
+                    nav_item(ui, &mut self.page, Page::AttackPaths, "🕸  Attack paths", None);
+                    nav_item(ui, &mut self.page, Page::Estate, "🖧  Estate", Some(d.targets.len()));
+                    nav_item(ui, &mut self.page, Page::Endpoints, "🖥  Endpoints", Some(d.endpoints.len()));
+                    nav_item(ui, &mut self.page, Page::Assets, "🧱  Assets", Some(d.assets.len()));
+                    nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(d.findings.len()));
+                    nav_item(ui, &mut self.page, Page::Certificates, "🔏  Certificates", Some(d.certs.len()));
+
+                    nav_group(ui, "OPERATE");
+                    nav_item(ui, &mut self.page, Page::Scans, "🔎  Scans", Some(d.scans.len()));
+                    nav_item(ui, &mut self.page, Page::Remediations, "🛠  Remediations", Some(d.remediations.len()));
+                    nav_item(ui, &mut self.page, Page::Overlay, "🛡  PQC Overlay", Some(d.overlay_routes.len()));
+                    nav_item(ui, &mut self.page, Page::Connections, "🔌  Connections", Some(d.connections.len()));
+
+                    nav_group(ui, "MONITOR");
+                    nav_item(ui, &mut self.page, Page::Agents, "🤖  Agents", Some(d.flows.len()));
+                    nav_item(ui, &mut self.page, Page::Sessions, "🧾  Sessions", Some(d.sessions.len()));
+
+                    nav_group(ui, "ADMIN");
+                    nav_item(ui, &mut self.page, Page::Access, "🔑  Access (RBAC)", Some(d.users.len()));
+                    nav_item(ui, &mut self.page, Page::About, "ⓘ  About", None);
+                    ui.add_space(12.0);
+                    ui.separator();
                     ui.label(egui::RichText::new("store").color(theme::MUTED).small());
+                    ui.label(egui::RichText::new(&self.source).color(theme::MUTED).small());
                 });
             });
     }
@@ -867,6 +911,149 @@ impl App {
             });
     }
 
+    fn endpoints(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Endpoints");
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "endpoints", &["Hostname", "OS", "Agent", "PQC", "Findings", "Last report"],
+            d.endpoints.len(), "No host agents enrolled.", |ui, i| {
+            let e = &d.endpoints[i];
+            ui.label(&e.hostname);
+            ui.label(egui::RichText::new(&e.os).color(theme::MUTED));
+            ui.label(e.agent_version.as_deref().unwrap_or("—"));
+            ui.colored_label(status_str_color(&e.pqc_status), pretty_status(&e.pqc_status));
+            ui.label(e.findings_count.to_string());
+            ui.label(egui::RichText::new(fmt_dt(e.last_report)).color(theme::MUTED));
+        });
+    }
+
+    fn assets(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Assets");
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Scanned"],
+            d.assets.len(), "No declared assets.", |ui, i| {
+            let a = &d.assets[i];
+            ui.label(&a.id);
+            ui.label(&a.kind);
+            ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
+            ui.label(&a.environment);
+            ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
+            ui.label(egui::RichText::new(fmt_opt_dt(a.last_scanned)).color(theme::MUTED));
+        });
+    }
+
+    fn remediations(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Remediations");
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "remediations", &["Ticket", "Integration", "Status", "Finding", "Updated"],
+            d.remediations.len(), "No remediation tickets opened.", |ui, i| {
+            let r = &d.remediations[i];
+            ui.label(&r.external_id);
+            ui.label(egui::RichText::new(&r.integration_id).color(theme::MUTED));
+            ui.label(format!("{:?}", r.status));
+            ui.label(egui::RichText::new(truncate_str(&r.finding_id, 14)).monospace().small());
+            ui.label(egui::RichText::new(fmt_dt(r.updated_at)).color(theme::MUTED));
+        });
+    }
+
+    fn overlay(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("PQC Overlay");
+        ui.label(egui::RichText::new("Hybrid-PQC TLS listeners fronting legacy upstreams.").color(theme::MUTED).small());
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "overlay", &["Route", "Listen", "Upstream", "Upstream TLS", "Mode"],
+            d.overlay_routes.len(), "No overlay routes configured.", |ui, i| {
+            let r = &d.overlay_routes[i];
+            ui.label(&r.id);
+            ui.label(egui::RichText::new(&r.listen).monospace().small());
+            ui.label(egui::RichText::new(&r.upstream).monospace().small());
+            ui.colored_label(if r.upstream_tls { theme::GOOD } else { theme::MUTED },
+                if r.upstream_tls { "re-encrypt" } else { "plaintext" });
+            ui.colored_label(if r.mode == "pqc-only" { theme::GOOD } else { theme::LOW }, &r.mode);
+        });
+    }
+
+    fn connections(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Connections");
+        ui.label(egui::RichText::new("UI-managed integrations. Secrets are encrypted at rest and masked here.").color(theme::MUTED).small());
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "connections", &["Name", "Type", "Base URL", "Status"],
+            d.connections.len(), "No connections. Add one from the gateway dashboard.", |ui, i| {
+            let c = &d.connections[i];
+            ui.label(&c.display_name);
+            ui.label(&c.integration_type);
+            ui.label(egui::RichText::new(c.base_url.as_deref().unwrap_or("—")).color(theme::MUTED));
+            let (col, s) = match c.last_status.as_deref() {
+                Some("connected") => (theme::GOOD, "connected"),
+                Some("failed") => (theme::CRIT, "failed"),
+                _ => (theme::MUTED, "untested"),
+            };
+            ui.colored_label(col, s);
+        });
+    }
+
+    fn agents(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Agents");
+        ui.label(egui::RichText::new("Observed agent → provider flows from the in-path proxy.").color(theme::MUTED).small());
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "agents", &["Agent", "Provider", "Requests", "Sensitive", "Threats", "Last seen"],
+            d.flows.len(), "No observed flows yet.", |ui, i| {
+            let f = &d.flows[i];
+            ui.label(&f.agent);
+            ui.label(&f.provider);
+            ui.label(f.requests.to_string());
+            ui.colored_label(if f.sensitive > 0 { theme::HIGH } else { theme::MUTED }, f.sensitive.to_string());
+            ui.colored_label(if f.threats > 0 { theme::CRIT } else { theme::MUTED }, f.threats.to_string());
+            ui.label(egui::RichText::new(fmt_dt(f.last_seen)).color(theme::MUTED));
+        });
+    }
+
+    fn sessions(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Sessions");
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "sessions", &["Agent", "Provider", "Model", "Requests", "Client IP", "Started"],
+            d.sessions.len(), "No sessions recorded.", |ui, i| {
+            let s = &d.sessions[i];
+            ui.label(&s.agent_name);
+            ui.label(&s.provider);
+            ui.label(egui::RichText::new(&s.model).color(theme::MUTED));
+            ui.label(s.request_count.to_string());
+            ui.label(egui::RichText::new(&s.client_ip).monospace().small());
+            ui.label(egui::RichText::new(fmt_dt(s.created_at)).color(theme::MUTED));
+        });
+    }
+
+    fn access(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Access (RBAC)");
+        ui.label(egui::RichText::new("Runtime user accounts from the store. Config-file users are managed by the gateway.").color(theme::MUTED).small());
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "users", &["User", "Role", "Org", "Created"],
+            d.users.len(), "No runtime users. Add users via the gateway admin center.", |ui, i| {
+            let u = &d.users[i];
+            ui.label(&u.username);
+            let rc = match u.role.as_str() {
+                "admin" => theme::CRIT, "operator" => theme::HIGH, "auditor" => theme::LOW, _ => theme::MUTED,
+            };
+            ui.colored_label(rc, &u.role);
+            ui.label(&u.org);
+            ui.label(egui::RichText::new(fmt_dt(u.created_at)).color(theme::MUTED));
+        });
+    }
+
     fn about(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("About");
@@ -897,6 +1084,43 @@ fn nav_item(ui: &mut egui::Ui, page: &mut Page, target: Page, label: &str, badge
     if resp.clicked() {
         *page = target;
     }
+}
+
+fn nav_group(ui: &mut egui::Ui, label: &str) {
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(label).color(theme::MUTED).small().strong());
+    ui.add_space(2.0);
+}
+
+/// A striped table: headers + `rows` invocations of `cell`, which fills one row.
+fn data_table(
+    ui: &mut egui::Ui,
+    id: &str,
+    headers: &[&str],
+    rows: usize,
+    empty: &str,
+    mut cell: impl FnMut(&mut egui::Ui, usize),
+) {
+    if rows == 0 {
+        empty_state(ui, empty);
+        return;
+    }
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        egui::Grid::new(id)
+            .striped(true)
+            .num_columns(headers.len())
+            .spacing([16.0, 6.0])
+            .show(ui, |ui| {
+                for h in headers {
+                    ui.label(egui::RichText::new(*h).strong().color(theme::MUTED));
+                }
+                ui.end_row();
+                for r in 0..rows {
+                    cell(ui, r);
+                    ui.end_row();
+                }
+            });
+    });
 }
 
 fn stat_card(ui: &mut egui::Ui, label: &str, value: usize, color: egui::Color32) {
@@ -983,6 +1207,20 @@ fn status_str_color(s: &str) -> egui::Color32 {
         _ => theme::MUTED,
     }
 }
+fn fmt_dt(dt: DateTime<Utc>) -> String {
+    dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
+}
+fn fmt_opt_dt(dt: Option<DateTime<Utc>>) -> String {
+    dt.map(fmt_dt).unwrap_or_else(|| "—".to_string())
+}
+fn truncate_str(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        s.to_string()
+    } else {
+        format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>())
+    }
+}
+
 fn pretty_status(s: &str) -> String {
     s.replace(['_', '-'], " ")
         .split_whitespace()
