@@ -265,6 +265,11 @@ struct App {
     selected_finding: Option<String>,
     graph: GraphView,
     export_status: String,
+    // IDE shell: editor tabs + bottom terminal.
+    open_tabs: Vec<Page>,
+    terminal_open: bool,
+    terminal_input: String,
+    terminal_lines: Vec<String>,
     asset_form: AssetForm,
     target_form: TargetForm,
     edit_status: String,
@@ -287,6 +292,10 @@ impl App {
             selected_finding: None,
             graph: GraphView::default(),
             export_status: String::new(),
+            open_tabs: vec![Page::Overview],
+            terminal_open: false,
+            terminal_input: String::new(),
+            terminal_lines: vec!["QuantaWatch console — type 'help' for commands.".to_string()],
             asset_form: AssetForm::default(),
             target_form: TargetForm::default(),
             edit_status: String::new(),
@@ -436,8 +445,18 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_scan();
+        // Ctrl+` toggles the terminal, like the web IDE shell.
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Backtick)) {
+            self.terminal_open = !self.terminal_open;
+        }
         self.top_bar(ctx);
         self.side_nav(ctx);
+        // The active page is always an open editor tab.
+        if !self.open_tabs.contains(&self.page) {
+            self.open_tabs.push(self.page);
+        }
+        self.tab_strip(ctx);
+        self.terminal_panel(ctx);
         self.finding_detail_panel(ctx); // right panel; must precede CentralPanel
         egui::CentralPanel::default().show(ctx, |ui| match self.page {
             Page::Overview => self.overview(ui),
@@ -483,6 +502,9 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("⟳ Refresh").clicked() {
                         self.refresh();
+                    }
+                    if ui.selectable_label(self.terminal_open, "▾ Terminal").on_hover_text("Ctrl+`").clicked() {
+                        self.terminal_open = !self.terminal_open;
                     }
                     if let Some(t) = self.data.loaded_at {
                         ui.label(
@@ -541,6 +563,203 @@ impl App {
                     ui.label(egui::RichText::new(&self.source).color(theme::MUTED).small());
                 });
             });
+    }
+
+    fn tab_strip(&mut self, ctx: &egui::Context) {
+        let tabs = self.open_tabs.clone();
+        let active = self.page;
+        let multi = tabs.len() > 1;
+        let mut select: Option<Page> = None;
+        let mut close: Option<Page> = None;
+        egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+            ui.add_space(2.0);
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for tab in &tabs {
+                        let is_active = *tab == active;
+                        egui::Frame::none()
+                            .fill(if is_active { theme::BG } else { theme::PANEL })
+                            .inner_margin(egui::Margin::symmetric(9.0, 4.0))
+                            .rounding(4.0)
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let col = if is_active { theme::TEXT } else { theme::MUTED };
+                                    if ui
+                                        .add(egui::Label::new(egui::RichText::new(page_title(*tab)).color(col)).sense(egui::Sense::click()))
+                                        .clicked()
+                                    {
+                                        select = Some(*tab);
+                                    }
+                                    if multi
+                                        && ui
+                                            .add(egui::Label::new(egui::RichText::new(" ✕").color(theme::MUTED).small()).sense(egui::Sense::click()))
+                                            .clicked()
+                                    {
+                                        close = Some(*tab);
+                                    }
+                                });
+                            });
+                    }
+                });
+            });
+            ui.add_space(2.0);
+        });
+        if let Some(t) = select {
+            self.page = t;
+        }
+        if let Some(t) = close {
+            self.close_tab(t);
+        }
+    }
+
+    fn close_tab(&mut self, p: Page) {
+        self.open_tabs.retain(|&t| t != p);
+        if self.open_tabs.is_empty() {
+            self.open_tabs.push(Page::Overview);
+        }
+        if self.page == p {
+            self.page = *self.open_tabs.last().unwrap();
+        }
+    }
+
+    fn terminal_panel(&mut self, ctx: &egui::Context) {
+        if !self.terminal_open {
+            return;
+        }
+        egui::TopBottomPanel::bottom("terminal")
+            .resizable(true)
+            .default_height(220.0)
+            .min_height(120.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("TERMINAL").small().strong().color(theme::MUTED));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("✕").on_hover_text("close").clicked() {
+                            self.terminal_open = false;
+                        }
+                        if ui.small_button("clear").clicked() {
+                            self.terminal_lines.clear();
+                        }
+                    });
+                });
+                ui.separator();
+                let mut submit: Option<String> = None;
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .auto_shrink([false, false])
+                    .max_height(ui.available_height() - 28.0)
+                    .show(ui, |ui| {
+                        for line in &self.terminal_lines {
+                            ui.label(
+                                egui::RichText::new(line)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(if line.starts_with('›') { theme::ACCENT } else { theme::TEXT }),
+                            );
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("›").monospace().color(theme::ACCENT));
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.terminal_input)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text("type 'help'"),
+                    );
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        submit = Some(std::mem::take(&mut self.terminal_input));
+                        resp.request_focus();
+                    }
+                });
+                if let Some(line) = submit {
+                    self.run_terminal(line, ui.ctx());
+                }
+            });
+    }
+
+    fn run_terminal(&mut self, line: String, ctx: &egui::Context) {
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            return;
+        }
+        self.terminal_lines.push(format!("› {line}"));
+        let mut it = line.split_whitespace();
+        let cmd = it.next().unwrap_or("").to_lowercase();
+        let arg = it.collect::<Vec<_>>().join(" ");
+        match cmd.as_str() {
+            "clear" => {
+                self.terminal_lines.clear();
+                return;
+            }
+            "help" => self.terminal_lines.push(
+                "commands: help · clear · posture · findings [n] · estate · assets · certs · threats · paths · scan <dir> · open <page> · refresh · version".to_string(),
+            ),
+            "posture" => {
+                let msg = match &self.data.posture {
+                    Some(p) => format!("posture {:.0}/100 · {} findings · {} assets scored", p.overall_score, self.data.findings.len(), p.total_assets),
+                    None => "no posture snapshot".to_string(),
+                };
+                self.terminal_lines.push(msg);
+            }
+            "findings" => {
+                let n: usize = arg.parse().unwrap_or(10);
+                let c = self.data.severity_counts();
+                self.terminal_lines.push(format!(
+                    "{} findings — {} critical · {} high · {} medium · {} low · {} info",
+                    self.data.findings.len(), c[4], c[3], c[2], c[1], c[0]
+                ));
+                let rows: Vec<String> = self.data.findings.iter().take(n)
+                    .map(|f| format!("  [{}] {} — {}", sev_label(f.severity), f.title, f.location)).collect();
+                self.terminal_lines.extend(rows);
+            }
+            "estate" => {
+                let rows: Vec<String> = self.data.targets.iter()
+                    .map(|t| format!("{} · {} · {} · {}", t.name, t.host, t.kind, pretty_status(&t.pqc_status))).collect();
+                self.terminal_lines.extend(if rows.is_empty() { vec!["(no hosts)".to_string()] } else { rows });
+            }
+            "assets" => {
+                let rows: Vec<String> = self.data.assets.iter()
+                    .map(|a| format!("{} · {} · {}", a.id, a.address, pretty_status(&a.pqc_status))).collect();
+                self.terminal_lines.extend(if rows.is_empty() { vec!["(no assets)".to_string()] } else { rows });
+            }
+            "certs" => self.terminal_lines.push(format!("{} certificates", self.data.certs.len())),
+            "threats" => {
+                let n = self.data.audit.iter().filter(|e| event_to_threat(&e.event).is_some()).count();
+                self.terminal_lines.push(format!("{n} threat events in the audit stream"));
+            }
+            "paths" => {
+                self.graph.sync(&self.data.flows, &self.data.targets, &self.data.findings, &self.data.assets);
+                let rows: Vec<String> = self.graph.paths().iter().take(10)
+                    .map(|p| format!("[{:.0}] {} — {}", p.score, p.severity.to_uppercase(), p.title)).collect();
+                self.terminal_lines.extend(if rows.is_empty() { vec!["(no attack paths)".to_string()] } else { rows });
+            }
+            "scan" => {
+                if arg.is_empty() {
+                    self.terminal_lines.push("usage: scan <dir>".to_string());
+                } else {
+                    self.scan_path = arg.clone();
+                    self.terminal_lines.push(format!("scanning {arg} …"));
+                    self.start_scan(ctx);
+                }
+            }
+            "open" => match page_by_name(&arg) {
+                Some(p) => {
+                    self.page = p;
+                    self.terminal_lines.push(format!("opened {}", page_title(p)));
+                }
+                None => self.terminal_lines.push(format!("unknown page: {arg}")),
+            },
+            "refresh" => {
+                self.refresh();
+                self.terminal_lines.push("refreshed from store".to_string());
+            }
+            "version" => self.terminal_lines.push(format!("qw-desktop v{}", env!("CARGO_PKG_VERSION"))),
+            other => self.terminal_lines.push(format!("unknown command: {other} (try 'help')")),
+        }
+        let len = self.terminal_lines.len();
+        if len > 500 {
+            self.terminal_lines.drain(0..len - 500);
+        }
     }
 
     fn overview(&mut self, ui: &mut egui::Ui) {
@@ -1501,6 +1720,44 @@ fn nav_item(ui: &mut egui::Ui, page: &mut Page, target: Page, label: &str, badge
     if resp.clicked() {
         *page = target;
     }
+}
+
+fn page_title(p: Page) -> &'static str {
+    match p {
+        Page::Overview => "Overview",
+        Page::AttackPaths => "Attack Paths",
+        Page::Estate => "Estate",
+        Page::Endpoints => "Endpoints",
+        Page::Assets => "Assets",
+        Page::Findings => "Findings",
+        Page::Certificates => "Certificates",
+        Page::Compliance => "Compliance",
+        Page::Frameworks => "Frameworks",
+        Page::Soc2 => "SOC 2",
+        Page::Scans => "Scans",
+        Page::Remediations => "Remediations",
+        Page::Overlay => "PQC Overlay",
+        Page::Connections => "Connections",
+        Page::Agents => "Agents",
+        Page::Sessions => "Sessions",
+        Page::Threats => "Threats",
+        Page::Audit => "Audit Log",
+        Page::Access => "Access (RBAC)",
+        Page::About => "About",
+    }
+}
+
+fn page_by_name(name: &str) -> Option<Page> {
+    let n = name.trim().to_lowercase().replace([' ', '-', '_'], "");
+    let pages = [
+        Page::Overview, Page::AttackPaths, Page::Estate, Page::Endpoints, Page::Assets,
+        Page::Findings, Page::Certificates, Page::Compliance, Page::Frameworks, Page::Soc2,
+        Page::Scans, Page::Remediations, Page::Overlay, Page::Connections, Page::Agents,
+        Page::Sessions, Page::Threats, Page::Audit, Page::Access, Page::About,
+    ];
+    pages
+        .into_iter()
+        .find(|p| page_title(*p).to_lowercase().replace([' ', '-', '_', '(', ')'], "").starts_with(&n))
 }
 
 fn nav_group(ui: &mut egui::Ui, label: &str) {
