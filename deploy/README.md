@@ -13,6 +13,30 @@ identity keys** (`/app/keys`), and the **hash-chained audit log** (`/app/audit`)
 By default all three live on one `ReadWriteOnce` PVC, so the gateway runs as a
 **single replica** with a `Recreate` update strategy.
 
+## Production configuration
+
+Start from **[`quantawatch.prod.yaml`](quantawatch.prod.yaml)** — a hardened
+template with no demo credentials, TLS on, rate limiting on, and env-var
+placeholders for every secret. Copy it to your deployment and fill in each
+`REPLACE`. Set these in the service environment (never inline in the file):
+
+| Env var | Required? | Purpose |
+|---------|-----------|---------|
+| `QW_SECRET_KEY` | **Yes** | Encrypts stored integration tokens at rest (ChaCha20-Poly1305). `openssl rand -base64 32`. Losing it means re-entering integration secrets. |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | Per provider | Upstream keys, injected by the gateway. |
+| `OIDC_CLIENT_SECRET` | If SSO | OpenID Connect client secret. |
+| `QW_DB_PASSWORD` | If Postgres | Interpolated into `scanner.store_path`. |
+
+The gateway **fails closed at startup**: it refuses to bind a non-loopback
+interface when auth is disabled, a user carries the known demo password hash, or
+users share a hash. Give every user a unique `qw hash-password` output. (Loopback
+binds — the local demo — are always allowed; `QW_ALLOW_DEMO_CREDENTIALS=1`
+overrides the guard for a lab, and must never be set in production.)
+
+For a verified, MITM-resistant DB link, use `sslmode=verify-full` with
+`sslrootcert=<CA PEM>` in `scanner.store_path` (plain `sslmode=require` encrypts
+but does not authenticate the server).
+
 ### Toward HA / multiple replicas
 
 Two pieces of the single-node story are now solvable from config:

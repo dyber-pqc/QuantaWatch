@@ -1,0 +1,233 @@
+# =============================================================================
+# QuantaWatch — PRODUCTION configuration template
+# =============================================================================
+# Copy to your deployment (e.g. /etc/quantawatch/quantawatch.yaml) and fill in
+# every value marked REPLACE. This template ships NO demo credentials and turns
+# on the security controls the startup guard checks before a public bind.
+#
+# Secrets are NEVER inline here — they come from environment variables so the
+# file can live in git. Set these in the service environment (systemd unit,
+# Windows service env, k8s Secret):
+#
+#   QW_SECRET_KEY        REQUIRED. 32+ random bytes; encrypts stored integration
+#                        tokens at rest. Generate:  openssl rand -base64 32
+#                        Losing it means re-entering every integration secret.
+#   ANTHROPIC_API_KEY    Upstream provider keys (only those you proxy).
+#   OPENAI_API_KEY
+#   OIDC_CLIENT_SECRET   If using SSO (see auth.oidc below).
+#   QW_DB_PASSWORD       If using the Postgres/FortressQL backend (scanner.store_path).
+#
+# Do NOT set QW_ALLOW_DEMO_CREDENTIALS in production — it disables the guard.
+# =============================================================================
+
+gateway:
+  # Bind mode A (self-terminating TLS): expose directly with HTTPS.
+  listen: "0.0.0.0:9090"
+  admin_listen: "0.0.0.0:9091"
+  tls:
+    cert_file: "/etc/quantawatch/tls/gateway.crt"   # REPLACE: PEM cert chain (leaf first)
+    key_file: "/etc/quantawatch/tls/gateway.key"    # REPLACE: PEM private key (PKCS#8)
+  #
+  # Bind mode B (behind a reverse proxy that terminates TLS): instead of the
+  # above, keep the binds on loopback, drop the `tls:` block, and set
+  # rate_limit.trust_forwarded_for: true so limits key off the real client IP.
+  #   listen: "127.0.0.1:9090"
+  #   admin_listen: "127.0.0.1:9091"
+
+# Per-client rate limiting (on by default). Tune to your traffic.
+rate_limit:
+  enabled: true
+  requests_per_minute: 1200    # general API, per client IP
+  burst: 240                   # headroom for a dashboard page-load fan-out
+  login_per_minute: 30         # login / SSO, per client IP (brute-force brake)
+  login_burst: 10
+  trust_forwarded_for: false   # set TRUE only in bind mode B (behind a proxy)
+
+# In-path PQC enforcement: block agent->provider flows whose channel is below
+# the required post-quantum standard. "monitor" flags without blocking.
+crypto_enforcement:
+  enabled: true
+  mode: enforce                # enforce | monitor
+  require: hybrid              # pqc | hybrid | classical_secure
+  exempt_providers: []
+  block_unknown: false         # true = block providers not yet channel-scanned
+
+# Upstream LLM providers you proxy. Keys are injected from the named env vars.
+providers:
+  anthropic:
+    upstream: "https://api.anthropic.com"
+    protocol: anthropic
+    api_key_env: "ANTHROPIC_API_KEY"
+    api_key_header: "x-api-key"
+  openai:
+    upstream: "https://api.openai.com"
+    protocol: openai
+    api_key_env: "OPENAI_API_KEY"
+    api_key_header: "Authorization"
+
+# Per-agent guardrails (models + tools each agent may use). Define the agents
+# that actually exist in your environment; an unlisted agent gets no allowances.
+# agents:
+#   support-bot:
+#     description: "Customer support agent"
+#     allowed_models: ["claude-sonnet-*"]
+#     allowed_tools: ["crm_read", "web_search"]
+
+# ------------------------------------------------------------------ AUTH / RBAC
+auth:
+  enabled: true
+  session_ttl_secs: 28800      # 8h absolute session lifetime
+  idle_timeout_secs: 3600      # invalidate a session idle for 1h
+  max_failed_logins: 5         # lock an account after N failures
+  lockout_secs: 900            # ...for 15 minutes
+  min_password_length: 12
+
+  # Each user MUST have a UNIQUE real Argon2id hash. Generate one per user:
+  #     qw hash-password
+  # The startup guard refuses a public bind if any hash is the known demo hash,
+  # if two users share a hash, or if auth is disabled. The placeholder below is
+  # intentionally not a valid hash: login fails closed until you replace it.
+  users:
+    - username: admin
+      password_hash: "REPLACE_WITH_qw_hash-password_OUTPUT"   # REPLACE (unique per user)
+      role: admin
+      org: default
+
+  # Machine/CI credentials. key_hash = SHA3-256 hex of the API key:
+  #     qw hash-password --api-key
+  # api_keys:
+  #   - name: ci-pipeline
+  #     key_hash: "REPLACE_WITH_sha3-256_hex_of_the_api_key"
+  #     role: operator
+  #     org: default
+
+  # SSO / OpenID Connect (Okta, Entra ID, Auth0, Google Workspace, ...).
+  # oidc:
+  #   issuer: "https://your-org.okta.com"                     # REPLACE
+  #   client_id: "REPLACE"
+  #   client_secret_env: "OIDC_CLIENT_SECRET"                 # value from env, not inline
+  #   redirect_uri: "https://gw.example.com/api/auth/oidc/callback"  # REPLACE
+  #   app_url: "https://gw.example.com"                       # REPLACE (dashboard URL)
+  #   admin_group: "qw-admins"
+  #   operator_group: "qw-ops"
+  #   org_claim: "groups"
+
+# --------------------------------------------------------------------- STORAGE
+scanner:
+  # Local single-node store. For HA / multiple replicas, use the shared
+  # Postgres/FortressQL backend instead (commented). The URL password comes from
+  # ${QW_DB_PASSWORD}; use sslmode=verify-full + sslrootcert for a verified,
+  # MITM-resistant DB link.
+  store_path: "/var/lib/quantawatch/data"
+  # store_path: "postgres://qw:${QW_DB_PASSWORD}@fortressql.internal:5432/quantawatch?sslmode=verify-full&sslrootcert=/etc/quantawatch/tls/pg-ca.pem"
+  auto_scan_on_start: true
+  code:
+    enabled: true
+  # SSH key-exchange fingerprinting — probes ONLY the hosts listed here (or ones
+  # handed to POST /api/scans). Never an internet-wide scan.
+  ssh:
+    enabled: true
+    timeout_secs: 10
+    targets: []                # REPLACE: e.g. ["bastion.internal:22"]
+  # Active TCP connect-scan of AUTHORIZED hosts only. Scoped to `targets`.
+  network:
+    enabled: false
+    connect_timeout_ms: 1500
+    targets: []
+
+# Automatic re-scan cadence. 0 = only on-demand / on-start.
+schedule:
+  scan_interval_secs: 86400    # daily
+
+# Posture SLOs / policy-as-code — gate CI with GET /api/slos?gate=1
+slos:
+  - name: "Posture floor"
+    metric: posture
+    operator: gte
+    threshold: 80
+    action: fail
+  - name: "Zero critical attack paths"
+    metric: critical_paths
+    operator: lte
+    threshold: 0
+    action: fail
+  - name: "CNSA 2.0 compliance >= 90%"
+    metric: compliance
+    operator: gte
+    threshold: 90
+    action: alert
+
+# --------------------------------------------------------------- AUDIT / IDENTITY
+audit:
+  path: "/var/lib/quantawatch/audit"
+  merkle_batch_size: 64
+  checkpoint_interval_secs: 300
+  # writer_id MUST be unique per replica and stable across restarts. Empty here
+  # resolves from env QW_AUDIT_WRITER_ID, else HOSTNAME. Set per replica in HA.
+  writer_id: ""
+
+identity:
+  key_dir: "/var/lib/quantawatch/keys"
+  # For multiple replicas, derive the SAME signing identity on each by pointing
+  # this at a shared 32-byte hex seed in an env var / mounted Secret.
+  # seed_env: "QW_GATEWAY_SEED"
+
+policy:
+  default: deny                # fail-closed: deny agent actions unless allowed
+
+# Alerting — wire at least one channel so posture drops / critical findings page.
+alerts:
+  enabled: true
+  posture_drop_threshold: 5.0
+  alert_on_critical: true
+  cert_expiry_days: 30
+  channels: []
+  # channels:
+  #   - id: secops-slack
+  #     channel_type: slack
+  #     url: "https://hooks.slack.com/services/REPLACE"
+  #     min_severity: warning
+
+# Data-path resilience for the in-path proxy (timeouts, retries, circuit break).
+resilience:
+  connect_timeout_secs: 10
+  request_timeout_secs: 120
+  max_retries: 2
+  retry_backoff_ms: 200
+  circuit_failure_threshold: 5
+  circuit_cooldown_secs: 30
+
+# External infrastructure crypto assets (widens the attack-path graph). Declare
+# the TLS endpoints / load balancers you actually own and are authorized to scan.
+assets: []
+#   - id: prod-api-edge
+#     kind: tls_endpoint
+#     address: "api.example.com:443"        # REPLACE (authorized target)
+#     environment: production
+#     tags: [external, customer-facing]
+
+# Agentless connectors that discover assets from cloud / K8s environments.
+connectors: []
+#   - name: prod-cluster
+#     connector_type: kubernetes
+#     environment: production
+#     endpoints: ["ingress.internal:443"]   # REPLACE
+#     tags: [ingress]
+
+# Internal PQC certificate authority — issues hybrid (X.509 + ML-DSA-65) certs
+# and auto-rotates them. Leave enabled to use the Certificates page / API.
+pki:
+  enabled: true
+  common_name: "REPLACE Org PQC CA"         # REPLACE (your org's CA name)
+  default_validity_days: 90
+  auto_renew_days: 14
+
+# PQC-terminating overlay: front a legacy upstream with a hybrid-PQC TLS
+# listener. Off by default — enable per route only when you need it.
+overlay:
+  enabled: false
+  routes: []
+
+# Air-gapped mode: refuse ALL outbound calls except configured LLM upstreams
+# (disables alert webhooks, evidence delivery, cloud discovery, integrations).
+air_gapped: false

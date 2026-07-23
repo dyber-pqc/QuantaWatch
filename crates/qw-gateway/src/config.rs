@@ -880,6 +880,28 @@ mod deployment_safety_tests {
         c.auth.enabled = false;
         assert!(c.assert_deployment_safe().is_err());
     }
+
+    /// The shipped production template must stay in sync with the config schema
+    /// and satisfy the deployment-safety guard (unique non-demo credential,
+    /// auth on) even though it binds a public interface.
+    #[test]
+    fn prod_template_parses_and_is_deployment_safe() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../deploy/quantawatch.prod.yaml"
+        );
+        let yaml = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let cfg: GatewayConfig =
+            serde_yaml::from_str(&yaml).expect("prod template must match the config schema");
+        assert!(cfg.gateway.tls.is_some(), "prod template should enable TLS");
+        assert!(cfg.auth.enabled, "prod template must enable auth");
+        assert!(cfg.rate_limit.enabled, "prod template must enable rate limiting");
+        assert!(
+            cfg.assert_deployment_safe().is_ok(),
+            "prod template must pass the deployment-safety guard"
+        );
+    }
 }
 
 impl Default for GatewayConfig {
