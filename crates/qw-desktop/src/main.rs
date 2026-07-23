@@ -10,12 +10,15 @@
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
 
+mod graphview;
+
 use std::sync::mpsc::Receiver;
 
+use graphview::GraphView;
 use qw_cbom::{PostureEngine, PostureSnapshot};
-use qw_scanner::types::{FindingRecord, FindingSeverity, PqcStatus, ScanRecord};
+use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus, ScanRecord};
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
-use qw_store::{CertificateRow, Store, TargetRow, DEFAULT_TENANT};
+use qw_store::{CertificateRow, FlowRow, Store, TargetRow, DEFAULT_TENANT};
 
 const TENANT: &str = DEFAULT_TENANT;
 
@@ -56,7 +59,7 @@ fn main() -> eframe::Result<()> {
 
 // ----------------------------------------------------------------------------- theme
 
-mod theme {
+pub(crate) mod theme {
     use eframe::egui::Color32;
     // Microsoft Teams / Fluent dark palette (matches the web dashboard).
     pub const BG: Color32 = Color32::from_rgb(0x1f, 0x1f, 0x1f);
@@ -98,6 +101,8 @@ struct Snapshot {
     targets: Vec<TargetRow>,
     certs: Vec<CertificateRow>,
     scans: Vec<ScanRecord>,
+    flows: Vec<FlowRow>,
+    history: Vec<f64>,
     loaded_at: Option<DateTime<Local>>,
 }
 
@@ -108,12 +113,21 @@ impl Snapshot {
         findings.sort_by(|a, b| sev_rank(b.severity).cmp(&sev_rank(a.severity)));
         let mut scans = store.list_scans(TENANT, 200);
         scans.sort_by(|a, b| b.completed_at.cmp(&a.completed_at));
+        // posture_history is newest-first; reverse to chronological for the chart.
+        let mut hist: Vec<f64> = store
+            .posture_history(TENANT, 60)
+            .iter()
+            .map(|s| s.overall_score)
+            .collect();
+        hist.reverse();
         Self {
             posture: store.latest_posture(TENANT),
             findings,
             targets: store.list_targets(TENANT),
             certs: store.list_certificates(TENANT),
             scans,
+            flows: store.list_flows(TENANT),
+            history: hist,
             loaded_at: Some(Utc::now().with_timezone(&Local)),
         }
     }
@@ -181,6 +195,7 @@ fn run_scan_blocking(store: &Store, path: &str) -> ScanOutcome {
 #[derive(PartialEq, Clone, Copy)]
 enum Page {
     Overview,
+    AttackPaths,
     Findings,
     Estate,
     Certificates,
@@ -195,6 +210,8 @@ struct App {
     data: Snapshot,
     filter: String,
     selected_finding: Option<String>,
+    graph: GraphView,
+    export_status: String,
     // In-process scanning.
     scan_path: String,
     scanning: bool,
@@ -212,6 +229,8 @@ impl App {
             data,
             filter: String::new(),
             selected_finding: None,
+            graph: GraphView::default(),
+            export_status: String::new(),
             scan_path: ".".to_string(),
             scanning: false,
             scan_rx: None,
@@ -246,6 +265,23 @@ impl App {
         });
     }
 
+    /// Write the current findings to a JSON file next to the store (local file,
+    /// no network).
+    fn export_findings(&mut self) {
+        let dir = std::path::Path::new(&self.source)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let path = dir.join("quantawatch-findings.json");
+        self.export_status = match serde_json::to_string_pretty(&self.data.findings) {
+            Ok(json) => match std::fs::write(&path, json) {
+                Ok(_) => format!("Exported {} findings to {}", self.data.findings.len(), path.display()),
+                Err(e) => format!("Export failed: {e}"),
+            },
+            Err(e) => format!("Serialize failed: {e}"),
+        };
+    }
+
     /// Drain a finished scan (if any) and refresh from the store.
     fn poll_scan(&mut self) {
         if let Some(rx) = &self.scan_rx {
@@ -270,6 +306,7 @@ impl eframe::App for App {
         self.finding_detail_panel(ctx); // right panel; must precede CentralPanel
         egui::CentralPanel::default().show(ctx, |ui| match self.page {
             Page::Overview => self.overview(ui),
+            Page::AttackPaths => self.attack_paths(ui),
             Page::Findings => self.findings(ui),
             Page::Estate => self.estate(ui),
             Page::Certificates => self.certificates(ui),
@@ -322,6 +359,7 @@ impl App {
                 let t = self.data.targets.len();
                 let c = self.data.certs.len();
                 nav_item(ui, &mut self.page, Page::Overview, "📊  Overview", None);
+                nav_item(ui, &mut self.page, Page::AttackPaths, "🕸  Attack paths", None);
                 nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(n));
                 nav_item(ui, &mut self.page, Page::Estate, "🖧  Estate", Some(t));
                 nav_item(ui, &mut self.page, Page::Certificates, "🔏  Certificates", Some(c));
@@ -443,6 +481,85 @@ impl App {
                 });
             }
         }
+
+        // Posture trend sparkline (from history snapshots).
+        if self.data.history.len() >= 2 {
+            ui.add_space(16.0);
+            ui.label(egui::RichText::new("Posture trend").strong());
+            ui.add_space(4.0);
+            let hist = &self.data.history;
+            let (resp, painter) =
+                ui.allocate_painter(egui::vec2(380.0, 84.0), egui::Sense::hover());
+            let rect = resp.rect;
+            painter.rect_filled(rect, 4.0, theme::CARD);
+            let n = hist.len();
+            let pts: Vec<egui::Pos2> = hist
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| {
+                    let x = rect.left() + rect.width() * (i as f32 / (n - 1) as f32);
+                    let y = rect.bottom() - rect.height() * (v as f32 / 100.0).clamp(0.0, 1.0);
+                    egui::pos2(x, y)
+                })
+                .collect();
+            for w in pts.windows(2) {
+                painter.line_segment([w[0], w[1]], egui::Stroke::new(2.0, theme::ACCENT));
+            }
+            if let (Some(last), Some(&v)) = (pts.last(), hist.last()) {
+                painter.circle_filled(*last, 3.0, score_color(v));
+                painter.text(
+                    *last + egui::vec2(-6.0, -4.0),
+                    egui::Align2::RIGHT_BOTTOM,
+                    format!("{v:.0}"),
+                    egui::FontId::proportional(11.0),
+                    theme::TEXT,
+                );
+            }
+        }
+    }
+
+    fn attack_paths(&mut self, ui: &mut egui::Ui) {
+        self.graph
+            .sync(&self.data.flows, &self.data.targets, &self.data.findings);
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.heading("Attack paths");
+            let (n, e) = self.graph.counts();
+            ui.label(
+                egui::RichText::new(format!("{n} nodes · {e} edges"))
+                    .color(theme::MUTED)
+                    .small(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Reset view").clicked() {
+                    self.graph.reset_view();
+                }
+            });
+        });
+        ui.label(
+            egui::RichText::new(
+                "Drag to pan · scroll to zoom · click a node. Built in-process from flows, estate & findings.",
+            )
+            .color(theme::MUTED)
+            .small(),
+        );
+        ui.add_space(4.0);
+        if self.graph.counts().0 <= 1 {
+            empty_state(ui, "Not enough data to graph yet — run a scan or register estate hosts.");
+            return;
+        }
+        let sel = self.graph.ui(ui);
+        if let Some((label, detail)) = sel {
+            egui::Area::new(egui::Id::new("graph_sel"))
+                .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -16.0))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_max_width(320.0);
+                        ui.label(egui::RichText::new(label).strong());
+                        ui.label(egui::RichText::new(detail).small().color(theme::MUTED));
+                    });
+                });
+        }
     }
 
     fn findings(&mut self, ui: &mut egui::Ui) {
@@ -450,9 +567,15 @@ impl App {
         ui.horizontal(|ui| {
             ui.heading("Findings");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("⭳ Export JSON").clicked() {
+                    self.export_findings();
+                }
                 ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter…").desired_width(220.0));
             });
         });
+        if !self.export_status.is_empty() {
+            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+        }
         ui.add_space(6.0);
 
         let filter = self.filter.to_lowercase();
@@ -659,6 +782,23 @@ impl App {
                     ui.label(egui::RichText::new("Location").color(theme::MUTED));
                     ui.label(egui::RichText::new(&f.location).monospace().small());
                     ui.end_row();
+                });
+
+                // Triage actions — persisted to the store in-process.
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Set status:").small().color(theme::MUTED));
+                    for (lbl, st) in [
+                        ("Open", FindingStatus::Open),
+                        ("Acknowledge", FindingStatus::Acknowledged),
+                        ("Suppress", FindingStatus::Suppressed),
+                    ] {
+                        let active = f.status == st;
+                        if ui.selectable_label(active, lbl).clicked() && !active {
+                            self.store.set_finding_status(TENANT, &f.id, st, None);
+                            self.refresh();
+                        }
+                    }
                 });
 
                 ui.add_space(8.0);
