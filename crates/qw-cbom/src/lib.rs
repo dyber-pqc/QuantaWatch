@@ -8,6 +8,7 @@ pub mod history;
 pub mod model;
 pub mod posture;
 pub mod remediation;
+pub mod soc2;
 
 pub use builder::CbomBuilder;
 pub use business::{business_risk_score, BusinessContext, Criticality};

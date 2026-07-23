@@ -15,7 +15,8 @@ mod graphview;
 use std::sync::mpsc::Receiver;
 
 use graphview::GraphView;
-use qw_cbom::{PostureEngine, PostureSnapshot};
+use qw_cbom::soc2;
+use qw_cbom::{ComplianceEngine, PostureEngine, PostureSnapshot};
 use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus, ScanRecord};
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
 use qw_integrations::RemediationTicket;
@@ -219,6 +220,8 @@ enum Page {
     Assets,
     Findings,
     Certificates,
+    Compliance,
+    Soc2,
     Scans,
     Remediations,
     Overlay,
@@ -227,6 +230,22 @@ enum Page {
     Sessions,
     Access,
     About,
+}
+
+#[derive(Default)]
+struct AssetForm {
+    id: String,
+    address: String,
+    kind: String,
+    environment: String,
+}
+
+#[derive(Default)]
+struct TargetForm {
+    name: String,
+    host: String,
+    kind: String,
+    environment: String,
 }
 
 struct App {
@@ -238,6 +257,9 @@ struct App {
     selected_finding: Option<String>,
     graph: GraphView,
     export_status: String,
+    asset_form: AssetForm,
+    target_form: TargetForm,
+    edit_status: String,
     // In-process scanning.
     scan_path: String,
     scanning: bool,
@@ -257,6 +279,9 @@ impl App {
             selected_finding: None,
             graph: GraphView::default(),
             export_status: String::new(),
+            asset_form: AssetForm::default(),
+            target_form: TargetForm::default(),
+            edit_status: String::new(),
             scan_path: ".".to_string(),
             scanning: false,
             scan_rx: None,
@@ -308,6 +333,62 @@ impl App {
         };
     }
 
+    /// Create/replace an asset in the store from the add-form.
+    fn add_asset(&mut self) {
+        let f = &self.asset_form;
+        let (id, addr) = (f.id.trim(), f.address.trim());
+        if id.is_empty() || addr.is_empty() {
+            self.edit_status = "An asset needs an ID and an address.".to_string();
+            return;
+        }
+        let asset = AssetRow {
+            id: id.to_string(),
+            kind: non_empty(&f.kind, "tls_endpoint"),
+            address: addr.to_string(),
+            environment: non_empty(&f.environment, "default"),
+            tags: Vec::new(),
+            pqc_status: "unknown".to_string(),
+            tls_version: None,
+            last_scanned: None,
+            source: "desktop".to_string(),
+        };
+        self.store.upsert_asset(TENANT, &asset);
+        self.edit_status = format!("Saved asset {}", asset.id);
+        self.asset_form = AssetForm::default();
+        self.refresh();
+    }
+
+    /// Register/replace an estate host in the store from the add-form.
+    fn add_target(&mut self) {
+        let f = &self.target_form;
+        let (name, host) = (f.name.trim(), f.host.trim());
+        if name.is_empty() || host.is_empty() {
+            self.edit_status = "A host needs a name and an address.".to_string();
+            return;
+        }
+        let id = host.replace([':', '.', '/', ' '], "-");
+        let target = TargetRow {
+            id,
+            name: name.to_string(),
+            host: host.to_string(),
+            kind: non_empty(&f.kind, "server"),
+            reachability: vec!["tls".to_string()],
+            environment: non_empty(&f.environment, "default"),
+            tags: Vec::new(),
+            exposed_services: Vec::new(),
+            containers: Vec::new(),
+            host_info: None,
+            deep_scanned: false,
+            pqc_status: "unknown".to_string(),
+            last_scanned: None,
+            created_at: Utc::now(),
+        };
+        self.store.upsert_target(TENANT, &target);
+        self.edit_status = format!("Registered host {}", target.name);
+        self.target_form = TargetForm::default();
+        self.refresh();
+    }
+
     /// Drain a finished scan (if any) and refresh from the store.
     fn poll_scan(&mut self) {
         if let Some(rx) = &self.scan_rx {
@@ -338,6 +419,8 @@ impl eframe::App for App {
             Page::Assets => self.assets(ui),
             Page::Findings => self.findings(ui),
             Page::Certificates => self.certificates(ui),
+            Page::Compliance => self.compliance(ui),
+            Page::Soc2 => self.soc2(ui),
             Page::Scans => self.scans(ui),
             Page::Remediations => self.remediations(ui),
             Page::Overlay => self.overlay(ui),
@@ -400,6 +483,10 @@ impl App {
                     nav_item(ui, &mut self.page, Page::Assets, "🧱  Assets", Some(d.assets.len()));
                     nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(d.findings.len()));
                     nav_item(ui, &mut self.page, Page::Certificates, "🔏  Certificates", Some(d.certs.len()));
+
+                    nav_group(ui, "GOVERNANCE");
+                    nav_item(ui, &mut self.page, Page::Compliance, "📋  Compliance", None);
+                    nav_item(ui, &mut self.page, Page::Soc2, "✅  SOC 2", None);
 
                     nav_group(ui, "OPERATE");
                     nav_item(ui, &mut self.page, Page::Scans, "🔎  Scans", Some(d.scans.len()));
@@ -718,31 +805,58 @@ impl App {
         ui.add_space(6.0);
         ui.heading("Estate");
         ui.add_space(6.0);
-        if self.data.targets.is_empty() {
-            empty_state(ui, "No registered hosts. Register targets via the gateway's Estate page.");
-            return;
-        }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("estate")
-                .striped(true)
-                .num_columns(6)
-                .spacing([16.0, 6.0])
-                .show(ui, |ui| {
-                    for h in ["Name", "Host", "Kind", "Env", "PQC", "Services"] {
-                        ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
-                    }
-                    ui.end_row();
-                    for t in &self.data.targets {
-                        ui.label(&t.name);
-                        ui.label(egui::RichText::new(&t.host).color(theme::MUTED));
-                        ui.label(&t.kind);
-                        ui.label(&t.environment);
-                        ui.colored_label(status_str_color(&t.pqc_status), pretty_status(&t.pqc_status));
-                        ui.label(t.exposed_services.len().to_string());
-                        ui.end_row();
-                    }
-                });
+
+        let mut add = false;
+        egui::CollapsingHeader::new("➕ Register host").show(ui, |ui| {
+            egui::Grid::new("targetform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut self.target_form.name);
+                ui.end_row();
+                ui.label("Host / address");
+                ui.text_edit_singleline(&mut self.target_form.host);
+                ui.end_row();
+                ui.label("Kind");
+                ui.text_edit_singleline(&mut self.target_form.kind);
+                ui.end_row();
+                ui.label("Environment");
+                ui.text_edit_singleline(&mut self.target_form.environment);
+                ui.end_row();
+            });
+            ui.label(egui::RichText::new("kind defaults to server, env to default. Scan it from Overview after registering.").color(theme::MUTED).small());
+            if ui.button("Register").clicked() {
+                add = true;
+            }
         });
+        if add {
+            self.add_target();
+        }
+        if !self.edit_status.is_empty() {
+            ui.label(egui::RichText::new(&self.edit_status).color(theme::MUTED).small());
+        }
+        ui.add_space(6.0);
+
+        let mut del: Option<String> = None;
+        {
+            let d = &self.data;
+            data_table(ui, "estate", &["Name", "Host", "Kind", "Env", "PQC", "Svcs", ""],
+                d.targets.len(), "No registered hosts. Register one above.", |ui, i| {
+                let t = &d.targets[i];
+                ui.label(&t.name);
+                ui.label(egui::RichText::new(&t.host).color(theme::MUTED));
+                ui.label(&t.kind);
+                ui.label(&t.environment);
+                ui.colored_label(status_str_color(&t.pqc_status), pretty_status(&t.pqc_status));
+                ui.label(t.exposed_services.len().to_string());
+                if ui.small_button("✕").on_hover_text("delete").clicked() {
+                    del = Some(t.id.clone());
+                }
+            });
+        }
+        if let Some(id) = del {
+            self.store.delete_target(TENANT, &id);
+            self.edit_status = format!("Deleted host {id}");
+            self.refresh();
+        }
     }
 
     fn certificates(&mut self, ui: &mut egui::Ui) {
@@ -932,17 +1046,58 @@ impl App {
         ui.add_space(6.0);
         ui.heading("Assets");
         ui.add_space(6.0);
-        let d = &self.data;
-        data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Scanned"],
-            d.assets.len(), "No declared assets.", |ui, i| {
-            let a = &d.assets[i];
-            ui.label(&a.id);
-            ui.label(&a.kind);
-            ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
-            ui.label(&a.environment);
-            ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
-            ui.label(egui::RichText::new(fmt_opt_dt(a.last_scanned)).color(theme::MUTED));
+
+        let mut add = false;
+        egui::CollapsingHeader::new("➕ Add asset").show(ui, |ui| {
+            egui::Grid::new("assetform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+                ui.label("ID");
+                ui.text_edit_singleline(&mut self.asset_form.id);
+                ui.end_row();
+                ui.label("Address");
+                ui.text_edit_singleline(&mut self.asset_form.address);
+                ui.end_row();
+                ui.label("Kind");
+                ui.text_edit_singleline(&mut self.asset_form.kind);
+                ui.end_row();
+                ui.label("Environment");
+                ui.text_edit_singleline(&mut self.asset_form.environment);
+                ui.end_row();
+            });
+            ui.label(egui::RichText::new("kind defaults to tls_endpoint, env to default.").color(theme::MUTED).small());
+            if ui.button("Add asset").clicked() {
+                add = true;
+            }
         });
+        if add {
+            self.add_asset();
+        }
+        if !self.edit_status.is_empty() {
+            ui.label(egui::RichText::new(&self.edit_status).color(theme::MUTED).small());
+        }
+        ui.add_space(6.0);
+
+        let mut del: Option<String> = None;
+        {
+            let d = &self.data;
+            data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Scanned", ""],
+                d.assets.len(), "No declared assets. Add one above.", |ui, i| {
+                let a = &d.assets[i];
+                ui.label(&a.id);
+                ui.label(&a.kind);
+                ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
+                ui.label(&a.environment);
+                ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
+                ui.label(egui::RichText::new(fmt_opt_dt(a.last_scanned)).color(theme::MUTED));
+                if ui.small_button("✕").on_hover_text("delete").clicked() {
+                    del = Some(a.id.clone());
+                }
+            });
+        }
+        if let Some(id) = del {
+            self.store.delete_asset(TENANT, &id);
+            self.edit_status = format!("Deleted asset {id}");
+            self.refresh();
+        }
     }
 
     fn remediations(&mut self, ui: &mut egui::Ui) {
@@ -1051,6 +1206,106 @@ impl App {
             ui.colored_label(rc, &u.role);
             ui.label(&u.org);
             ui.label(egui::RichText::new(fmt_dt(u.created_at)).color(theme::MUTED));
+        });
+    }
+
+    fn compliance(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Compliance");
+        ui.label(egui::RichText::new("Computed in-process by the shared qw-cbom engine from your findings.").color(theme::MUTED).small());
+        ui.add_space(8.0);
+        let report = ComplianceEngine::assess(&self.data.findings);
+        ui.horizontal(|ui| {
+            let col = score_color(report.overall_compliance_pct);
+            ui.label(egui::RichText::new(format!("{:.0}%", report.overall_compliance_pct)).size(30.0).strong().color(col));
+            ui.vertical(|ui| {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new("overall compliant").color(theme::MUTED).small());
+                ui.label(egui::RichText::new(format!(
+                    "{} compliant · {} at risk · {} non-compliant",
+                    report.compliant, report.at_risk, report.non_compliant
+                )).small());
+            });
+        });
+        ui.add_space(10.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::Grid::new("frameworks").striped(true).num_columns(4).spacing([16.0, 6.0]).show(ui, |ui| {
+                for h in ["Framework", "Authority", "Compliance", "Deadline"] {
+                    ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
+                }
+                ui.end_row();
+                for fw in &report.frameworks {
+                    ui.label(&fw.name);
+                    ui.label(egui::RichText::new(&fw.authority).color(theme::MUTED));
+                    ui.colored_label(score_color(fw.compliance_pct), format!("{:.0}%", fw.compliance_pct));
+                    ui.label(fw.nearest_deadline.map(|y| y.to_string()).unwrap_or_else(|| "—".to_string()));
+                    ui.end_row();
+                }
+            });
+            if !report.migration_items.is_empty() {
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new("Migration items").strong());
+                ui.add_space(4.0);
+                for m in &report.migration_items {
+                    egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let pc = match m.priority.as_str() {
+                                "p0" | "critical" => theme::CRIT,
+                                "p1" | "high" => theme::HIGH,
+                                _ => theme::MED,
+                            };
+                            ui.colored_label(pc, m.priority.to_uppercase());
+                            ui.label(egui::RichText::new(&m.title).small());
+                        });
+                        ui.label(egui::RichText::new(format!(
+                            "{} → {} · by {} · {} affected",
+                            m.current_state, m.target_state, m.deadline_year, m.affected_count
+                        )).color(theme::MUTED).small());
+                    });
+                    ui.add_space(4.0);
+                }
+            }
+        });
+    }
+
+    fn soc2(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("SOC 2");
+        ui.label(egui::RichText::new("Shared qw-cbom control set. Evaluated from local store signals — the gateway's live config is authoritative.").color(theme::MUTED).small());
+        ui.add_space(8.0);
+        // Best-effort inputs from what the local store reveals.
+        let auth_on = !self.data.users.is_empty() || !self.data.sessions.is_empty();
+        let inputs = soc2::Soc2Inputs {
+            auth_enabled: auth_on,
+            max_failed_logins: 5,
+            lockout_secs: 900,
+            session_ttl_secs: 28800,
+            idle_timeout_secs: 3600,
+            sso_enabled: false,
+            custom_roles: false,
+            tls_scanner_enabled: true,
+            alerts_enabled: false,
+            shared_identity: false,
+        };
+        let report = soc2::assess(&inputs);
+        ui.label(egui::RichText::new(format!(
+            "{} enforced · {} partial · {} configurable · {} manual",
+            report.enforced, report.partial, report.configurable, report.manual
+        )).small());
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for c in &report.controls {
+                egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (col, txt) = soc2_status(&c.status);
+                        ui.colored_label(col, txt);
+                        ui.label(egui::RichText::new(c.criteria).monospace().small());
+                        ui.label(egui::RichText::new(c.title).strong());
+                    });
+                    ui.label(egui::RichText::new(&c.evidence).color(theme::MUTED).small());
+                });
+                ui.add_space(4.0);
+            }
         });
     }
 
@@ -1207,6 +1462,24 @@ fn status_str_color(s: &str) -> egui::Color32 {
         _ => theme::MUTED,
     }
 }
+fn non_empty(s: &str, default: &str) -> String {
+    let t = s.trim();
+    if t.is_empty() {
+        default.to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn soc2_status(s: &soc2::ControlStatus) -> (egui::Color32, &'static str) {
+    match s {
+        soc2::ControlStatus::Enforced => (theme::GOOD, "ENFORCED"),
+        soc2::ControlStatus::Partial => (theme::MED, "PARTIAL"),
+        soc2::ControlStatus::Configurable => (theme::LOW, "CONFIGURABLE"),
+        soc2::ControlStatus::Manual => (theme::MUTED, "MANUAL"),
+    }
+}
+
 fn fmt_dt(dt: DateTime<Utc>) -> String {
     dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
 }

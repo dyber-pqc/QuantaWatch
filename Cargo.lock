@@ -4858,6 +4858,7 @@ dependencies = [
  "egui",
  "qw-cbom",
  "qw-graph",
+ "qw-integrations",
  "qw-scanner",
  "qw-store",
  "serde_json",

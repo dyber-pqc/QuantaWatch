@@ -1540,6 +1540,13 @@ impl Store {
         )
     }
 
+    pub fn delete_asset(&self, tenant: &str, id: &str) {
+        self.exec(
+            "DELETE FROM assets WHERE tenant = ?1 AND id = ?2",
+            &[tenant, id],
+        );
+    }
+
     // ---- Crypto-agility policy drift baselines ----
 
     /// Persist the latest evaluation of a policy (upsert by tenant+policy).
