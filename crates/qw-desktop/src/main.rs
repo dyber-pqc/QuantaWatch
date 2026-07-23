@@ -276,6 +276,15 @@ struct ProbeState {
     detail: String,
 }
 
+/// What the right-hand detail panel is showing (by record id).
+#[derive(Clone)]
+enum Selection {
+    Finding(String),
+    Asset(String),
+    Host(String),
+    Scan(String),
+}
+
 enum TabAction {
     Select(Page),
     Close(Page),
@@ -308,7 +317,7 @@ struct App {
     page: Page,
     data: Snapshot,
     filter: String,
-    selected_finding: Option<String>,
+    selected: Option<Selection>,
     graph: GraphView,
     export_status: String,
     // IDE shell: editor tabs + bottom terminal.
@@ -345,7 +354,7 @@ impl App {
             page: Page::Overview,
             data,
             filter: String::new(),
-            selected_finding: None,
+            selected: None,
             graph: GraphView::default(),
             export_status: String::new(),
             open_tabs: vec![Page::Overview],
@@ -561,7 +570,7 @@ impl eframe::App for App {
         }
         self.tab_strip(ctx);
         self.terminal_panel(ctx);
-        self.finding_detail_panel(ctx); // right panel; must precede CentralPanel
+        self.detail_panel(ctx); // right panel; must precede CentralPanel
         egui::CentralPanel::default().show(ctx, |ui| match self.page {
             Page::Overview => self.overview(ui),
             Page::AttackPaths => self.attack_paths(ui),
@@ -1286,7 +1295,7 @@ impl App {
                             .on_hover_text(tip)
                             .clicked()
                         {
-                            self.selected_finding = Some(f.id.clone());
+                            self.selected = Some(Selection::Finding(f.id.clone()));
                         }
                         ui.label(f.algorithm.as_deref().unwrap_or("—"));
                         ui.colored_label(pqc_color(f.pqc_status), pqc_label(f.pqc_status));
@@ -1349,6 +1358,7 @@ impl App {
         let mut del: Option<String> = None;
         let mut toggle: Option<String> = None;
         let mut probe: Option<(String, String, bool)> = None;
+        let mut open: Option<Selection> = None;
         {
             let d = &self.data;
             let probes = &self.probe_results;
@@ -1356,7 +1366,13 @@ impl App {
                 d.targets.len(), "No registered hosts. Register one above.", |ui, i| {
                 let t = &d.targets[i];
                 let air = has_tag(&t.tags, "air-gapped");
-                ui.label(&t.name).context_menu(|ui| {
+                let name = ui.add(egui::Label::new(egui::RichText::new(&t.name).color(theme::ACCENT)).sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("click for details");
+                if name.clicked() {
+                    open = Some(Selection::Host(t.id.clone()));
+                }
+                name.context_menu(|ui| {
                     if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
                         toggle = Some(t.id.clone());
                         ui.close_menu();
@@ -1388,6 +1404,9 @@ impl App {
                     del = Some(t.id.clone());
                 }
             });
+        }
+        if let Some(s) = open {
+            self.selected = Some(s);
         }
         if let Some(id) = toggle {
             self.toggle_target_airgap(&id);
@@ -1461,121 +1480,238 @@ impl App {
         ui.add_space(6.0);
         ui.heading("Scans");
         ui.add_space(6.0);
-        if self.data.scans.is_empty() {
-            empty_state(ui, "No scans recorded yet. Run one from the Overview page.");
-            return;
+        let mut open: Option<Selection> = None;
+        {
+            let d = &self.data;
+            data_table(ui, "scans", &["Scanner", "Target", "Status", "Findings", "Completed"],
+                d.scans.len(), "No scans recorded yet. Run one from the Overview page.", |ui, i| {
+                let s = &d.scans[i];
+                let name = ui.add(egui::Label::new(egui::RichText::new(&s.scanner_id).color(theme::ACCENT)).sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("click for details");
+                if name.clicked() {
+                    open = Some(Selection::Scan(s.id.clone()));
+                }
+                ui.label(egui::RichText::new(&s.target_address).color(theme::MUTED));
+                ui.label(format!("{:?}", s.status));
+                ui.label(s.finding_count.to_string());
+                ui.label(egui::RichText::new(fmt_dt(s.completed_at)).color(theme::MUTED));
+            });
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("scans")
-                .striped(true)
-                .num_columns(5)
-                .spacing([16.0, 6.0])
-                .show(ui, |ui| {
-                    for h in ["Scanner", "Target", "Status", "Findings", "Completed"] {
-                        ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
-                    }
-                    ui.end_row();
-                    for s in &self.data.scans {
-                        ui.label(&s.scanner_id);
-                        ui.label(egui::RichText::new(&s.target_address).color(theme::MUTED));
-                        ui.label(format!("{:?}", s.status));
-                        ui.label(s.finding_count.to_string());
-                        ui.label(
-                            egui::RichText::new(
-                                s.completed_at.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
-                            )
-                            .color(theme::MUTED),
-                        );
-                        ui.end_row();
-                    }
-                });
-        });
+        if let Some(s) = open {
+            self.selected = Some(s);
+        }
     }
 
     /// Right-hand detail panel for the selected finding.
-    fn finding_detail_panel(&mut self, ctx: &egui::Context) {
-        let Some(id) = self.selected_finding.clone() else {
+    fn detail_panel(&mut self, ctx: &egui::Context) {
+        let Some(sel) = self.selected.clone() else {
             return;
         };
-        let Some(f) = self.data.findings.iter().find(|f| f.id == id).cloned() else {
-            self.selected_finding = None;
-            return;
+        let title = match &sel {
+            Selection::Finding(_) => "Finding",
+            Selection::Asset(_) => "Asset",
+            Selection::Host(_) => "Host",
+            Selection::Scan(_) => "Scan",
         };
-        egui::SidePanel::right("finding_detail")
+        egui::SidePanel::right("detail")
             .default_width(380.0)
             .min_width(300.0)
             .show(ctx, |ui| {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.heading("Finding");
+                    ui.heading(title);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("✕").clicked() {
-                            self.selected_finding = None;
+                            self.selected = None;
                         }
                     });
                 });
+                ui.separator();
                 ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.colored_label(sev_color(f.severity), sev_label(f.severity));
-                    ui.colored_label(pqc_color(f.pqc_status), pqc_label(f.pqc_status));
-                    ui.label(egui::RichText::new(format!("{:?}", f.status)).color(theme::MUTED));
-                });
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(&f.title).strong().size(15.0));
-                ui.add_space(8.0);
-
-                egui::Grid::new("fdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-                    ui.label(egui::RichText::new("Category").color(theme::MUTED));
-                    ui.label(f.category.to_string());
-                    ui.end_row();
-                    if let Some(a) = &f.algorithm {
-                        ui.label(egui::RichText::new("Algorithm").color(theme::MUTED));
-                        ui.label(a);
-                        ui.end_row();
-                    }
-                    ui.label(egui::RichText::new("Confidence").color(theme::MUTED));
-                    ui.label(format!("{:?}", f.confidence));
-                    ui.end_row();
-                    ui.label(egui::RichText::new("Location").color(theme::MUTED));
-                    ui.label(egui::RichText::new(&f.location).monospace().small());
-                    ui.end_row();
-                });
-
-                // Triage actions — persisted to the store in-process.
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Set status:").small().color(theme::MUTED));
-                    for (lbl, st) in [
-                        ("Open", FindingStatus::Open),
-                        ("Acknowledge", FindingStatus::Acknowledged),
-                        ("Suppress", FindingStatus::Suppressed),
-                    ] {
-                        let active = f.status == st;
-                        if ui.selectable_label(active, lbl).clicked() && !active {
-                            self.store.set_finding_status(TENANT, &f.id, st, None);
-                            self.refresh();
-                        }
-                    }
-                });
-
-                ui.add_space(8.0);
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.label(egui::RichText::new("Description").strong());
-                    ui.label(&f.description);
-                    if let Some(rem) = &f.remediation {
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Remediation").strong().color(theme::GOOD));
-                        ui.label(rem);
-                    }
-                    if !f.evidence.is_empty() {
-                        ui.add_space(8.0);
-                        ui.label(egui::RichText::new("Evidence").strong());
-                        for e in &f.evidence {
-                            ui.label(egui::RichText::new(format!("• {e}")).monospace().small());
-                        }
-                    }
-                });
+                match &sel {
+                    Selection::Finding(id) => self.finding_body(ui, id),
+                    Selection::Asset(id) => self.asset_body(ui, id),
+                    Selection::Host(id) => self.host_body(ui, id),
+                    Selection::Scan(id) => self.scan_body(ui, id),
+                }
             });
+    }
+
+    fn finding_body(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(f) = self.data.findings.iter().find(|f| f.id == id).cloned() else {
+            self.selected = None;
+            return;
+        };
+        ui.horizontal(|ui| {
+            ui.colored_label(sev_color(f.severity), sev_label(f.severity));
+            ui.colored_label(pqc_color(f.pqc_status), pqc_label(f.pqc_status));
+            ui.label(egui::RichText::new(format!("{:?}", f.status)).color(theme::MUTED));
+        });
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(&f.title).strong().size(15.0));
+        ui.add_space(8.0);
+        egui::Grid::new("fdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            kv(ui, "Category", &f.category.to_string());
+            if let Some(a) = &f.algorithm {
+                kv(ui, "Algorithm", a);
+            }
+            kv(ui, "Confidence", &format!("{:?}", f.confidence));
+            ui.label(egui::RichText::new("Location").color(theme::MUTED));
+            ui.label(egui::RichText::new(&f.location).monospace().small());
+            ui.end_row();
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Set status:").small().color(theme::MUTED));
+            for (lbl, st) in [
+                ("Open", FindingStatus::Open),
+                ("Acknowledge", FindingStatus::Acknowledged),
+                ("Suppress", FindingStatus::Suppressed),
+            ] {
+                let active = f.status == st;
+                if ui.selectable_label(active, lbl).clicked() && !active {
+                    self.store.set_finding_status(TENANT, &f.id, st, None);
+                    self.refresh();
+                }
+            }
+        });
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.label(egui::RichText::new("Description").strong());
+            ui.label(&f.description);
+            if let Some(rem) = &f.remediation {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Remediation").strong().color(theme::GOOD));
+                ui.label(rem);
+            }
+            if !f.evidence.is_empty() {
+                ui.add_space(8.0);
+                ui.label(egui::RichText::new("Evidence").strong());
+                for e in &f.evidence {
+                    ui.label(egui::RichText::new(format!("• {e}")).monospace().small());
+                }
+            }
+        });
+    }
+
+    fn asset_body(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(a) = self.data.assets.iter().find(|a| a.id == id).cloned() else {
+            self.selected = None;
+            return;
+        };
+        ui.label(egui::RichText::new(&a.id).strong().size(15.0));
+        ui.add_space(8.0);
+        let air = has_tag(&a.tags, "air-gapped");
+        egui::Grid::new("adetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            kv(ui, "Kind", &a.kind);
+            ui.label(egui::RichText::new("Address").color(theme::MUTED));
+            ui.label(egui::RichText::new(&a.address).monospace().small());
+            ui.end_row();
+            kv(ui, "Environment", &a.environment);
+            ui.label(egui::RichText::new("PQC").color(theme::MUTED));
+            ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
+            ui.end_row();
+            if let Some(v) = &a.tls_version {
+                kv(ui, "TLS", v);
+            }
+            kv(ui, "Source", &a.source);
+            ui.label(egui::RichText::new("Exposure").color(theme::MUTED));
+            ui.colored_label(if air { theme::GOOD } else { theme::MUTED }, if air { "air-gapped" } else { "exposed" });
+            ui.end_row();
+            kv(ui, "Last scanned", &fmt_opt_dt(a.last_scanned));
+            if !a.tags.is_empty() {
+                kv(ui, "Tags", &a.tags.join(", "));
+            }
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
+                self.toggle_asset_airgap(&a.id);
+            }
+            if ui.button("Delete").clicked() {
+                self.store.delete_asset(TENANT, &a.id);
+                self.selected = None;
+                self.refresh();
+            }
+        });
+    }
+
+    fn host_body(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(t) = self.data.targets.iter().find(|t| t.id == id).cloned() else {
+            self.selected = None;
+            return;
+        };
+        ui.label(egui::RichText::new(&t.name).strong().size(15.0));
+        ui.add_space(8.0);
+        let air = has_tag(&t.tags, "air-gapped");
+        egui::Grid::new("hdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            ui.label(egui::RichText::new("Host").color(theme::MUTED));
+            ui.label(egui::RichText::new(&t.host).monospace().small());
+            ui.end_row();
+            kv(ui, "Kind", &t.kind);
+            kv(ui, "Environment", &t.environment);
+            ui.label(egui::RichText::new("PQC").color(theme::MUTED));
+            ui.colored_label(status_str_color(&t.pqc_status), pretty_status(&t.pqc_status));
+            ui.end_row();
+            kv(ui, "Reachability", &t.reachability.join(", "));
+            kv(ui, "Deep scanned", if t.deep_scanned { "yes" } else { "no" });
+            ui.label(egui::RichText::new("Exposure").color(theme::MUTED));
+            ui.colored_label(if air { theme::GOOD } else { theme::MUTED }, if air { "air-gapped" } else { "exposed" });
+            ui.end_row();
+            kv(ui, "Last scanned", &fmt_opt_dt(t.last_scanned));
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
+                self.toggle_target_airgap(&t.id);
+            }
+            if ui.button("Delete").clicked() {
+                self.store.delete_target(TENANT, &t.id);
+                self.selected = None;
+                self.refresh();
+            }
+        });
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if t.exposed_services.is_empty() {
+                ui.label(egui::RichText::new("No exposed services scanned.").color(theme::MUTED).small());
+            } else {
+                ui.label(egui::RichText::new(format!("Exposed services ({})", t.exposed_services.len())).strong());
+                for s in &t.exposed_services {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(status_str_color(&s.pqc_status), format!(":{} {}", s.port, s.service));
+                        ui.label(egui::RichText::new(&s.detail).color(theme::MUTED).small());
+                    });
+                }
+            }
+            if !t.containers.is_empty() {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(format!("Containers ({})", t.containers.len())).strong());
+            }
+        });
+    }
+
+    fn scan_body(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(s) = self.data.scans.iter().find(|s| s.id == id).cloned() else {
+            self.selected = None;
+            return;
+        };
+        ui.label(egui::RichText::new(&s.scanner_id).strong().size(15.0));
+        ui.add_space(8.0);
+        egui::Grid::new("sdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            ui.label(egui::RichText::new("Target").color(theme::MUTED));
+            ui.label(egui::RichText::new(&s.target_address).monospace().small());
+            ui.end_row();
+            kv(ui, "Status", &format!("{:?}", s.status));
+            kv(ui, "Findings", &s.finding_count.to_string());
+            kv(ui, "Started", &fmt_dt(s.started_at));
+            kv(ui, "Completed", &fmt_dt(s.completed_at));
+            ui.label(egui::RichText::new("Content hash").color(theme::MUTED));
+            ui.label(egui::RichText::new(truncate_str(&s.content_hash, 24)).monospace().small())
+                .on_hover_text(&s.content_hash);
+            ui.end_row();
+        });
     }
 
     fn endpoints(&mut self, ui: &mut egui::Ui) {
@@ -1646,6 +1782,7 @@ impl App {
         let mut del: Option<String> = None;
         let mut toggle: Option<String> = None;
         let mut probe: Option<(String, String, bool)> = None;
+        let mut open: Option<Selection> = None;
         {
             let d = &self.data;
             let probes = &self.probe_results;
@@ -1653,7 +1790,13 @@ impl App {
                 d.assets.len(), "No declared assets. Add one above.", |ui, i| {
                 let a = &d.assets[i];
                 let air = has_tag(&a.tags, "air-gapped");
-                ui.label(&a.id).context_menu(|ui| {
+                let name = ui.add(egui::Label::new(egui::RichText::new(&a.id).color(theme::ACCENT)).sense(egui::Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    .on_hover_text("click for details");
+                if name.clicked() {
+                    open = Some(Selection::Asset(a.id.clone()));
+                }
+                name.context_menu(|ui| {
                     if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
                         toggle = Some(a.id.clone());
                         ui.close_menu();
@@ -1685,6 +1828,9 @@ impl App {
                     del = Some(a.id.clone());
                 }
             });
+        }
+        if let Some(s) = open {
+            self.selected = Some(s);
         }
         if let Some(id) = toggle {
             self.toggle_asset_airgap(&id);
@@ -2475,6 +2621,13 @@ fn probe_badge(ui: &mut egui::Ui, state: Option<&ProbeState>, air_gapped: bool) 
     };
     ui.colored_label(col, egui::RichText::new(txt).small())
         .on_hover_text(&ps.detail);
+}
+
+/// One "Key   value" row in a detail grid.
+fn kv(ui: &mut egui::Ui, key: &str, value: &str) {
+    ui.label(egui::RichText::new(key).color(theme::MUTED));
+    ui.label(value);
+    ui.end_row();
 }
 
 fn has_tag(tags: &[String], tag: &str) -> bool {
