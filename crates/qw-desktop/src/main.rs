@@ -28,6 +28,15 @@ use qw_store::{
 
 const TENANT: &str = DEFAULT_TENANT;
 
+/// "v0.1.0 · <githash> · 2026-07-23 17:20" — identifies the exact running build.
+fn build_stamp() -> String {
+    let unix: i64 = env!("QW_BUILD_UNIX").parse().unwrap_or(0);
+    let when = chrono::DateTime::from_timestamp(unix, 0)
+        .map(|d| d.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| "?".to_string());
+    format!("v{} · {} · {when}", env!("CARGO_PKG_VERSION"), env!("QW_GIT_HASH"))
+}
+
 /// Add-asset templates: (label, kind, default environment).
 const ASSET_TEMPLATES: &[(&str, &str, &str)] = &[
     ("TLS endpoint", "tls_endpoint", "production"),
@@ -70,7 +79,7 @@ fn main() -> eframe::Result<()> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 820.0])
             .with_min_inner_size([900.0, 600.0])
-            .with_title("QuantaWatch Desktop"),
+            .with_title(format!("QuantaWatch Desktop — {}", build_stamp())),
         ..Default::default()
     };
 
@@ -590,6 +599,8 @@ impl App {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("QuantaWatch").strong().size(18.0));
                 ui.label(egui::RichText::new("Desktop").color(theme::ACCENT).size(18.0));
+                ui.label(egui::RichText::new(build_stamp()).color(theme::MUTED).small())
+                    .on_hover_text("running build — version · git hash · build time");
                 ui.separator();
                 // Honest mode badge: pure-offline by default; probes are opt-in.
                 if self.net_probes_enabled {
@@ -689,11 +700,13 @@ impl App {
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         let col = if is_active { theme::TEXT } else { theme::MUTED };
-                                        let lab = ui.add(
-                                            egui::Label::new(egui::RichText::new(page_title(tab)).color(col))
-                                                .selectable(false)
-                                                .sense(egui::Sense::click()),
-                                        );
+                                        let lab = ui
+                                            .add(
+                                                egui::Label::new(egui::RichText::new(page_title(tab)).color(col))
+                                                    .selectable(false)
+                                                    .sense(egui::Sense::click()),
+                                            )
+                                            .on_hover_cursor(egui::CursorIcon::PointingHand);
                                         if lab.clicked() {
                                             act = Some(TabAction::Select(tab));
                                         }
@@ -963,7 +976,7 @@ impl App {
                     });
                 }
             }
-            "version" => self.terminal_lines.push(format!("qw-desktop v{}", env!("CARGO_PKG_VERSION"))),
+            "version" => self.terminal_lines.push(format!("qw-desktop {}", build_stamp())),
             other => self.terminal_lines.push(format!("unknown command: {other} (try 'help')")),
         }
         let len = self.terminal_lines.len();
@@ -1182,7 +1195,10 @@ impl App {
                                     }
                                 });
                                 ui.label(egui::RichText::new(&p.title).small());
-                            });
+                            })
+                            .response
+                            .on_hover_cursor(egui::CursorIcon::Help)
+                            .on_hover_text(format!("Fix: {}", p.recommendation));
                         ui.add_space(4.0);
                     }
                 });
@@ -1256,10 +1272,20 @@ impl App {
                     ui.end_row();
                     for f in rows {
                         ui.colored_label(sev_color(f.severity), sev_label(f.severity));
-                        // Clickable title → open the detail panel.
+                        // Clickable title → open the detail panel. Tooltip previews it.
                         let title = egui::Label::new(egui::RichText::new(&f.title).color(theme::ACCENT))
                             .sense(egui::Sense::click());
-                        if ui.add(title).on_hover_text("view details").clicked() {
+                        let mut tip = f.description.clone();
+                        if let Some(r) = &f.remediation {
+                            tip.push_str(&format!("\n\nFix: {r}"));
+                        }
+                        tip.push_str("\n\n(click for full details)");
+                        if ui
+                            .add(title)
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
                             self.selected_finding = Some(f.id.clone());
                         }
                         ui.label(f.algorithm.as_deref().unwrap_or("—"));
@@ -1351,6 +1377,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
                     if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text("toggle · right-click to verify reachability").clicked()
                     {
                         toggle = Some(t.id.clone());
@@ -1396,7 +1423,16 @@ impl App {
                     }
                     ui.end_row();
                     for c in &self.data.certs {
-                        ui.label(&c.subject);
+                        let tip = format!(
+                            "serial: {}\nkey type: {}\nSANs: {}\nCA fingerprint: {}\nvalid: {} → {}",
+                            c.serial,
+                            c.key_type,
+                            if c.sans.is_empty() { "—".to_string() } else { c.sans.join(", ") },
+                            c.ca_fingerprint,
+                            fmt_dt(c.not_before),
+                            fmt_dt(c.not_after),
+                        );
+                        ui.label(&c.subject).on_hover_text(tip);
                         // hybrid = classical X.509 + ML-DSA binding.
                         let type_col = if c.key_type.contains("hybrid") { theme::GOOD } else { theme::MED };
                         ui.colored_label(type_col, &c.key_type);
@@ -1638,6 +1674,7 @@ impl App {
                 ui.horizontal(|ui| {
                     let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
                     if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                         .on_hover_text("toggle · right-click to verify reachability").clicked()
                     {
                         toggle = Some(a.id.clone());
@@ -1965,7 +2002,9 @@ impl App {
             ui.label(egui::RichText::new(&e.writer_id).small());
             ui.label(e.sequence.to_string());
             ui.label(egui::RichText::new(truncate_str(&e.session_id, 10)).monospace().small());
-            ui.label(egui::RichText::new(truncate_str(&format!("{:?}", e.event), 72)).small());
+            let full = format!("{:?}", e.event);
+            ui.label(egui::RichText::new(truncate_str(&full, 72)).small())
+                .on_hover_text(&full);
         });
     }
 
@@ -2074,7 +2113,9 @@ impl App {
         ui.label(egui::RichText::new("Store path").strong());
         ui.label(egui::RichText::new(&self.source).monospace().color(theme::MUTED));
         ui.add_space(8.0);
-        ui.label(egui::RichText::new(format!("qw-desktop v{}", env!("CARGO_PKG_VERSION"))).color(theme::MUTED));
+        ui.label(egui::RichText::new("Build").strong());
+        ui.label(egui::RichText::new(build_stamp()).monospace().color(theme::MUTED));
+        ui.label(egui::RichText::new("If this build time is older than your last change, you're running a stale exe — rebuild.").color(theme::MUTED).small());
     }
 }
 

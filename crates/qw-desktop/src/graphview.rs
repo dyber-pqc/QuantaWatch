@@ -77,6 +77,7 @@ pub struct PathRow {
     pub score: f64,
     pub hndl: bool,
     pub observed: bool,
+    pub recommendation: String,
 }
 
 pub struct GraphView {
@@ -201,6 +202,7 @@ impl GraphView {
                 score: p.score,
                 hndl: p.hndl,
                 observed: p.observed,
+                recommendation: p.recommendation.clone(),
             })
             .collect();
 
@@ -288,6 +290,12 @@ impl GraphView {
             );
         }
 
+        // Hand cursor when hovering a node (signals it's clickable).
+        if let Some(hp) = resp.hover_pos() {
+            if self.nodes.iter().any(|n| (to_screen(n.pos) - hp).length() < 16.0) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+        }
         if resp.clicked() {
             if let Some(p) = resp.interact_pointer_pos() {
                 let mut best: Option<(usize, f32)> = None;
