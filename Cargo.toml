@@ -11,6 +11,7 @@ members = [
     "crates/qw-store",
     "crates/qw-gateway",
     "crates/qw-cli",
+    "crates/qw-desktop",
 ]
 
 [workspace.package]

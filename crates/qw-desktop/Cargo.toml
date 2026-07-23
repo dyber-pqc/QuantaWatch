@@ -1,0 +1,21 @@
+[package]
+name = "qw-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "QuantaWatch native desktop app (egui) — fully offline, no browser, no network listener"
+
+[[bin]]
+name = "quantawatch-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# Native, immediate-mode GUI. No webview, no HTML engine, no network.
+eframe = "0.29"
+egui = "0.29"
+# Read the same on-disk store and types the gateway uses — in-process.
+qw-store = { path = "../qw-store" }
+qw-scanner = { path = "../qw-scanner" }
+qw-cbom = { path = "../qw-cbom" }
+chrono = { workspace = true }
+anyhow = { workspace = true }
