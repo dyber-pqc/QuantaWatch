@@ -17,6 +17,24 @@ use crate::middleware::policy::PolicyResult;
 use crate::middleware::{identity, monitor, policy};
 use crate::state::AppState;
 
+/// Turn a caught handler panic into a clean JSON 500 instead of a dropped
+/// connection. Belt-and-suspenders: no single handler panic can take down a
+/// connection or leak a stack trace, even from code paths the unwrap audit
+/// didn't reach. The returned body type matches the router's (`axum` `Body`).
+fn on_panic(err: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    let detail = err
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| err.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string());
+    tracing::error!(panic = %detail, "handler panicked; returning 500");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "internal server error" })),
+    )
+        .into_response()
+}
+
 /// Proxy routes (provider-facing). Generic over state until composed.
 fn proxy_routes(state: AppState) -> Router<AppState> {
     Router::new()
@@ -492,6 +510,12 @@ pub fn build_proxy_router(state: AppState) -> Router {
         .merge(proxy_routes(state.clone()))
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        // Per-client rate limiting, then a panic guard as the outermost layer.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::ratelimit::rate_limit_layer,
+        ))
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(on_panic))
         .with_state(state)
 }
 
@@ -525,6 +549,12 @@ pub fn build_admin_router(state: AppState) -> Router {
     router
         .layer(tower_http::cors::CorsLayer::permissive())
         .layer(tower_http::trace::TraceLayer::new_for_http())
+        // Per-client rate limiting, then a panic guard as the outermost layer.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::ratelimit::rate_limit_layer,
+        ))
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(on_panic))
 }
 
 /// Locate the built dashboard: explicit config, else `<exe dir>/dashboard`.

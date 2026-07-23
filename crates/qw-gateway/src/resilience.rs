@@ -63,7 +63,7 @@ impl CircuitBreaker {
     }
 
     fn allow_at(&self, now: Instant) -> bool {
-        let mut b = self.inner.lock().unwrap();
+        let mut b = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match b.state {
             CircuitState::Closed | CircuitState::HalfOpen => true,
             CircuitState::Open => match b.open_until {
@@ -79,7 +79,7 @@ impl CircuitBreaker {
 
     /// Record a healthy response — resets the failure count and closes the circuit.
     pub fn record_success(&self) {
-        let mut b = self.inner.lock().unwrap();
+        let mut b = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         b.consecutive_failures = 0;
         b.state = CircuitState::Closed;
         b.open_until = None;
@@ -92,7 +92,7 @@ impl CircuitBreaker {
     }
 
     fn record_failure_at(&self, now: Instant) {
-        let mut b = self.inner.lock().unwrap();
+        let mut b = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         b.consecutive_failures += 1;
         if b.state == CircuitState::HalfOpen || b.consecutive_failures >= self.failure_threshold {
             b.state = CircuitState::Open;
@@ -101,7 +101,7 @@ impl CircuitBreaker {
     }
 
     pub fn state(&self) -> CircuitState {
-        self.inner.lock().unwrap().state
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).state
     }
 }
 

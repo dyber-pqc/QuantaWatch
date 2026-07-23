@@ -38,6 +38,8 @@ pub struct Metrics {
     latency_buckets: Vec<AtomicU64>,
     latency_sum_millis: AtomicU64,
     latency_count: AtomicU64,
+    /// request class ("api" | "login") -> count of rate-limited (429) rejections
+    rate_limited: DashMap<String, u64>,
 }
 
 impl Default for Metrics {
@@ -58,7 +60,14 @@ impl Metrics {
                 .collect(),
             latency_sum_millis: AtomicU64::new(0),
             latency_count: AtomicU64::new(0),
+            rate_limited: DashMap::new(),
         }
+    }
+
+    /// Record a request rejected (HTTP 429) by the rate limiter. `class` is the
+    /// bucket the request fell into ("api" or "login").
+    pub fn record_rate_limited(&self, class: &str) {
+        *self.rate_limited.entry(class.to_string()).or_insert(0) += 1;
     }
 
     /// Record a completed proxy request. `status` is the upstream HTTP status.
@@ -205,6 +214,18 @@ impl Metrics {
             "quantawatch_proxy_latency_seconds_count {}\n",
             self.latency_count.load(Ordering::Relaxed)
         ));
+
+        out.push_str(
+            "# HELP quantawatch_rate_limited_total Requests rejected by the rate limiter (429).\n\
+             # TYPE quantawatch_rate_limited_total counter\n",
+        );
+        for entry in self.rate_limited.iter() {
+            out.push_str(&format!(
+                "quantawatch_rate_limited_total{{class=\"{}\"}} {}\n",
+                escape(entry.key()),
+                entry.value()
+            ));
+        }
 
         out
     }

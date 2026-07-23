@@ -3,11 +3,12 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt; // for oneshot
 
 use qw_gateway::config::GatewayConfig;
-use qw_gateway::router::build_router;
+use qw_gateway::router::{build_admin_router, build_router};
 use qw_gateway::state::AppState;
 
-/// Helper: build an AppState from defaults using temporary directories.
-async fn test_state() -> AppState {
+/// Helper: build an AppState from defaults, applying `tweak` to the config
+/// before initialization. Uses temporary directories isolated per test.
+async fn test_state_with(tweak: impl FnOnce(&mut GatewayConfig)) -> AppState {
     let tmp = tempfile::tempdir().expect("failed to create temp dir");
     let key_dir = tmp.path().join("keys");
     let audit_dir = tmp.path().join("audit");
@@ -23,6 +24,7 @@ async fn test_state() -> AppState {
     config.scanner.store_path = tmp.path().to_str().unwrap().to_string();
     // Use permissive default policy for tests
     config.policy.default = "allow".to_string();
+    tweak(&mut config);
 
     // Box the initializer future onto the heap: AppState::new generates
     // ML-DSA/ML-KEM keypairs (large stack arrays), and in debug builds the
@@ -36,6 +38,11 @@ async fn test_state() -> AppState {
     std::mem::forget(tmp);
 
     state
+}
+
+/// Helper: build an AppState from defaults using temporary directories.
+async fn test_state() -> AppState {
+    test_state_with(|_| {}).await
 }
 
 /// Helper: an Axum router over a fresh AppState, ready for `oneshot` calls.
@@ -217,4 +224,67 @@ async fn admin_stats_returns_expected_fields() {
     // The fingerprint is a 64-char hex string (SHA3-256)
     let fp = json["gateway_fingerprint"].as_str().unwrap();
     assert_eq!(fp.len(), 64, "fingerprint should be 64 hex chars");
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiting
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn rate_limit_returns_429_after_burst() {
+    // Tiny budget so a handful of requests trips the limiter. oneshot has no
+    // ConnectInfo, so every request shares the "api:unknown" bucket.
+    let state = test_state_with(|c| {
+        c.rate_limit.enabled = true;
+        c.rate_limit.requests_per_minute = 60; // ~1/s refill
+        c.rate_limit.burst = 3;
+    })
+    .await;
+    let app = build_admin_router(state);
+
+    // An open (no-auth) admin endpoint that returns 200 under budget.
+    let hit = |app: axum::Router| async move {
+        app.oneshot(
+            Request::builder()
+                .uri("/api/auth/config")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .status()
+    };
+
+    // First 3 (the burst) pass; the 4th is throttled.
+    assert_eq!(hit(app.clone()).await, StatusCode::OK);
+    assert_eq!(hit(app.clone()).await, StatusCode::OK);
+    assert_eq!(hit(app.clone()).await, StatusCode::OK);
+    assert_eq!(hit(app.clone()).await, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn rate_limit_exempts_health() {
+    let state = test_state_with(|c| {
+        c.rate_limit.enabled = true;
+        c.rate_limit.requests_per_minute = 60;
+        c.rate_limit.burst = 1;
+    })
+    .await;
+    let app = build_admin_router(state);
+
+    // Health is never throttled, even well past the burst.
+    for _ in 0..5 {
+        let status = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(status, StatusCode::OK);
+    }
 }

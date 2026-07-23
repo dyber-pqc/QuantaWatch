@@ -75,7 +75,7 @@ impl RouteStats {
             "rejectedClassical": self.rejected_classical.load(Ordering::Relaxed),
             "bytes": self.bytes.load(Ordering::Relaxed),
             "errors": self.errors.load(Ordering::Relaxed),
-            "lastGroup": self.last_group.lock().unwrap().clone(),
+            "lastGroup": self.last_group.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             // A route is proven PQC-protected once any connection landed on hybrid.
             "pqcProtected": self.pqc_connections.load(Ordering::Relaxed) > 0,
         })
@@ -109,7 +109,7 @@ impl OverlayState {
     }
 
     pub fn snapshot(&self) -> serde_json::Value {
-        let routes_guard = self.routes.lock().unwrap();
+        let routes_guard = self.routes.lock().unwrap_or_else(|e| e.into_inner());
         let routes: Vec<serde_json::Value> = routes_guard.iter().map(|r| r.snapshot()).collect();
         let protected = routes_guard
             .iter()
@@ -118,7 +118,7 @@ impl OverlayState {
         let total = routes_guard.len();
         serde_json::json!({
             "enabled": self.enabled || total > 0,
-            "certSource": self.cert_source.lock().unwrap().clone(),
+            "certSource": self.cert_source.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             "hybridGroup": "X25519MLKEM768",
             "routes": routes,
             "total": total,
@@ -130,17 +130,17 @@ impl OverlayState {
     /// listener task is orphaned and stops accepting usefully after the next
     /// restart, when it is simply not re-bound.
     pub fn remove_route(&self, id: &str) {
-        self.routes.lock().unwrap().retain(|r| r.id != id);
+        self.routes.lock().unwrap_or_else(|e| e.into_inner()).retain(|r| r.id != id);
     }
 
     /// Ensure a client-facing server TLS config exists (lazily self-signed).
     fn ensure_server_cfg(&self) -> anyhow::Result<Arc<ServerConfig>> {
-        let mut guard = self.server_cfg.lock().unwrap();
+        let mut guard = self.server_cfg.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(c) = guard.as_ref() {
             return Ok(c.clone());
         }
         let (cfg, source) = server_config(&OverlayConfig::default())?;
-        *self.cert_source.lock().unwrap() = format!("{source} (runtime)");
+        *self.cert_source.lock().unwrap_or_else(|e| e.into_inner()) = format!("{source} (runtime)");
         *guard = Some(cfg.clone());
         Ok(cfg)
     }
@@ -197,7 +197,7 @@ impl OverlayState {
 
         // Replace any prior in-memory route with the same id (e.g. re-protect).
         {
-            let mut routes = self.routes.lock().unwrap();
+            let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
             routes.retain(|r| r.id != stats.id);
             routes.push(stats.clone());
         }
@@ -328,7 +328,7 @@ async fn handle_conn(
         };
         let is_pqc = group.as_deref().map(is_pqc_group).unwrap_or(false);
         if let Some(g) = &group {
-            *stats.last_group.lock().unwrap() = Some(g.clone());
+            *stats.last_group.lock().unwrap_or_else(|e| e.into_inner()) = Some(g.clone());
         }
         if is_pqc {
             stats.pqc_connections.fetch_add(1, Ordering::Relaxed);

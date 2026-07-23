@@ -41,6 +41,8 @@ pub struct AppState {
     /// Shared secret host agents present (X-QW-Agent-Token) to post endpoint
     /// reports. Persisted under key_dir so it is stable across restarts.
     pub agent_enroll_token: Arc<String>,
+    /// Per-client rate limiter guarding the public listeners.
+    pub rate_limiter: Arc<crate::ratelimit::RateLimiter>,
 }
 
 /// Public session info stored in the DashMap (without secret keys).
@@ -249,9 +251,12 @@ impl AppState {
         // Host-agent enrollment token: stable secret persisted under key_dir.
         let agent_enroll_token = Arc::new(load_or_create_agent_token(&key_dir));
 
+        let rate_limiter = Arc::new(crate::ratelimit::RateLimiter::new(&config.rate_limit));
+
         Ok(Self {
             gateway_identity,
             agent_enroll_token,
+            rate_limiter,
             policy_engine: Arc::new(RwLock::new(policy_engine)),
             security_monitor,
             audit_logger,

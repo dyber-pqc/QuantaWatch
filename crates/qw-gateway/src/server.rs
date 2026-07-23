@@ -121,16 +121,19 @@ async fn serve_listener(
                 .map_err(|e| anyhow::anyhow!("invalid TLS listen address '{addr}': {e}"))?;
             axum_server::bind_rustls(sockaddr, rustls_cfg)
                 .handle(handle)
-                .serve(app.into_make_service())
+                .serve(app.into_make_service_with_connect_info::<SocketAddr>())
                 .await?;
         }
         None => {
             let listener = tokio::net::TcpListener::bind(&addr).await?;
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = rx.wait_for(|v| *v).await;
-                })
-                .await?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async move {
+                let _ = rx.wait_for(|v| *v).await;
+            })
+            .await?;
         }
     }
     Ok(())

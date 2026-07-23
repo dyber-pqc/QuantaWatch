@@ -75,6 +75,62 @@ pub struct GatewayConfig {
     /// In-path PQC enforcement: hold agent→provider flows to a crypto standard.
     #[serde(default)]
     pub crypto_enforcement: CryptoEnforcementConfig,
+    /// Per-client rate limiting for the public listeners (on by default).
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
+}
+
+/// Per-client (per-IP) token-bucket rate limiting. Protects the in-path proxy
+/// from floods and slows credential brute-forcing on the login endpoint. The
+/// general API and the login/SSO endpoints get independent buckets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Sustained general-API budget per client IP, per minute.
+    #[serde(default = "default_rl_rpm")]
+    pub requests_per_minute: u32,
+    /// General-API burst ceiling — set high enough for a dashboard page-load
+    /// fan-out (many API calls at once) not to trip the limit.
+    #[serde(default = "default_rl_burst")]
+    pub burst: u32,
+    /// Sustained login/SSO budget per client IP, per minute (much tighter).
+    #[serde(default = "default_rl_login_rpm")]
+    pub login_per_minute: u32,
+    /// Login/SSO burst ceiling.
+    #[serde(default = "default_rl_login_burst")]
+    pub login_burst: u32,
+    /// Trust `X-Forwarded-For` / `X-Real-IP` for the client identity. Enable
+    /// ONLY when a trusted reverse proxy sets these — otherwise a client can
+    /// spoof its rate-limit key.
+    #[serde(default)]
+    pub trust_forwarded_for: bool,
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            requests_per_minute: default_rl_rpm(),
+            burst: default_rl_burst(),
+            login_per_minute: default_rl_login_rpm(),
+            login_burst: default_rl_login_burst(),
+            trust_forwarded_for: false,
+        }
+    }
+}
+
+fn default_rl_rpm() -> u32 {
+    1200
+}
+fn default_rl_burst() -> u32 {
+    240
+}
+fn default_rl_login_rpm() -> u32 {
+    30
+}
+fn default_rl_login_burst() -> u32 {
+    10
 }
 
 /// In-path crypto enforcement policy. The gateway evaluates each request's
@@ -882,6 +938,7 @@ impl Default for GatewayConfig {
             assets: Vec::new(),
             connectors: Vec::new(),
             crypto_enforcement: CryptoEnforcementConfig::default(),
+            rate_limit: RateLimitConfig::default(),
         }
     }
 }
