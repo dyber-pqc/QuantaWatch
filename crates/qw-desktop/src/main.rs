@@ -544,8 +544,8 @@ impl App {
             .small(),
         );
         ui.add_space(4.0);
-        if self.graph.counts().0 <= 1 {
-            empty_state(ui, "Not enough data to graph yet — run a scan or register estate hosts.");
+        if self.graph.counts().0 == 0 {
+            empty_state(ui, "Nothing to graph yet — run a scan or register estate hosts.");
             return;
         }
         let sel = self.graph.ui(ui);
