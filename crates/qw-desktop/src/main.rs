@@ -13,7 +13,7 @@ use eframe::egui;
 use std::sync::mpsc::Receiver;
 
 use qw_cbom::{PostureEngine, PostureSnapshot};
-use qw_scanner::types::{FindingRecord, FindingSeverity, PqcStatus};
+use qw_scanner::types::{FindingRecord, FindingSeverity, PqcStatus, ScanRecord};
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
 use qw_store::{CertificateRow, Store, TargetRow, DEFAULT_TENANT};
 
@@ -97,6 +97,7 @@ struct Snapshot {
     findings: Vec<FindingRecord>,
     targets: Vec<TargetRow>,
     certs: Vec<CertificateRow>,
+    scans: Vec<ScanRecord>,
     loaded_at: Option<DateTime<Local>>,
 }
 
@@ -105,11 +106,14 @@ impl Snapshot {
         let mut findings = store.all_findings(TENANT);
         // Worst-first so the table leads with what matters.
         findings.sort_by(|a, b| sev_rank(b.severity).cmp(&sev_rank(a.severity)));
+        let mut scans = store.list_scans(TENANT, 200);
+        scans.sort_by(|a, b| b.completed_at.cmp(&a.completed_at));
         Self {
             posture: store.latest_posture(TENANT),
             findings,
             targets: store.list_targets(TENANT),
             certs: store.list_certificates(TENANT),
+            scans,
             loaded_at: Some(Utc::now().with_timezone(&Local)),
         }
     }
@@ -180,6 +184,7 @@ enum Page {
     Findings,
     Estate,
     Certificates,
+    Scans,
     About,
 }
 
@@ -189,6 +194,7 @@ struct App {
     page: Page,
     data: Snapshot,
     filter: String,
+    selected_finding: Option<String>,
     // In-process scanning.
     scan_path: String,
     scanning: bool,
@@ -205,6 +211,7 @@ impl App {
             page: Page::Overview,
             data,
             filter: String::new(),
+            selected_finding: None,
             scan_path: ".".to_string(),
             scanning: false,
             scan_rx: None,
@@ -260,11 +267,13 @@ impl eframe::App for App {
         self.poll_scan();
         self.top_bar(ctx);
         self.side_nav(ctx);
+        self.finding_detail_panel(ctx); // right panel; must precede CentralPanel
         egui::CentralPanel::default().show(ctx, |ui| match self.page {
             Page::Overview => self.overview(ui),
             Page::Findings => self.findings(ui),
             Page::Estate => self.estate(ui),
             Page::Certificates => self.certificates(ui),
+            Page::Scans => self.scans(ui),
             Page::About => self.about(ui),
         });
         // While a scan runs, keep the frame loop alive so poll_scan sees the result.
@@ -316,6 +325,7 @@ impl App {
                 nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(n));
                 nav_item(ui, &mut self.page, Page::Estate, "🖧  Estate", Some(t));
                 nav_item(ui, &mut self.page, Page::Certificates, "🔏  Certificates", Some(c));
+                nav_item(ui, &mut self.page, Page::Scans, "🔎  Scans", Some(self.data.scans.len()));
                 ui.add_space(8.0);
                 ui.separator();
                 nav_item(ui, &mut self.page, Page::About, "ⓘ  About", None);
@@ -475,7 +485,12 @@ impl App {
                     ui.end_row();
                     for f in rows {
                         ui.colored_label(sev_color(f.severity), sev_label(f.severity));
-                        ui.label(&f.title);
+                        // Clickable title → open the detail panel.
+                        let title = egui::Label::new(egui::RichText::new(&f.title).color(theme::ACCENT))
+                            .sense(egui::Sense::click());
+                        if ui.add(title).on_hover_text("view details").clicked() {
+                            self.selected_finding = Some(f.id.clone());
+                        }
                         ui.label(f.algorithm.as_deref().unwrap_or("—"));
                         ui.colored_label(pqc_color(f.pqc_status), pqc_label(f.pqc_status));
                         ui.label(egui::RichText::new(&f.location).color(theme::MUTED));
@@ -525,18 +540,145 @@ impl App {
             empty_state(ui, "No certificates issued. Use the gateway's internal PQC CA to issue hybrid certs.");
             return;
         }
+        let now = Utc::now();
         egui::ScrollArea::vertical().show(ui, |ui| {
-            for c in &self.data.certs {
-                egui::Frame::none()
-                    .fill(theme::CARD)
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin::same(10.0))
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new(format!("{c:?}")).monospace().small());
-                    });
-                ui.add_space(4.0);
-            }
+            egui::Grid::new("certs")
+                .striped(true)
+                .num_columns(5)
+                .spacing([16.0, 6.0])
+                .show(ui, |ui| {
+                    for h in ["Subject", "Type", "PQC", "Expires", "State"] {
+                        ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
+                    }
+                    ui.end_row();
+                    for c in &self.data.certs {
+                        ui.label(&c.subject);
+                        // hybrid = classical X.509 + ML-DSA binding.
+                        let type_col = if c.key_type.contains("hybrid") { theme::GOOD } else { theme::MED };
+                        ui.colored_label(type_col, &c.key_type);
+                        ui.colored_label(status_str_color(&c.pqc_status), pretty_status(&c.pqc_status));
+                        // Expiry, colored by urgency.
+                        let days = (c.not_after - now).num_days();
+                        let (col, txt) = if c.status == "revoked" {
+                            (theme::MUTED, "—".to_string())
+                        } else if days < 0 {
+                            (theme::CRIT, "expired".to_string())
+                        } else if days < 30 {
+                            (theme::HIGH, format!("{days}d"))
+                        } else {
+                            (theme::MUTED, format!("{days}d"))
+                        };
+                        ui.colored_label(col, txt);
+                        let state_col = if c.status == "active" { theme::GOOD } else { theme::CRIT };
+                        ui.colored_label(state_col, &c.status);
+                        ui.end_row();
+                    }
+                });
         });
+    }
+
+    fn scans(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Scans");
+        ui.add_space(6.0);
+        if self.data.scans.is_empty() {
+            empty_state(ui, "No scans recorded yet. Run one from the Overview page.");
+            return;
+        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            egui::Grid::new("scans")
+                .striped(true)
+                .num_columns(5)
+                .spacing([16.0, 6.0])
+                .show(ui, |ui| {
+                    for h in ["Scanner", "Target", "Status", "Findings", "Completed"] {
+                        ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
+                    }
+                    ui.end_row();
+                    for s in &self.data.scans {
+                        ui.label(&s.scanner_id);
+                        ui.label(egui::RichText::new(&s.target_address).color(theme::MUTED));
+                        ui.label(format!("{:?}", s.status));
+                        ui.label(s.finding_count.to_string());
+                        ui.label(
+                            egui::RichText::new(
+                                s.completed_at.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string(),
+                            )
+                            .color(theme::MUTED),
+                        );
+                        ui.end_row();
+                    }
+                });
+        });
+    }
+
+    /// Right-hand detail panel for the selected finding.
+    fn finding_detail_panel(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.selected_finding.clone() else {
+            return;
+        };
+        let Some(f) = self.data.findings.iter().find(|f| f.id == id).cloned() else {
+            self.selected_finding = None;
+            return;
+        };
+        egui::SidePanel::right("finding_detail")
+            .default_width(380.0)
+            .min_width(300.0)
+            .show(ctx, |ui| {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.heading("Finding");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("✕").clicked() {
+                            self.selected_finding = None;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.colored_label(sev_color(f.severity), sev_label(f.severity));
+                    ui.colored_label(pqc_color(f.pqc_status), pqc_label(f.pqc_status));
+                    ui.label(egui::RichText::new(format!("{:?}", f.status)).color(theme::MUTED));
+                });
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(&f.title).strong().size(15.0));
+                ui.add_space(8.0);
+
+                egui::Grid::new("fdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                    ui.label(egui::RichText::new("Category").color(theme::MUTED));
+                    ui.label(f.category.to_string());
+                    ui.end_row();
+                    if let Some(a) = &f.algorithm {
+                        ui.label(egui::RichText::new("Algorithm").color(theme::MUTED));
+                        ui.label(a);
+                        ui.end_row();
+                    }
+                    ui.label(egui::RichText::new("Confidence").color(theme::MUTED));
+                    ui.label(format!("{:?}", f.confidence));
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Location").color(theme::MUTED));
+                    ui.label(egui::RichText::new(&f.location).monospace().small());
+                    ui.end_row();
+                });
+
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    ui.label(egui::RichText::new("Description").strong());
+                    ui.label(&f.description);
+                    if let Some(rem) = &f.remediation {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Remediation").strong().color(theme::GOOD));
+                        ui.label(rem);
+                    }
+                    if !f.evidence.is_empty() {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new("Evidence").strong());
+                        for e in &f.evidence {
+                            ui.label(egui::RichText::new(format!("• {e}")).monospace().small());
+                        }
+                    }
+                });
+            });
     }
 
     fn about(&mut self, ui: &mut egui::Ui) {
