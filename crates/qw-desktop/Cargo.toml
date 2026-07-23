@@ -19,6 +19,7 @@ qw-scanner = { path = "../qw-scanner" }
 qw-cbom = { path = "../qw-cbom" }
 qw-graph = { path = "../qw-graph" }
 qw-integrations = { path = "../qw-integrations" }
+qw-audit = { path = "../qw-audit" }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

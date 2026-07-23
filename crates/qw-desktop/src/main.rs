@@ -15,6 +15,7 @@ mod graphview;
 use std::sync::mpsc::Receiver;
 
 use graphview::GraphView;
+use qw_audit::{AuditBackend, AuditEntry, AuditEvent};
 use qw_cbom::soc2;
 use qw_cbom::{ComplianceEngine, PostureEngine, PostureSnapshot};
 use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus, ScanRecord};
@@ -114,6 +115,7 @@ struct Snapshot {
     overlay_routes: Vec<OverlayRouteRow>,
     remediations: Vec<RemediationTicket>,
     users: Vec<DbUser>,
+    audit: Vec<AuditEntry>,
     history: Vec<f64>,
     loaded_at: Option<DateTime<Local>>,
 }
@@ -146,6 +148,7 @@ impl Snapshot {
             overlay_routes: store.list_all_overlay_routes(),
             remediations: store.list_remediations(TENANT),
             users: store.list_users(),
+            audit: store.list_entries(500),
             history: hist,
             loaded_at: Some(Utc::now().with_timezone(&Local)),
         }
@@ -228,6 +231,8 @@ enum Page {
     Connections,
     Agents,
     Sessions,
+    Threats,
+    Audit,
     Access,
     About,
 }
@@ -427,6 +432,8 @@ impl eframe::App for App {
             Page::Connections => self.connections(ui),
             Page::Agents => self.agents(ui),
             Page::Sessions => self.sessions(ui),
+            Page::Threats => self.threats(ui),
+            Page::Audit => self.audit(ui),
             Page::Access => self.access(ui),
             Page::About => self.about(ui),
         });
@@ -497,6 +504,8 @@ impl App {
                     nav_group(ui, "MONITOR");
                     nav_item(ui, &mut self.page, Page::Agents, "🤖  Agents", Some(d.flows.len()));
                     nav_item(ui, &mut self.page, Page::Sessions, "🧾  Sessions", Some(d.sessions.len()));
+                    nav_item(ui, &mut self.page, Page::Threats, "🚨  Threats", None);
+                    nav_item(ui, &mut self.page, Page::Audit, "📜  Audit log", Some(d.audit.len()));
 
                     nav_group(ui, "ADMIN");
                     nav_item(ui, &mut self.page, Page::Access, "🔑  Access (RBAC)", Some(d.users.len()));
@@ -1309,6 +1318,46 @@ impl App {
         });
     }
 
+    fn threats(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Threats");
+        ui.label(egui::RichText::new("Security events surfaced from the audit stream — blocked threats, policy & access violations.").color(theme::MUTED).small());
+        ui.add_space(6.0);
+        let d = &self.data;
+        let threats: Vec<(&AuditEntry, (String, &'static str, String, bool))> = d
+            .audit
+            .iter()
+            .filter_map(|e| event_to_threat(&e.event).map(|t| (e, t)))
+            .collect();
+        data_table(ui, "threats", &["Time", "Category", "Severity", "Action", "Detail"],
+            threats.len(), "No threats detected in the audit stream.", |ui, i| {
+            let (e, (cat, sev, msg, blocked)) = &threats[i];
+            ui.label(egui::RichText::new(fmt_dt(e.timestamp)).color(theme::MUTED));
+            ui.label(cat);
+            ui.colored_label(graphview::severity_color(sev), sev.to_uppercase());
+            ui.colored_label(if *blocked { theme::CRIT } else { theme::MED },
+                if *blocked { "blocked" } else { "flagged" });
+            ui.label(egui::RichText::new(msg).small());
+        });
+    }
+
+    fn audit(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Audit log");
+        ui.label(egui::RichText::new("Tamper-evident, ML-DSA-65-signed hash chain — read from the local store.").color(theme::MUTED).small());
+        ui.add_space(6.0);
+        let d = &self.data;
+        data_table(ui, "audit", &["Time", "Writer", "Seq", "Session", "Event"],
+            d.audit.len(), "No audit entries yet.", |ui, i| {
+            let e = &d.audit[i];
+            ui.label(egui::RichText::new(fmt_dt(e.timestamp)).color(theme::MUTED));
+            ui.label(egui::RichText::new(&e.writer_id).small());
+            ui.label(e.sequence.to_string());
+            ui.label(egui::RichText::new(truncate_str(&e.session_id, 10)).monospace().small());
+            ui.label(egui::RichText::new(truncate_str(&format!("{:?}", e.event), 72)).small());
+        });
+    }
+
     fn about(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("About");
@@ -1462,6 +1511,79 @@ fn status_str_color(s: &str) -> egui::Color32 {
         _ => theme::MUTED,
     }
 }
+/// Map an audit event to a threat row (category, severity, message, blocked),
+/// mirroring the gateway's /api/threats derivation. Non-security events → None.
+fn event_to_threat(ev: &AuditEvent) -> Option<(String, &'static str, String, bool)> {
+    match ev {
+        AuditEvent::ThreatBlocked {
+            category,
+            severity,
+            pattern,
+        } => Some((
+            category.clone(),
+            norm_sev(severity),
+            format!("In-path monitor blocked {category} (pattern: {pattern})"),
+            true,
+        )),
+        AuditEvent::PolicyViolation {
+            rule,
+            reason,
+            agent_name,
+        } => Some((
+            "policy_violation".to_string(),
+            "medium",
+            format!("Agent '{agent_name}' violated policy '{rule}': {reason}"),
+            true,
+        )),
+        AuditEvent::CryptoPolicyEnforced {
+            provider,
+            agent,
+            action,
+            channel_status,
+            required,
+        } => {
+            let blocked = action == "blocked";
+            Some((
+                "quantum_unsafe_channel".to_string(),
+                if blocked { "high" } else { "medium" },
+                format!("Agent '{agent}' → {provider}: channel {channel_status} below required {required} ({action})"),
+                blocked,
+            ))
+        }
+        AuditEvent::AccessDenied {
+            principal,
+            method,
+            path,
+            required_permission,
+        } => Some((
+            "unauthorized_access".to_string(),
+            "medium",
+            format!("{principal} was denied {method} {path} (needs {required_permission})"),
+            true,
+        )),
+        AuditEvent::LoginFailed {
+            username,
+            client_ip,
+        } => Some((
+            "failed_login".to_string(),
+            "low",
+            format!("Failed login for '{username}' from {client_ip}"),
+            false,
+        )),
+        _ => None,
+    }
+}
+
+fn norm_sev(s: &str) -> &'static str {
+    match s.to_lowercase().as_str() {
+        "critical" => "critical",
+        "high" => "high",
+        "medium" | "warning" => "medium",
+        "low" => "low",
+        _ => "info",
+    }
+}
+
 fn non_empty(s: &str, default: &str) -> String {
     let t = s.trim();
     if t.is_empty() {
