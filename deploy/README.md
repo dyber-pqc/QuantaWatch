@@ -37,6 +37,12 @@ For a verified, MITM-resistant DB link, use `sslmode=verify-full` with
 `sslrootcert=<CA PEM>` in `scanner.store_path` (plain `sslmode=require` encrypts
 but does not authenticate the server).
 
+The gateway's **ML-DSA-65 signing identity** (which signs the audit chain, CBOM
+attestations, evidence packs, and issued-cert bindings) is derived from a seed
+you supply via `identity.seed_env`. See the
+**[signing-seed runbook](SIGNING-SEED-RUNBOOK.md)** for how to generate, store,
+and rotate it.
+
 ### Toward HA / multiple replicas
 
 Two pieces of the single-node story are now solvable from config:
