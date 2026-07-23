@@ -260,6 +260,13 @@ enum Page {
     About,
 }
 
+/// Result of a reachability probe. `reachable == None` means in progress.
+#[derive(Clone)]
+struct ProbeState {
+    reachable: Option<bool>,
+    detail: String,
+}
+
 enum TabAction {
     Select(Page),
     Close(Page),
@@ -301,6 +308,10 @@ struct App {
     terminal_float: bool,
     terminal_input: String,
     terminal_lines: Vec<String>,
+    // Opt-in network reachability probes (leaves the air gap when enabled).
+    net_probes_enabled: bool,
+    probe_rx: Option<std::sync::mpsc::Receiver<(String, ProbeState)>>,
+    probe_results: std::collections::HashMap<String, ProbeState>,
     asset_form: AssetForm,
     target_form: TargetForm,
     edit_status: String,
@@ -328,6 +339,9 @@ impl App {
             terminal_float: false,
             terminal_input: String::new(),
             terminal_lines: vec!["QuantaWatch console — type 'help' for commands.".to_string()],
+            net_probes_enabled: false,
+            probe_rx: None,
+            probe_results: std::collections::HashMap::new(),
             asset_form: AssetForm::default(),
             target_form: TargetForm::default(),
             edit_status: String::new(),
@@ -458,6 +472,41 @@ impl App {
         }
     }
 
+    /// Kick off a reachability probe (opt-in; leaves the air gap). Reports the
+    /// result and cross-checks the air-gapped flag.
+    fn start_probe(&mut self, id: String, addr: String, air_gapped: bool, ctx: &egui::Context) {
+        if !self.net_probes_enabled {
+            self.edit_status =
+                "Network probes are off — enable them in Settings to verify reachability.".to_string();
+            return;
+        }
+        self.probe_results.insert(
+            id.clone(),
+            ProbeState { reachable: None, detail: "probing…".to_string() },
+        );
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Keep a single receiver; a fresh probe replaces it (results still drain).
+        self.probe_rx = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let mut st = probe_addr(&addr);
+            // Contradiction check: air-gapped but actually reachable.
+            if air_gapped && st.reachable == Some(true) {
+                st.detail = format!("⚠ tagged air-gapped but REACHABLE — {}", st.detail);
+            }
+            let _ = tx.send((id, st));
+            ctx.request_repaint();
+        });
+    }
+
+    fn poll_probes(&mut self) {
+        if let Some(rx) = &self.probe_rx {
+            while let Ok((id, st)) = rx.try_recv() {
+                self.probe_results.insert(id, st);
+            }
+        }
+    }
+
     /// Drain a finished scan (if any) and refresh from the store.
     fn poll_scan(&mut self) {
         if let Some(rx) = &self.scan_rx {
@@ -477,6 +526,7 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_scan();
+        self.poll_probes();
         // Ctrl+` toggles the terminal, like the web IDE shell.
         if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Backtick)) {
             self.terminal_open = !self.terminal_open;
@@ -529,9 +579,14 @@ impl App {
                 ui.label(egui::RichText::new("QuantaWatch").strong().size(18.0));
                 ui.label(egui::RichText::new("Desktop").color(theme::ACCENT).size(18.0));
                 ui.separator();
-                // Air-gap badge — this build never opens a socket.
-                ui.label(egui::RichText::new("● OFFLINE").color(theme::GOOD).small());
-                ui.label(egui::RichText::new("no network · no browser").color(theme::MUTED).small());
+                // Honest mode badge: pure-offline by default; probes are opt-in.
+                if self.net_probes_enabled {
+                    ui.label(egui::RichText::new("● PROBES ON").color(theme::HIGH).small());
+                    ui.label(egui::RichText::new("reachability checks enabled · no browser").color(theme::MUTED).small());
+                } else {
+                    ui.label(egui::RichText::new("● OFFLINE").color(theme::GOOD).small());
+                    ui.label(egui::RichText::new("no network · no browser").color(theme::MUTED).small());
+                }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("⟳ Refresh").clicked() {
@@ -1201,18 +1256,21 @@ impl App {
 
         let mut del: Option<String> = None;
         let mut toggle: Option<String> = None;
+        let mut probe: Option<(String, String, bool)> = None;
         {
             let d = &self.data;
+            let probes = &self.probe_results;
             data_table(ui, "estate", &["Name", "Host", "Kind", "Env", "PQC", "Exposure", ""],
                 d.targets.len(), "No registered hosts. Register one above.", |ui, i| {
                 let t = &d.targets[i];
+                let air = has_tag(&t.tags, "air-gapped");
                 ui.label(&t.name).context_menu(|ui| {
-                    let air = has_tag(&t.tags, "air-gapped");
                     if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
                         toggle = Some(t.id.clone());
                         ui.close_menu();
                     }
-                    if ui.button("Scan from Overview").clicked() {
+                    if ui.button("Verify reachability").clicked() {
+                        probe = Some((t.id.clone(), t.host.clone(), air));
                         ui.close_menu();
                     }
                     if ui.button("Delete host").clicked() {
@@ -1224,13 +1282,15 @@ impl App {
                 ui.label(&t.kind);
                 ui.label(&t.environment);
                 ui.colored_label(status_str_color(&t.pqc_status), pretty_status(&t.pqc_status));
-                let air = has_tag(&t.tags, "air-gapped");
-                let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
-                if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
-                    .on_hover_text("toggle air-gapped").clicked()
-                {
-                    toggle = Some(t.id.clone());
-                }
+                ui.horizontal(|ui| {
+                    let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
+                    if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+                        .on_hover_text("toggle · right-click to verify reachability").clicked()
+                    {
+                        toggle = Some(t.id.clone());
+                    }
+                    probe_badge(ui, probes.get(&t.id), air);
+                });
                 if ui.small_button("✕").on_hover_text("delete").clicked() {
                     del = Some(t.id.clone());
                 }
@@ -1238,6 +1298,10 @@ impl App {
         }
         if let Some(id) = toggle {
             self.toggle_target_airgap(&id);
+        }
+        if let Some((id, addr, air)) = probe {
+            let ctx = ui.ctx().clone();
+            self.start_probe(id, addr, air, &ctx);
         }
         if let Some(id) = del {
             self.store.delete_target(TENANT, &id);
@@ -1479,15 +1543,21 @@ impl App {
 
         let mut del: Option<String> = None;
         let mut toggle: Option<String> = None;
+        let mut probe: Option<(String, String, bool)> = None;
         {
             let d = &self.data;
+            let probes = &self.probe_results;
             data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Exposure", ""],
                 d.assets.len(), "No declared assets. Add one above.", |ui, i| {
                 let a = &d.assets[i];
+                let air = has_tag(&a.tags, "air-gapped");
                 ui.label(&a.id).context_menu(|ui| {
-                    let air = has_tag(&a.tags, "air-gapped");
                     if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
                         toggle = Some(a.id.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button("Verify reachability").clicked() {
+                        probe = Some((a.id.clone(), a.address.clone(), air));
                         ui.close_menu();
                     }
                     if ui.button("Delete asset").clicked() {
@@ -1499,14 +1569,15 @@ impl App {
                 ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
                 ui.label(&a.environment);
                 ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
-                // Exposure toggle: air-gapped vs internet-facing.
-                let air = has_tag(&a.tags, "air-gapped");
-                let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
-                if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
-                    .on_hover_text("toggle air-gapped").clicked()
-                {
-                    toggle = Some(a.id.clone());
-                }
+                ui.horizontal(|ui| {
+                    let (col, txt) = if air { (theme::GOOD, "🔒 air-gapped") } else { (theme::MUTED, "exposed") };
+                    if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+                        .on_hover_text("toggle · right-click to verify reachability").clicked()
+                    {
+                        toggle = Some(a.id.clone());
+                    }
+                    probe_badge(ui, probes.get(&a.id), air);
+                });
                 if ui.small_button("✕").on_hover_text("delete").clicked() {
                     del = Some(a.id.clone());
                 }
@@ -1514,6 +1585,10 @@ impl App {
         }
         if let Some(id) = toggle {
             self.toggle_asset_airgap(&id);
+        }
+        if let Some((id, addr, air)) = probe {
+            let ctx = ui.ctx().clone();
+            self.start_probe(id, addr, air, &ctx);
         }
         if let Some(id) = del {
             self.store.delete_asset(TENANT, &id);
@@ -1850,6 +1925,16 @@ impl App {
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(6.0);
+        ui.label(egui::RichText::new("Network").strong());
+        ui.checkbox(&mut self.net_probes_enabled, "Enable reachability probes (leaves the air gap)");
+        ui.label(egui::RichText::new(
+            "Off by default, the app makes no network calls. When on, 'Verify reachability' TCP-connects \
+             to an asset/host to confirm it is actually reachable — and flags any target tagged air-gapped \
+             that still answers. Nothing else touches the network.",
+        ).color(theme::MUTED).small());
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(6.0);
         ui.label(egui::RichText::new("Data").strong());
         if ui.button("⟳ Refresh from store").clicked() {
             self.refresh();
@@ -2155,6 +2240,56 @@ fn norm_sev(s: &str) -> &'static str {
         "low" => "low",
         _ => "info",
     }
+}
+
+/// Ensure `host:port` form: strip any scheme, default the port to 443.
+fn normalize_probe_addr(addr: &str) -> String {
+    let a = addr.trim().rsplit("://").next().unwrap_or(addr).trim();
+    let a = a.split('/').next().unwrap_or(a); // drop any path
+    // If it already ends in `:<digits>`, keep it; else append :443.
+    match a.rsplit_once(':') {
+        Some((_, port)) if port.chars().all(|c| c.is_ascii_digit()) && !port.is_empty() => a.to_string(),
+        _ => format!("{a}:443"),
+    }
+}
+
+/// Blocking TCP-connect reachability probe with a short timeout. A successful
+/// connect proves a network path exists; failure/timeout means unreachable
+/// (which is what a truly air-gapped target should show).
+fn probe_addr(addr: &str) -> ProbeState {
+    use std::net::{TcpStream, ToSocketAddrs};
+    use std::time::Duration;
+    let target = normalize_probe_addr(addr);
+    let resolved = match target.to_socket_addrs() {
+        Ok(mut it) => it.next(),
+        Err(e) => {
+            return ProbeState {
+                reachable: Some(false),
+                detail: format!("unreachable (resolve failed: {e})"),
+            }
+        }
+    };
+    let Some(sa) = resolved else {
+        return ProbeState { reachable: Some(false), detail: "unreachable (no address)".to_string() };
+    };
+    match TcpStream::connect_timeout(&sa, Duration::from_secs(3)) {
+        Ok(_) => ProbeState { reachable: Some(true), detail: format!("reachable — TCP connect to {sa}") },
+        Err(e) => ProbeState { reachable: Some(false), detail: format!("unreachable ({e})") },
+    }
+}
+
+/// Render a reachability-probe result chip. Reachable + air-gapped is a
+/// contradiction and shown in red.
+fn probe_badge(ui: &mut egui::Ui, state: Option<&ProbeState>, air_gapped: bool) {
+    let Some(ps) = state else { return };
+    let (col, txt) = match ps.reachable {
+        None => (theme::MUTED, "probing…"),
+        Some(true) if air_gapped => (theme::CRIT, "⚠ reachable"),
+        Some(true) => (theme::LOW, "● reachable"),
+        Some(false) => (theme::GOOD, "○ unreachable"),
+    };
+    ui.colored_label(col, egui::RichText::new(txt).small())
+        .on_hover_text(&ps.detail);
 }
 
 fn has_tag(tags: &[String], tag: &str) -> bool {
