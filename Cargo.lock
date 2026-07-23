@@ -4856,6 +4856,7 @@ dependencies = [
  "chrono",
  "eframe",
  "egui",
+ "qw-audit",
  "qw-cbom",
  "qw-graph",
  "qw-integrations",

@@ -16,7 +16,7 @@ use std::sync::mpsc::Receiver;
 
 use graphview::GraphView;
 use qw_audit::{AuditBackend, AuditEntry, AuditEvent};
-use qw_cbom::soc2;
+use qw_cbom::{frameworks, soc2};
 use qw_cbom::{ComplianceEngine, PostureEngine, PostureSnapshot};
 use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus, ScanRecord};
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
@@ -224,6 +224,7 @@ enum Page {
     Findings,
     Certificates,
     Compliance,
+    Frameworks,
     Soc2,
     Scans,
     Remediations,
@@ -425,6 +426,7 @@ impl eframe::App for App {
             Page::Findings => self.findings(ui),
             Page::Certificates => self.certificates(ui),
             Page::Compliance => self.compliance(ui),
+            Page::Frameworks => self.frameworks(ui),
             Page::Soc2 => self.soc2(ui),
             Page::Scans => self.scans(ui),
             Page::Remediations => self.remediations(ui),
@@ -493,6 +495,7 @@ impl App {
 
                     nav_group(ui, "GOVERNANCE");
                     nav_item(ui, &mut self.page, Page::Compliance, "📋  Compliance", None);
+                    nav_item(ui, &mut self.page, Page::Frameworks, "🏛  Frameworks", None);
                     nav_item(ui, &mut self.page, Page::Soc2, "✅  SOC 2", None);
 
                     nav_group(ui, "OPERATE");
@@ -1277,6 +1280,63 @@ impl App {
         });
     }
 
+    fn frameworks(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Frameworks");
+        ui.label(egui::RichText::new("Shared qw-cbom control set (CNSA 2.0, NIST 800-53, PCI-DSS, FedRAMP). Evaluated from local signals — the gateway's live config is authoritative.").color(theme::MUTED).small());
+        ui.add_space(8.0);
+
+        // Best-effort signals from what the local store reveals.
+        let at_rest = self
+            .data
+            .findings
+            .iter()
+            .any(|f| f.category.to_string().contains("at_rest") || f.category.to_string().contains("unencrypted"));
+        let signals = frameworks::Signals {
+            auth_on: !self.data.users.is_empty() || !self.data.sessions.is_empty(),
+            lockout: true,
+            idle_timeout: true,
+            enforce_on: false,
+            enforce_block: false,
+            at_rest_on: at_rest,
+            key_rotation: false,
+            tls_scan: true,
+            target_pqc: false,
+            forbidden_set: false,
+            alerts_on: false,
+        };
+        let fws = frameworks::all(&signals);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for f in &fws {
+                let pass = f
+                    .controls
+                    .iter()
+                    .all(|c| !c.required || matches!(c.status, frameworks::Status::Enforced));
+                egui::CollapsingHeader::new(egui::RichText::new(f.name).strong())
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.colored_label(if pass { theme::GOOD } else { theme::HIGH },
+                                if pass { "PASS" } else { "GAPS" });
+                            ui.label(egui::RichText::new(f.description).color(theme::MUTED).small());
+                        });
+                        ui.add_space(4.0);
+                        egui::Grid::new(f.id).striped(true).num_columns(3).spacing([14.0, 4.0]).show(ui, |ui| {
+                            for ctl in &f.controls {
+                                let (col, txt) = fw_status(&ctl.status);
+                                ui.colored_label(col, txt);
+                                ui.label(egui::RichText::new(ctl.title).small());
+                                ui.label(egui::RichText::new(&ctl.evidence).color(theme::MUTED).small());
+                                ui.end_row();
+                            }
+                        });
+                    });
+                ui.add_space(6.0);
+            }
+        });
+    }
+
     fn soc2(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("SOC 2");
@@ -1590,6 +1650,15 @@ fn non_empty(s: &str, default: &str) -> String {
         default.to_string()
     } else {
         t.to_string()
+    }
+}
+
+fn fw_status(s: &frameworks::Status) -> (egui::Color32, &'static str) {
+    match s {
+        frameworks::Status::Enforced => (theme::GOOD, "ENFORCED"),
+        frameworks::Status::Partial => (theme::MED, "PARTIAL"),
+        frameworks::Status::Configurable => (theme::LOW, "CONFIG"),
+        frameworks::Status::Manual => (theme::MUTED, "MANUAL"),
     }
 }
 

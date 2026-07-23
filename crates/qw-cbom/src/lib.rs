@@ -3,6 +3,7 @@ pub mod builder;
 pub mod business;
 pub mod compliance;
 pub mod deterministic;
+pub mod frameworks;
 pub mod governance;
 pub mod history;
 pub mod model;
