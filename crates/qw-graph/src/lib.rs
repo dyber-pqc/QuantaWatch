@@ -204,8 +204,6 @@ fn parse_status(s: &str) -> PqcStatus {
     }
 }
 
-/// Build the full attack-path graph. `overrides` forces a provider's pqc_status
-/// (used by remediation simulation).
 /// An asset/host is air-gapped if tagged `air-gapped`. With no network path
 /// there is no harvestable channel, so harvest-now-decrypt-later doesn't apply
 /// and the quantum-channel attack path is suppressed.
@@ -214,6 +212,8 @@ fn is_air_gapped(tags: &[String]) -> bool {
         .any(|t| t.eq_ignore_ascii_case("air-gapped") || t.eq_ignore_ascii_case("airgapped"))
 }
 
+/// Build the full attack-path graph. `overrides` forces a provider's pqc_status
+/// (used by remediation simulation).
 pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>) -> Graph {
     let mut nodes: Vec<Node> = Vec::new();
     let mut edges: Vec<Edge> = Vec::new();
@@ -962,4 +962,58 @@ pub fn enrich_paths(paths: &[AttackPath]) -> Vec<serde_json::Value> {
             .then(b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal))
     });
     rows.into_iter().map(|(_, _, v)| v).collect()
+}
+
+#[cfg(test)]
+mod airgap_tests {
+    use super::*;
+
+    fn host(air_gapped: bool) -> qw_store::TargetRow {
+        let tags = if air_gapped { "[\"air-gapped\"]" } else { "[]" };
+        let json = format!(
+            r#"{{
+                "id":"h1","name":"web","host":"10.0.0.5","kind":"server",
+                "reachability":["tls"],"environment":"production","tags":{tags},
+                "exposedServices":[{{"port":443,"service":"https","pqcStatus":"classical_weak",
+                    "detail":"TLS 1.2 RSA","source":"network","exposed":true}}],
+                "containers":[],"pqcStatus":"classical_weak","createdAt":"2026-01-01T00:00:00Z"
+            }}"#
+        );
+        serde_json::from_str(&json).expect("valid target json")
+    }
+
+    fn paths_touching_host(air_gapped: bool) -> usize {
+        let t = host(air_gapped);
+        let inputs = GraphInputs {
+            providers: vec![],
+            identities: vec![],
+            agents: vec![],
+            flows: &[],
+            findings: &[],
+            assets: &[],
+            targets: std::slice::from_ref(&t),
+        };
+        let g = build_graph(&inputs, &HashMap::new());
+        g.paths
+            .iter()
+            .filter(|p| p.node_ids.iter().any(|n| n == "host:h1"))
+            .count()
+    }
+
+    #[test]
+    fn exposed_weak_host_produces_an_attack_path() {
+        assert!(
+            paths_touching_host(false) > 0,
+            "an internet-exposed quantum-weak service must yield an attack path"
+        );
+    }
+
+    #[test]
+    fn air_gapped_host_drops_the_attack_path() {
+        assert_eq!(
+            paths_touching_host(true),
+            0,
+            "an air-gapped host has no harvestable channel, so no attack path"
+        );
+    }
 }
