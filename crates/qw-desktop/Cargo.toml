@@ -17,6 +17,7 @@ egui = "0.29"
 qw-store = { path = "../qw-store" }
 qw-scanner = { path = "../qw-scanner" }
 qw-cbom = { path = "../qw-cbom" }
+qw-graph = { path = "../qw-graph" }
 chrono = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

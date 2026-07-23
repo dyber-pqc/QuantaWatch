@@ -12,6 +12,7 @@ members = [
     "crates/qw-gateway",
     "crates/qw-cli",
     "crates/qw-desktop",
+    "crates/qw-graph",
 ]
 
 [workspace.package]

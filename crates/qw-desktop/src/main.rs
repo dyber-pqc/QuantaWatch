@@ -18,7 +18,7 @@ use graphview::GraphView;
 use qw_cbom::{PostureEngine, PostureSnapshot};
 use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus, ScanRecord};
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
-use qw_store::{CertificateRow, FlowRow, Store, TargetRow, DEFAULT_TENANT};
+use qw_store::{AssetRow, CertificateRow, FlowRow, Store, TargetRow, DEFAULT_TENANT};
 
 const TENANT: &str = DEFAULT_TENANT;
 
@@ -102,6 +102,7 @@ struct Snapshot {
     certs: Vec<CertificateRow>,
     scans: Vec<ScanRecord>,
     flows: Vec<FlowRow>,
+    assets: Vec<AssetRow>,
     history: Vec<f64>,
     loaded_at: Option<DateTime<Local>>,
 }
@@ -127,6 +128,7 @@ impl Snapshot {
             certs: store.list_certificates(TENANT),
             scans,
             flows: store.list_flows(TENANT),
+            assets: store.list_assets(TENANT),
             history: hist,
             loaded_at: Some(Utc::now().with_timezone(&Local)),
         }
@@ -519,14 +521,18 @@ impl App {
     }
 
     fn attack_paths(&mut self, ui: &mut egui::Ui) {
-        self.graph
-            .sync(&self.data.flows, &self.data.targets, &self.data.findings);
+        self.graph.sync(
+            &self.data.flows,
+            &self.data.targets,
+            &self.data.findings,
+            &self.data.assets,
+        );
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.heading("Attack paths");
             let (n, e) = self.graph.counts();
             ui.label(
-                egui::RichText::new(format!("{n} nodes · {e} edges"))
+                egui::RichText::new(format!("{n} nodes · {e} edges · {} paths", self.graph.paths().len()))
                     .color(theme::MUTED)
                     .small(),
             );
@@ -538,7 +544,7 @@ impl App {
         });
         ui.label(
             egui::RichText::new(
-                "Drag to pan · scroll to zoom · click a node. Built in-process from flows, estate & findings.",
+                "Shared qw-graph engine, run in-process. Drag to pan · scroll to zoom · click a node.",
             )
             .color(theme::MUTED)
             .small(),
@@ -548,6 +554,46 @@ impl App {
             empty_state(ui, "Nothing to graph yet — run a scan or register estate hosts.");
             return;
         }
+
+        // Ranked "toxic combinations" on the right; the graph fills the rest.
+        egui::SidePanel::right("toxic_combos")
+            .default_width(300.0)
+            .show_inside(ui, |ui| {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Toxic combinations").strong());
+                ui.label(
+                    egui::RichText::new("attack paths, worst first")
+                        .color(theme::MUTED)
+                        .small(),
+                );
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for p in self.graph.paths() {
+                        egui::Frame::none()
+                            .fill(theme::CARD)
+                            .rounding(6.0)
+                            .inner_margin(egui::Margin::same(8.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        graphview::severity_color(&p.severity),
+                                        format!("{:.0}", p.score),
+                                    );
+                                    ui.label(egui::RichText::new(p.severity.to_uppercase()).small());
+                                    if p.hndl {
+                                        ui.colored_label(theme::CRIT, egui::RichText::new("HNDL").small());
+                                    }
+                                    if p.observed {
+                                        ui.colored_label(theme::LOW, egui::RichText::new("observed").small());
+                                    }
+                                });
+                                ui.label(egui::RichText::new(&p.title).small());
+                            });
+                        ui.add_space(4.0);
+                    }
+                });
+            });
+
         let sel = self.graph.ui(ui);
         if let Some((label, detail)) = sel {
             egui::Area::new(egui::Id::new("graph_sel"))

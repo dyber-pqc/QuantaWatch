@@ -22,6 +22,7 @@ qw-scanner = { path = "../qw-scanner" }
 qw-cbom = { path = "../qw-cbom" }
 qw-integrations = { path = "../qw-integrations" }
 qw-store = { path = "../qw-store" }
+qw-graph = { path = "../qw-graph" }
 
 axum.workspace = true
 tower.workspace = true

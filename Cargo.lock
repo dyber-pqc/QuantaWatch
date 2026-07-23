@@ -4857,8 +4857,11 @@ dependencies = [
  "eframe",
  "egui",
  "qw-cbom",
+ "qw-graph",
  "qw-scanner",
  "qw-store",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4881,6 +4884,7 @@ dependencies = [
  "qw-audit",
  "qw-cbom",
  "qw-crypto",
+ "qw-graph",
  "qw-integrations",
  "qw-monitor",
  "qw-policy",
@@ -4906,6 +4910,16 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "windows-service",
+]
+
+[[package]]
+name = "qw-graph"
+version = "0.1.0"
+dependencies = [
+ "qw-scanner",
+ "qw-store",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
