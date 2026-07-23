@@ -87,6 +87,7 @@ fn main() -> eframe::Result<()> {
         "QuantaWatch Desktop",
         options,
         Box::new(move |cc| {
+            setup_fonts(&cc.egui_ctx);
             install_theme(&cc.egui_ctx);
             Ok(Box::new(App::new(store, source)))
         }),
@@ -109,6 +110,25 @@ pub(crate) mod theme {
     pub const MED: Color32 = Color32::from_rgb(0xd9, 0xb3, 0x06);
     pub const LOW: Color32 = Color32::from_rgb(0x3f, 0x9d, 0xd6);
     pub const GOOD: Color32 = Color32::from_rgb(0x2e, 0xcc, 0x71);
+}
+
+/// Bundle Cascadia Code (SIL OFL 1.1) as an extra glyph source: a symbol
+/// fallback for proportional text and the primary monospace. egui's default
+/// chain already carries NotoEmoji + emoji-icon-font for pictographic icons;
+/// Cascadia adds the dashes/arrows/geometric symbols Ubuntu-Light lacks.
+fn setup_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "cascadia".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/CascadiaCode.ttf")),
+    );
+    if let Some(prop) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+        prop.insert(1, "cascadia".to_owned()); // after Ubuntu-Light, before emoji
+    }
+    if let Some(mono) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+        mono.insert(0, "cascadia".to_owned());
+    }
+    ctx.set_fonts(fonts);
 }
 
 fn install_theme(ctx: &egui::Context) {
@@ -653,37 +673,37 @@ impl App {
                 let d = &self.data;
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(8.0);
-                    nav_item(ui, &mut self.page, Page::Overview, "Overview", None);
+                    nav_item(ui, &mut self.page, Page::Overview, "📊  Overview", None);
 
                     nav_group(ui, "POSTURE");
-                    nav_item(ui, &mut self.page, Page::AttackPaths, "Attack paths", None);
-                    nav_item(ui, &mut self.page, Page::Estate, "Estate", Some(d.targets.len()));
-                    nav_item(ui, &mut self.page, Page::Endpoints, "Endpoints", Some(d.endpoints.len()));
-                    nav_item(ui, &mut self.page, Page::Assets, "Assets", Some(d.assets.len()));
-                    nav_item(ui, &mut self.page, Page::Findings, "Findings", Some(d.findings.len()));
-                    nav_item(ui, &mut self.page, Page::Certificates, "Certificates", Some(d.certs.len()));
+                    nav_item(ui, &mut self.page, Page::AttackPaths, "🎯  Attack paths", None);
+                    nav_item(ui, &mut self.page, Page::Estate, "🌐  Estate", Some(d.targets.len()));
+                    nav_item(ui, &mut self.page, Page::Endpoints, "💻  Endpoints", Some(d.endpoints.len()));
+                    nav_item(ui, &mut self.page, Page::Assets, "📦  Assets", Some(d.assets.len()));
+                    nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(d.findings.len()));
+                    nav_item(ui, &mut self.page, Page::Certificates, "🔒  Certificates", Some(d.certs.len()));
 
                     nav_group(ui, "GOVERNANCE");
-                    nav_item(ui, &mut self.page, Page::Compliance, "Compliance", None);
-                    nav_item(ui, &mut self.page, Page::Frameworks, "Frameworks", None);
-                    nav_item(ui, &mut self.page, Page::Soc2, "SOC 2", None);
+                    nav_item(ui, &mut self.page, Page::Compliance, "📋  Compliance", None);
+                    nav_item(ui, &mut self.page, Page::Frameworks, "📚  Frameworks", None);
+                    nav_item(ui, &mut self.page, Page::Soc2, "✅  SOC 2", None);
 
                     nav_group(ui, "OPERATE");
-                    nav_item(ui, &mut self.page, Page::Scans, "Scans", Some(d.scans.len()));
-                    nav_item(ui, &mut self.page, Page::Remediations, "Remediations", Some(d.remediations.len()));
-                    nav_item(ui, &mut self.page, Page::Overlay, "PQC Overlay", Some(d.overlay_routes.len()));
-                    nav_item(ui, &mut self.page, Page::Connections, "Connections", Some(d.connections.len()));
+                    nav_item(ui, &mut self.page, Page::Scans, "🔍  Scans", Some(d.scans.len()));
+                    nav_item(ui, &mut self.page, Page::Remediations, "🔧  Remediations", Some(d.remediations.len()));
+                    nav_item(ui, &mut self.page, Page::Overlay, "🔐  PQC Overlay", Some(d.overlay_routes.len()));
+                    nav_item(ui, &mut self.page, Page::Connections, "🔌  Connections", Some(d.connections.len()));
 
                     nav_group(ui, "MONITOR");
-                    nav_item(ui, &mut self.page, Page::Agents, "Agents", Some(d.flows.len()));
-                    nav_item(ui, &mut self.page, Page::Sessions, "Sessions", Some(d.sessions.len()));
-                    nav_item(ui, &mut self.page, Page::Threats, "Threats", None);
-                    nav_item(ui, &mut self.page, Page::Audit, "Audit log", Some(d.audit.len()));
+                    nav_item(ui, &mut self.page, Page::Agents, "🤖  Agents", Some(d.flows.len()));
+                    nav_item(ui, &mut self.page, Page::Sessions, "📝  Sessions", Some(d.sessions.len()));
+                    nav_item(ui, &mut self.page, Page::Threats, "🚨  Threats", None);
+                    nav_item(ui, &mut self.page, Page::Audit, "📜  Audit log", Some(d.audit.len()));
 
                     nav_group(ui, "ADMIN");
-                    nav_item(ui, &mut self.page, Page::Access, "Access (RBAC)", Some(d.users.len()));
-                    nav_item(ui, &mut self.page, Page::Settings, "Settings", None);
-                    nav_item(ui, &mut self.page, Page::About, "About", None);
+                    nav_item(ui, &mut self.page, Page::Access, "🔑  Access (RBAC)", Some(d.users.len()));
+                    nav_item(ui, &mut self.page, Page::Settings, "⚙  Settings", None);
+                    nav_item(ui, &mut self.page, Page::About, "📖  About", None);
                     ui.add_space(12.0);
                     ui.separator();
                     ui.label(egui::RichText::new("store").color(theme::MUTED).small());
@@ -741,8 +761,8 @@ impl App {
                                     if let Some(payload) = dnd.response.dnd_release_payload::<usize>() {
                                         reorder = Some((*payload, idx));
                                     }
-                                    // Font-safe close glyph (ASCII), outside the drag zone.
-                                    if ui.small_button("x").on_hover_text("close").clicked() {
+                                    // Latin-1 × (Ubuntu-Light covers it), outside the drag zone.
+                                    if ui.small_button("×").on_hover_text("close").clicked() {
                                         act = Some(TabAction::Close(tab));
                                     }
                                 });
@@ -2388,24 +2408,24 @@ impl App {
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
                     let mut go = |ui: &mut egui::Ui, icon: &str, tip: &str, p: Page, page: &mut Page| {
-                        if ui.selectable_label(*page == p, egui::RichText::new(icon).size(13.0)).on_hover_text(tip).clicked() {
+                        if ui.selectable_label(*page == p, egui::RichText::new(icon).size(16.0)).on_hover_text(tip).clicked() {
                             *page = p;
                         }
                         ui.add_space(2.0);
                     };
-                    go(ui, "Ovr", "Overview", Page::Overview, &mut self.page);
-                    go(ui, "Atk", "Attack paths", Page::AttackPaths, &mut self.page);
-                    go(ui, "Fnd", "Findings", Page::Findings, &mut self.page);
-                    go(ui, "Est", "Estate", Page::Estate, &mut self.page);
-                    go(ui, "Aud", "Audit log", Page::Audit, &mut self.page);
+                    go(ui, "📊", "Overview", Page::Overview, &mut self.page);
+                    go(ui, "🎯", "Attack paths", Page::AttackPaths, &mut self.page);
+                    go(ui, "⚠", "Findings", Page::Findings, &mut self.page);
+                    go(ui, "🌐", "Estate", Page::Estate, &mut self.page);
+                    go(ui, "📜", "Audit log", Page::Audit, &mut self.page);
                     ui.add_space(6.0);
-                    if ui.selectable_label(self.terminal_open, egui::RichText::new("Trm").size(13.0)).on_hover_text("Terminal (Ctrl+`)").clicked() {
+                    if ui.selectable_label(self.terminal_open, egui::RichText::new("💻").size(16.0)).on_hover_text("Terminal (Ctrl+`)").clicked() {
                         self.terminal_open = !self.terminal_open;
                     }
                 });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                     ui.add_space(8.0);
-                    if ui.selectable_label(self.page == Page::Settings, egui::RichText::new("Set").size(13.0)).on_hover_text("Settings").clicked() {
+                    if ui.selectable_label(self.page == Page::Settings, egui::RichText::new("⚙").size(16.0)).on_hover_text("Settings").clicked() {
                         self.page = Page::Settings;
                     }
                 });

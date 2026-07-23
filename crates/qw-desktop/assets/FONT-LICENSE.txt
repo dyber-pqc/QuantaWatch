@@ -1,0 +1,9 @@
+CascadiaCode.ttf — Cascadia Code
+Copyright (c) Microsoft Corporation.
+Licensed under the SIL Open Font License, Version 1.1 (OFL-1.1).
+Source: https://github.com/microsoft/cascadia-code
+
+Bundled here to provide symbol/monospace glyph coverage for the QuantaWatch
+desktop app. The OFL permits bundling and redistribution with attribution;
+the full license text is available at the source repository above and at
+https://openfontlicense.org/.
