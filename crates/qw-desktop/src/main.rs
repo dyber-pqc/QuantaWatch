@@ -10,11 +10,14 @@
 use chrono::{DateTime, Local, Utc};
 use eframe::egui;
 
-use qw_cbom::PostureSnapshot;
-use qw_scanner::types::{FindingRecord, FindingSeverity, PqcStatus};
-use qw_store::{CertificateRow, Store, TargetRow};
+use std::sync::mpsc::Receiver;
 
-const TENANT: &str = "default";
+use qw_cbom::{PostureEngine, PostureSnapshot};
+use qw_scanner::types::{FindingRecord, FindingSeverity, PqcStatus};
+use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
+use qw_store::{CertificateRow, Store, TargetRow, DEFAULT_TENANT};
+
+const TENANT: &str = DEFAULT_TENANT;
 
 fn main() -> eframe::Result<()> {
     let data_dir = std::env::args().nth(1).unwrap_or_else(|| "./data".to_string());
@@ -120,6 +123,55 @@ impl Snapshot {
     }
 }
 
+// ----------------------------------------------------------------------------- scan
+
+/// Result of an in-process scan, handed back to the UI thread.
+struct ScanOutcome {
+    findings: usize,
+    score: f64,
+    error: Option<String>,
+}
+
+/// Run a fully-local scan of a code directory and persist the findings +
+/// recomputed posture to the store. Runs on a worker thread (it owns its own
+/// tokio runtime to drive the async scanners); reads local files only — no
+/// network. Only the code + dependency scanners are enabled, and `scan_all`
+/// runs just the scanners that support the target, so this never opens a socket.
+fn run_scan_blocking(store: &Store, path: &str) -> ScanOutcome {
+    let mut cfg = ScannerConfig::default();
+    cfg.code.enabled = true;
+    cfg.dependencies.enabled = true;
+    let registry = build_scanner_registry(&cfg);
+
+    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => {
+            return ScanOutcome {
+                findings: 0,
+                score: 0.0,
+                error: Some(format!("runtime: {e}")),
+            }
+        }
+    };
+
+    let target = ScanTarget::code_directory(path);
+    let results = rt.block_on(registry.scan_all(&target));
+
+    let mut total = 0usize;
+    for r in &results {
+        total += r.findings.len();
+        store.record_scan(TENANT, r, &target);
+    }
+    let summary = PostureEngine::summarize(&results, &[]);
+    store.record_posture(TENANT, &PostureSnapshot::from_summary(&summary, "desktop-scan"));
+
+    ScanOutcome {
+        findings: total,
+        score: summary.overall_score,
+        error: None,
+    }
+}
+
 // ----------------------------------------------------------------------------- app
 
 #[derive(PartialEq, Clone, Copy)]
@@ -137,6 +189,11 @@ struct App {
     page: Page,
     data: Snapshot,
     filter: String,
+    // In-process scanning.
+    scan_path: String,
+    scanning: bool,
+    scan_rx: Option<Receiver<ScanOutcome>>,
+    scan_status: String,
 }
 
 impl App {
@@ -148,16 +205,59 @@ impl App {
             page: Page::Overview,
             data,
             filter: String::new(),
+            scan_path: ".".to_string(),
+            scanning: false,
+            scan_rx: None,
+            scan_status: String::new(),
         }
     }
 
     fn refresh(&mut self) {
         self.data = Snapshot::load(&self.store);
     }
+
+    /// Kick off a scan on a worker thread; the UI polls `scan_rx` for the result.
+    fn start_scan(&mut self, ctx: &egui::Context) {
+        if self.scanning {
+            return;
+        }
+        let path = self.scan_path.trim().to_string();
+        if path.is_empty() {
+            self.scan_status = "Enter a directory to scan.".to_string();
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.scan_rx = Some(rx);
+        self.scanning = true;
+        self.scan_status = format!("Scanning {path} …");
+        let store = self.store.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let outcome = run_scan_blocking(&store, &path);
+            let _ = tx.send(outcome);
+            ctx.request_repaint(); // wake the UI when the scan finishes
+        });
+    }
+
+    /// Drain a finished scan (if any) and refresh from the store.
+    fn poll_scan(&mut self) {
+        if let Some(rx) = &self.scan_rx {
+            if let Ok(o) = rx.try_recv() {
+                self.scanning = false;
+                self.scan_rx = None;
+                self.scan_status = match o.error {
+                    Some(e) => format!("Scan failed: {e}"),
+                    None => format!("Scan complete — {} findings, posture {:.0}", o.findings, o.score),
+                };
+                self.refresh();
+            }
+        }
+    }
 }
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_scan();
         self.top_bar(ctx);
         self.side_nav(ctx);
         egui::CentralPanel::default().show(ctx, |ui| match self.page {
@@ -167,6 +267,10 @@ impl eframe::App for App {
             Page::Certificates => self.certificates(ui),
             Page::About => self.about(ui),
         });
+        // While a scan runs, keep the frame loop alive so poll_scan sees the result.
+        if self.scanning {
+            ctx.request_repaint();
+        }
     }
 }
 
@@ -228,6 +332,41 @@ impl App {
         ui.add_space(6.0);
         ui.heading("Posture overview");
         ui.add_space(8.0);
+
+        // In-process scan — reads local files only, no network.
+        egui::Frame::none()
+            .fill(theme::PANEL)
+            .rounding(8.0)
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Scan a code directory").strong());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.scan_path)
+                            .hint_text("path to a source tree")
+                            .desired_width(340.0),
+                    );
+                    let btn = egui::Button::new(egui::RichText::new("▶ Scan").color(theme::TEXT))
+                        .fill(theme::ACCENT);
+                    if ui.add_enabled(!self.scanning, btn).clicked() {
+                        let ctx = ui.ctx().clone();
+                        self.start_scan(&ctx);
+                    }
+                    if self.scanning {
+                        ui.spinner();
+                    }
+                });
+                if !self.scan_status.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(&self.scan_status).color(theme::MUTED).small());
+                }
+                ui.label(
+                    egui::RichText::new("Local files only — no network. Findings are written to the store.")
+                        .color(theme::MUTED)
+                        .small(),
+                );
+            });
+        ui.add_space(12.0);
 
         let score = self.data.posture.as_ref().map(|p| p.overall_score);
         egui::Frame::none()
@@ -517,10 +656,19 @@ fn status_str_color(s: &str) -> egui::Color32 {
     }
 }
 fn pretty_status(s: &str) -> String {
-    let cleaned = s.replace(['_', '-'], " ");
-    let mut chars = cleaned.chars();
-    match chars.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
-        None => cleaned,
-    }
+    s.replace(['_', '-'], " ")
+        .split_whitespace()
+        .map(|w| match w.to_lowercase().as_str() {
+            // Keep security acronyms upper-cased.
+            "pqc" | "tls" | "ssh" | "rsa" | "ecc" | "kem" => w.to_uppercase(),
+            _ => {
+                let mut c = w.chars();
+                match c.next() {
+                    Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
