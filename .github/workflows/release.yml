@@ -264,12 +264,14 @@ jobs:
       - name: Assemble release files + SHA256SUMS
         run: |
           mkdir -p dist
-          # Flatten per-OS artifacts into dist/, prefixing by platform.
+          # Flatten per-OS artifacts into dist/, prefixing by platform. Recurse:
+          # the Windows bundle nests files under release/wix/inno subdirs (upload
+          # rooted them at target/), so a top-level glob would drop every Windows
+          # artifact - exe, MSI and setup.exe.
           for d in artifacts/*/; do
             plat="$(basename "$d")"
-            for f in "$d"*; do
-              base="$(basename "$f")"
-              cp "$f" "dist/${plat}-${base}"
+            find "$d" -type f | while read -r f; do
+              cp "$f" "dist/${plat}-$(basename "$f")"
             done
           done
           cd dist
