@@ -168,14 +168,30 @@ curl -s -X POST http://localhost:9091/api/onboarding/scan \
 | [`qw-cbom`](crates/qw-cbom/) | CycloneDX CBOM, posture scoring, compliance, migration planner |
 | [`qw-integrations`](crates/qw-integrations/) | GitHub / GitLab / Jira / Linear connectors |
 | [`qw-store`](crates/qw-store/) | SQLite persistence, tenant-scoped |
+| [`qw-graph`](crates/qw-graph/) | Quantum attack-path engine: crypto security graph + HNDL kill-chains |
+| [`qw-pki`](crates/qw-pki/) | Local hybrid CA: Ed25519 X.509 leaf + ML-DSA-65 binding |
 | [`qw-gateway`](crates/qw-gateway/) | Axum proxy + admin API, middleware, attestation, resilience, metrics |
 | [`qw-cli`](crates/qw-cli/) | `verify`, `inspect`, `keygen`, `scan`, `posture`, `cbom`, `verify-evidence`, `verify-attestation` |
+| [`qw-desktop`](crates/qw-desktop/) | Native (egui) offline desktop app — see [docs/desktop.md](docs/desktop.md) |
 
 | Package | Purpose |
 |---------|---------|
 | [`dashboard/`](dashboard/) | React 19 + Vite + Tailwind monitoring UI |
 | [`sdk/python/`](sdk/python/) | Python SDK with a `protect()` wrapper |
 | [`sdk/typescript/`](sdk/typescript/) | Zero-dependency TypeScript SDK |
+
+### Desktop app
+
+A native, browser-free, offline-first build of the dashboard for air-gapped and
+high-assurance use. Install the signed Windows MSI from a
+[release](https://github.com/dyber-pqc/QuantaWatch/releases), or build it:
+
+```bash
+cargo run -p qw-desktop -- ./data
+```
+
+Full guide, page tour, and the web↔desktop parity matrix:
+**[docs/desktop.md](docs/desktop.md)**.
 
 ## Post-Quantum Cryptography
 
