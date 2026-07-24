@@ -11,11 +11,14 @@ makes it a good fit for air-gapped and high-assurance environments.
 
 ## Install
 
-**Windows (recommended):** download the signed `quantawatch-desktop.msi` from the
-[latest release](https://github.com/dyber-pqc/QuantaWatch/releases). It installs
-to *Program Files*, adds a Start-menu shortcut, and registers an uninstall entry.
-Both the exe and MSI are covered by the release `SHA256SUMS` and the post-quantum
-signature (see [RELEASES.md](RELEASES.md)).
+**Windows (recommended):** download an installer from the
+[latest release](https://github.com/dyber-pqc/QuantaWatch/releases) — either
+`quantawatch-desktop.msi` (MSI, for managed/silent deployment) or
+`quantawatch-desktop-setup.exe` (a friendly Inno Setup wizard). Both install to
+*Program Files*, add a Start-menu shortcut, and register an uninstall entry, and
+both are covered by the release `SHA256SUMS` + post-quantum signature (see
+[RELEASES.md](RELEASES.md)). You can also build either installer yourself —
+`cargo wix --package qw-desktop` or `iscc crates\qw-desktop\installer\quantawatch-desktop.iss`.
 
 **From source (any OS):**
 

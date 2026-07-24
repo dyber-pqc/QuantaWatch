@@ -89,7 +89,21 @@ jobs:
           cargo wix --package qw-desktop --no-build --nocapture `
             --output target\wix\quantawatch-desktop.msi
 
-      - name: Sign MSI installer (Windows)
+      # Also build a friendly setup.exe (Inno Setup) - a "proper" interactive
+      # installer alternative to the MSI. Non-blocking like the MSI.
+      - name: Build Inno Setup installer (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $ver = "${{ github.ref_name }}".TrimStart('v')
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          & $iscc "/DMyAppVersion=$ver" "/Otarget\inno" `
+            crates\qw-desktop\installer\quantawatch-desktop.iss
+
+      # Authenticode-sign both installers (whichever exist) when the cert is set.
+      - name: Sign installers (Windows)
         if: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERT_PFX != '' }}
         continue-on-error: true
         shell: pwsh
@@ -101,8 +115,12 @@ jobs:
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX))
           $st = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
             Sort-Object FullName -Descending | Select-Object -First 1
-          & $st.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 `
-            /tr http://timestamp.digicert.com /td SHA256 target\wix\quantawatch-desktop.msi
+          foreach ($f in @('target\wix\quantawatch-desktop.msi', 'target\inno\quantawatch-desktop-setup.exe')) {
+            if (Test-Path $f) {
+              & $st.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 `
+                /tr http://timestamp.digicert.com /td SHA256 $f
+            }
+          }
           Remove-Item $pfx
 
       - name: Warn if Windows signing cert is not configured
@@ -131,6 +149,7 @@ jobs:
             target/release/qw.exe
             target/release/quantawatch-desktop.exe
             target/wix/quantawatch-desktop.msi
+            target/inno/quantawatch-desktop-setup.exe
 
   docker:
     name: Docker Build & Push (${{ matrix.component }})

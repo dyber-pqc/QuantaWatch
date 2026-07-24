@@ -89,10 +89,24 @@ signature; the post-quantum signature is skipped with a warning.
 ## Windows desktop: MSI installer + Authenticode signing
 
 Tagging a release also builds the native desktop app (`quantawatch-desktop.exe`)
-on the Windows runner and packages it as an MSI installer (`cargo-wix` + WiX v3;
-see `crates/qw-desktop/wix/main.wxs`). Both the exe and the MSI are attached to
-the release and covered by `SHA256SUMS` + the post-quantum signature like every
-other artifact.
+on the Windows runner and packages it two ways:
+
+- **MSI** (`quantawatch-desktop.msi`) via `cargo-wix` + WiX v3 — see
+  `crates/qw-desktop/wix/main.wxs`. Best for managed / silent deployment.
+- **setup.exe** (`quantawatch-desktop-setup.exe`) via Inno Setup — see
+  `crates/qw-desktop/installer/quantawatch-desktop.iss`. A friendly interactive
+  installer for individual users.
+
+The exe and both installers are attached to the release and covered by
+`SHA256SUMS` + the post-quantum signature like every other artifact.
+
+Build either installer yourself (with the respective tool installed):
+
+```bash
+cargo build --release -p qw-desktop
+cargo wix --package qw-desktop --no-build                       # MSI
+iscc crates\qw-desktop\installer\quantawatch-desktop.iss        # setup.exe
+```
 
 Authenticode code-signing is applied when a signing certificate is configured,
 and skipped (with a warning) otherwise — an unsigned exe + MSI still ship.
