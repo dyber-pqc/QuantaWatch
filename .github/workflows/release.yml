@@ -43,8 +43,71 @@ jobs:
             ${{ runner.os }}-cargo-release-
 
       # --locked: build exactly the committed Cargo.lock, so deps can't drift.
-      - name: Build release binaries
+      - name: Build release binaries (Unix)
+        if: runner.os != 'Windows'
         run: cargo build --release --locked -p qw-gateway -p qw-cli
+
+      # On Windows we additionally ship the native desktop app (egui).
+      - name: Build release binaries (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --locked -p qw-gateway -p qw-cli -p qw-desktop
+
+      # Authenticode-sign the desktop exe *before* packaging so the MSI carries a
+      # signed binary. Runs only when the signing cert secret is present; a
+      # signing hiccup is non-fatal (an unsigned exe still ships, with a warning).
+      - name: Sign desktop executable (Windows)
+        if: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERT_PFX != '' }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX))
+          $st = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          & $st.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 `
+            /tr http://timestamp.digicert.com /td SHA256 target\release\quantawatch-desktop.exe
+          Remove-Item $pfx
+
+      # Package the desktop app as an MSI (cargo-wix + WiX v3). Non-blocking: if
+      # WiX tooling misbehaves the release still ships the raw signed exe.
+      - name: Install WiX + cargo-wix (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          choco install wixtoolset --no-progress -y
+          cargo install cargo-wix --version "^0.3" --locked
+
+      - name: Build MSI installer (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          cargo wix --package qw-desktop --no-build --nocapture `
+            --output target\wix\quantawatch-desktop.msi
+
+      - name: Sign MSI installer (Windows)
+        if: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERT_PFX != '' }}
+        continue-on-error: true
+        shell: pwsh
+        env:
+          CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX))
+          $st = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          & $st.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 `
+            /tr http://timestamp.digicert.com /td SHA256 target\wix\quantawatch-desktop.msi
+          Remove-Item $pfx
+
+      - name: Warn if Windows signing cert is not configured
+        if: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERT_PFX == '' }}
+        run: echo "::warning::WINDOWS_CERT_PFX not set - shipping an UNSIGNED desktop exe + MSI. See docs/RELEASES.md."
 
       - name: Upload artifacts (Unix)
         if: runner.os != 'Windows'
@@ -59,10 +122,15 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
+          # if-no-files-found: ignore so a missing MSI (packaging skipped) doesn't
+          # fail the upload; the exes are always present.
+          if-no-files-found: warn
           name: ${{ matrix.artifact-name }}
           path: |
             target/release/quantawatch.exe
             target/release/qw.exe
+            target/release/quantawatch-desktop.exe
+            target/wix/quantawatch-desktop.msi
 
   docker:
     name: Docker Build & Push (${{ matrix.component }})

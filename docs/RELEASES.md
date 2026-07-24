@@ -85,3 +85,38 @@ git add docs/release-signing-key.pub && git commit -m "chore: publish release si
 
 If `QW_RELEASE_SEED` is not set, the release still publishes with the Sigstore
 signature; the post-quantum signature is skipped with a warning.
+
+## Windows desktop: MSI installer + Authenticode signing
+
+Tagging a release also builds the native desktop app (`quantawatch-desktop.exe`)
+on the Windows runner and packages it as an MSI installer (`cargo-wix` + WiX v3;
+see `crates/qw-desktop/wix/main.wxs`). Both the exe and the MSI are attached to
+the release and covered by `SHA256SUMS` + the post-quantum signature like every
+other artifact.
+
+Authenticode code-signing is applied when a signing certificate is configured,
+and skipped (with a warning) otherwise — an unsigned exe + MSI still ship.
+
+**Maintainer: one-time Authenticode setup.** Provide a code-signing certificate
+as a PKCS#12 (`.pfx`). **The certificate is yours to obtain and safeguard — it is
+never generated in CI.** Store it as two GitHub Actions secrets:
+
+```bash
+# Base64-encode your .pfx and store it as WINDOWS_CERT_PFX
+base64 -w0 codesign.pfx     # -> repo Settings > Secrets > WINDOWS_CERT_PFX
+
+# Store its password as WINDOWS_CERT_PASSWORD
+#   -> repo Settings > Secrets > WINDOWS_CERT_PASSWORD
+```
+
+The pipeline decodes the `.pfx` into a temp file on the runner, signs with
+`signtool` (SHA-256, RFC-3161 timestamped via `timestamp.digicert.com`), and
+deletes it. The MSI's `UpgradeCode` is fixed, so new versions upgrade in place.
+
+Locally (with WiX installed) you can build the MSI without CI:
+
+```bash
+cargo install cargo-wix
+cargo build --release -p qw-desktop
+cargo wix --package qw-desktop --no-build
+```
