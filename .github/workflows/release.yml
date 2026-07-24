@@ -159,6 +159,14 @@ jobs:
   docker:
     name: Docker Build & Push (${{ matrix.component }})
     runs-on: ubuntu-latest
+    # Needs attestations:write for build-provenance and id-token:write for the
+    # keyless cosign signature; the top-level grant lacks attestations, so the
+    # provenance step failed with "Resource not accessible by integration".
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     strategy:
       matrix:
         include:
@@ -320,7 +328,10 @@ jobs:
         run: python -m build
         working-directory: sdk/python
 
+      # Token auth (PYPI_API_TOKEN secret). The action uses __token__ as the
+      # username automatically when a password/token is provided.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdk/python/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
