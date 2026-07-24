@@ -737,24 +737,21 @@ impl App {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let col = if is_active { theme::TEXT } else { theme::MUTED };
-                                    // Only the label is a drag source, so the close
-                                    // button isn't inside the drag zone.
-                                    let dnd = ui.dnd_drag_source(egui::Id::new(("tabdrag", idx)), idx, |ui| {
-                                        ui.add(
-                                            egui::Label::new(egui::RichText::new(page_title(tab)).color(col))
-                                                .selectable(false)
-                                                .sense(egui::Sense::click()),
-                                        )
-                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                    });
-                                    let lab = dnd.inner;
-                                    if lab.clicked() {
+                                    // One widget with BOTH click and drag sense: click
+                                    // selects, drag reorders. (A dnd_drag_source has only
+                                    // drag sense, which is why clicks stopped working.)
+                                    let lab = ui.label(egui::RichText::new(page_title(tab)).color(col));
+                                    let resp = ui
+                                        .interact(lab.rect, egui::Id::new(("tab", idx)), egui::Sense::click_and_drag())
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand);
+                                    resp.dnd_set_drag_payload(idx);
+                                    if resp.clicked() {
                                         act = Some(TabAction::Select(tab));
                                     }
-                                    if lab.middle_clicked() {
+                                    if resp.middle_clicked() {
                                         act = Some(TabAction::Close(tab));
                                     }
-                                    lab.context_menu(|ui| {
+                                    resp.context_menu(|ui| {
                                         if ui.button("Close").clicked() { act = Some(TabAction::Close(tab)); ui.close_menu(); }
                                         if ui.button("Close others").clicked() { act = Some(TabAction::CloseOthers(tab)); ui.close_menu(); }
                                         if ui.button("Close to the right").clicked() { act = Some(TabAction::CloseRight(idx)); ui.close_menu(); }
@@ -763,10 +760,9 @@ impl App {
                                         if idx > 0 && ui.button("Move left").clicked() { reorder = Some((idx, idx - 1)); ui.close_menu(); }
                                         if idx + 1 < n && ui.button("Move right").clicked() { reorder = Some((idx, idx + 1)); ui.close_menu(); }
                                     });
-                                    if let Some(payload) = dnd.response.dnd_release_payload::<usize>() {
+                                    if let Some(payload) = resp.dnd_release_payload::<usize>() {
                                         reorder = Some((*payload, idx));
                                     }
-                                    // Latin-1 × (Ubuntu-Light covers it), outside the drag zone.
                                     if ui.small_button("×").on_hover_text("close").clicked() {
                                         act = Some(TabAction::Close(tab));
                                     }
