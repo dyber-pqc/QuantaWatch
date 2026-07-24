@@ -276,4 +276,25 @@ mod tests {
         // Same persisted CA cert across "restarts".
         assert_eq!(a.ca_cert_pem, b.ca_cert_pem);
     }
+
+    #[test]
+    fn issues_from_reloaded_ca() {
+        // Mirrors the desktop: a CA is created in one run, then in a *later* run
+        // it is reloaded from disk (the load-existing branch) and used to issue -
+        // a path the earlier tests never exercised. (The desktop's crash on this
+        // path was a main-thread *stack-size* limit, fixed with a linker arg in
+        // qw-desktop/build.rs; it can't be reproduced here because test cases run
+        // on larger worker-thread stacks. This test guards the reload+issue logic.)
+        let dir = tmp_dir();
+        let id = Arc::new(GatewayIdentity::generate().unwrap());
+        {
+            let _first = CertAuthority::load_or_create("Reload CA", &dir, id.clone()).unwrap();
+        }
+        let reloaded = CertAuthority::load_or_create("Reload CA", &dir, id).unwrap();
+        let (row, key_pem) = reloaded
+            .issue("wave3-live-test.internal", &[], 90, true)
+            .unwrap();
+        assert_eq!(row.key_type, "hybrid");
+        assert!(key_pem.contains("PRIVATE KEY"));
+    }
 }

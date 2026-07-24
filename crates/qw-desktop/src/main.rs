@@ -3174,7 +3174,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
-                    let mut go = |ui: &mut egui::Ui, icon: &str, tip: &str, p: Page, page: &mut Page| {
+                    let go = |ui: &mut egui::Ui, icon: &str, tip: &str, p: Page, page: &mut Page| {
                         if ui.selectable_label(*page == p, egui::RichText::new(icon).size(16.0)).on_hover_text(tip).clicked() {
                             *page = p;
                         }
