@@ -14,6 +14,11 @@ jobs:
   build-binaries:
     name: Build Binaries (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Hoist signing secrets to env: the `secrets` context is not allowed in `if:`
+    # conditions, but `env` is. Steps test `env.WINDOWS_CERT_PFX`.
+    env:
+      WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -56,7 +61,7 @@ jobs:
       # signed binary. Runs only when the signing cert secret is present; a
       # signing hiccup is non-fatal (an unsigned exe still ships, with a warning).
       - name: Sign desktop executable (Windows)
-        if: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERT_PFX != '' }}
+        if: ${{ runner.os == 'Windows' && env.WINDOWS_CERT_PFX != '' }}
         continue-on-error: true
         shell: pwsh
         env:
@@ -104,7 +109,7 @@ jobs:
 
       # Authenticode-sign both installers (whichever exist) when the cert is set.
       - name: Sign installers (Windows)
-        if: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERT_PFX != '' }}
+        if: ${{ runner.os == 'Windows' && env.WINDOWS_CERT_PFX != '' }}
         continue-on-error: true
         shell: pwsh
         env:
@@ -124,7 +129,7 @@ jobs:
           Remove-Item $pfx
 
       - name: Warn if Windows signing cert is not configured
-        if: ${{ runner.os == 'Windows' && secrets.WINDOWS_CERT_PFX == '' }}
+        if: ${{ runner.os == 'Windows' && env.WINDOWS_CERT_PFX == '' }}
         run: echo "::warning::WINDOWS_CERT_PFX not set - shipping an UNSIGNED desktop exe + MSI. See docs/RELEASES.md."
 
       - name: Upload artifacts (Unix)
@@ -225,6 +230,9 @@ jobs:
     name: Checksums & signed release
     runs-on: ubuntu-latest
     needs: build-binaries
+    # `secrets` is not allowed in `if:`; hoist to env so steps can test env.
+    env:
+      QW_RELEASE_SEED: ${{ secrets.QW_RELEASE_SEED }}
     permissions:
       contents: write
       id-token: write
@@ -261,15 +269,13 @@ jobs:
       - name: Build the signer (qw)
         run: cargo build --release --locked -p qw-cli
       - name: Post-quantum sign the checksums (ML-DSA-65)
-        if: ${{ secrets.QW_RELEASE_SEED != '' }}
-        env:
-          QW_RELEASE_SEED: ${{ secrets.QW_RELEASE_SEED }}
+        if: ${{ env.QW_RELEASE_SEED != '' }}
         run: |
           ./target/release/qw sign dist/SHA256SUMS \
             --seed-env QW_RELEASE_SEED \
             --output dist/SHA256SUMS.sig
       - name: Warn if the PQC signing key is not configured
-        if: ${{ secrets.QW_RELEASE_SEED == '' }}
+        if: ${{ env.QW_RELEASE_SEED == '' }}
         run: echo "::warning::QW_RELEASE_SEED not set — skipping post-quantum signature. See docs/RELEASES.md."
 
       # Sigstore keyless signature over the checksums (what most consumers check).
