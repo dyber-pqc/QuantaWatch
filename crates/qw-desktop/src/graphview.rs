@@ -189,8 +189,17 @@ impl GraphView {
         for n in &g.nodes {
             idx.insert(n.id.clone(), nodes.len());
             let radius = 6.0 + (n.risk as f32 / 20.0).min(6.0) + (n.blast_radius as f32).sqrt().min(4.0);
-            // Multi-line, readable detail for the node panel.
-            let mut detail = format!("Type:  {}\n{}", n.kind, n.sublabel);
+            // Label the sublabel by node kind so "where it came from" is obvious.
+            let where_label = match n.kind.as_str() {
+                "dependency" => "Found in",
+                "host" | "service" | "asset" | "certificate" | "container" => "Location",
+                "provider" => "Channel",
+                "data" => "Sensitivity",
+                "agent" => "Mode",
+                "identity" => "Role",
+                _ => "Detail",
+            };
+            let mut detail = format!("Type:  {}\n{}:  {}", n.kind, where_label, n.sublabel);
             if n.pqc_status != "n/a" {
                 detail.push_str(&format!("\nPQC status:  {}", n.pqc_status));
             }
