@@ -371,6 +371,11 @@ struct App {
 
 impl App {
     fn new(store: Store, source: String) -> Self {
+        // Collapse findings accumulated across scans (same as the gateway does at
+        // startup): the store keys findings by a stable sha3(location|title) id,
+        // so re-scans shouldn't pile up — but a store written before that was
+        // enforced can carry duplicates. Clean them once here.
+        let _ = store.dedupe_findings();
         let data = Snapshot::load(&store);
         let (term_tx, term_rx) = std::sync::mpsc::channel();
         Self {
