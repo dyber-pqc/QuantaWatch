@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
 
-use qw_graph::{build_graph, AgentInput, GraphInputs};
+use qw_graph::{build_graph, kill_chain, AgentInput, GraphInputs, KillChainStage};
 use qw_scanner::types::FindingRecord;
 use qw_scanner::PqcStatus;
 use qw_store::{AssetRow, FlowRow, TargetRow};
@@ -80,6 +80,8 @@ pub struct PathRow {
     pub hndl: bool,
     pub observed: bool,
     pub recommendation: String,
+    /// The staged HNDL / access-abuse kill chain for this path.
+    pub kill_chain: Vec<KillChainStage>,
 }
 
 pub struct GraphView {
@@ -241,6 +243,7 @@ impl GraphView {
                 hndl: p.hndl,
                 observed: p.observed,
                 recommendation: p.recommendation.clone(),
+                kill_chain: kill_chain(p),
             })
             .collect();
 

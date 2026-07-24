@@ -807,15 +807,15 @@ pub fn summarize(paths: &[AttackPath]) -> serde_json::Value {
 // real-world risk, not algorithm severity alone — a story a list-of-findings
 // scanner can't tell.
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
-struct KillChainStage {
-    stage: u8,
-    key: &'static str,
-    label: &'static str,
-    detail: String,
+pub struct KillChainStage {
+    pub stage: u8,
+    pub key: &'static str,
+    pub label: &'static str,
+    pub detail: String,
     /// active | feasible | pending | blocked | na
-    status: &'static str,
+    pub status: &'static str,
 }
 
 fn data_value_for_label(label: &str) -> f64 {
@@ -850,6 +850,13 @@ fn exploitability_of(p: &AttackPath) -> (f64, f64) {
         100.0 * reach * val * channel_weight(&p.channel_pqc)
     };
     (expl.round(), (reach * 100.0).round())
+}
+
+/// The staged HNDL / access-abuse kill chain for one attack path — the same
+/// stages the web dashboard renders, exposed so native callers can show them
+/// without going through the JSON in [`enrich_paths`].
+pub fn kill_chain(p: &AttackPath) -> Vec<KillChainStage> {
+    kill_chain_of(p)
 }
 
 fn kill_chain_of(p: &AttackPath) -> Vec<KillChainStage> {

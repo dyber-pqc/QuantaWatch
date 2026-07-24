@@ -22,8 +22,9 @@ use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
 use qw_integrations::RemediationTicket;
 use qw_store::{
-    AssetRow, CertificateRow, ConnectionRow, DbUser, EndpointRow, FlowRow, OverlayRouteRow,
-    SessionRow, Store, TargetRow, DEFAULT_TENANT,
+    AlertEvent, AlertSeverity, AssetRow, CertificateRow, ConnectionRow, DbUser, EndpointRow,
+    FlowRow, GovernanceSnapshot, OverlayRouteRow, SessionRow, SloSnapshot, Store, TargetRow,
+    DEFAULT_TENANT,
 };
 
 const TENANT: &str = DEFAULT_TENANT;
@@ -166,6 +167,9 @@ struct Snapshot {
     remediations: Vec<RemediationTicket>,
     users: Vec<DbUser>,
     audit: Vec<AuditEntry>,
+    alerts: Vec<AlertEvent>,
+    slo_hist: Vec<SloSnapshot>,
+    gov_hist: Vec<GovernanceSnapshot>,
     history: Vec<f64>,
     loaded_at: Option<DateTime<Local>>,
 }
@@ -199,6 +203,18 @@ impl Snapshot {
             remediations: store.list_remediations(TENANT),
             users: store.list_users(),
             audit: store.list_entries(500),
+            alerts: store.recent_alerts(TENANT, 200),
+            // Histories come back newest-first; reverse to chronological for trends.
+            slo_hist: {
+                let mut h = store.slo_history(TENANT, 90);
+                h.reverse();
+                h
+            },
+            gov_hist: {
+                let mut h = store.governance_history(TENANT, 90);
+                h.reverse();
+                h
+            },
             history: hist,
             loaded_at: Some(Utc::now().with_timezone(&Local)),
         }
@@ -273,9 +289,11 @@ enum Page {
     Assets,
     Findings,
     Certificates,
+    Cbom,
     Compliance,
     Frameworks,
     Soc2,
+    Governance,
     Scans,
     Remediations,
     Overlay,
@@ -283,6 +301,7 @@ enum Page {
     Agents,
     Sessions,
     Threats,
+    Alerts,
     Audit,
     Access,
     Settings,
@@ -308,6 +327,7 @@ enum Selection {
     Connection(String),
     Remediation(String),
     Cert(String),
+    Alert(String),
 }
 
 enum TabAction {
@@ -609,9 +629,11 @@ impl eframe::App for App {
             Page::Assets => self.assets(ui),
             Page::Findings => self.findings(ui),
             Page::Certificates => self.certificates(ui),
+            Page::Cbom => self.cbom(ui),
             Page::Compliance => self.compliance(ui),
             Page::Frameworks => self.frameworks(ui),
             Page::Soc2 => self.soc2(ui),
+            Page::Governance => self.governance(ui),
             Page::Scans => self.scans(ui),
             Page::Remediations => self.remediations(ui),
             Page::Overlay => self.overlay(ui),
@@ -619,6 +641,7 @@ impl eframe::App for App {
             Page::Agents => self.agents(ui),
             Page::Sessions => self.sessions(ui),
             Page::Threats => self.threats(ui),
+            Page::Alerts => self.alerts(ui),
             Page::Audit => self.audit(ui),
             Page::Access => self.access(ui),
             Page::Settings => self.settings(ui),
@@ -687,11 +710,13 @@ impl App {
                     nav_item(ui, &mut self.page, Page::Assets, "📦  Assets", Some(d.assets.len()));
                     nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(d.findings.len()));
                     nav_item(ui, &mut self.page, Page::Certificates, "🔒  Certificates", Some(d.certs.len()));
+                    nav_item(ui, &mut self.page, Page::Cbom, "📇  Crypto (CBOM)", None);
 
                     nav_group(ui, "GOVERNANCE");
                     nav_item(ui, &mut self.page, Page::Compliance, "📋  Compliance", None);
                     nav_item(ui, &mut self.page, Page::Frameworks, "📚  Frameworks", None);
                     nav_item(ui, &mut self.page, Page::Soc2, "✅  SOC 2", None);
+                    nav_item(ui, &mut self.page, Page::Governance, "📈  Governance/SLO", None);
 
                     nav_group(ui, "OPERATE");
                     nav_item(ui, &mut self.page, Page::Scans, "🔍  Scans", Some(d.scans.len()));
@@ -703,6 +728,7 @@ impl App {
                     nav_item(ui, &mut self.page, Page::Agents, "🤖  Agents", Some(d.flows.len()));
                     nav_item(ui, &mut self.page, Page::Sessions, "📝  Sessions", Some(d.sessions.len()));
                     nav_item(ui, &mut self.page, Page::Threats, "🚨  Threats", None);
+                    nav_item(ui, &mut self.page, Page::Alerts, "🔔  Alerts", Some(d.alerts.len()));
                     nav_item(ui, &mut self.page, Page::Audit, "📜  Audit log", Some(d.audit.len()));
 
                     nav_group(ui, "ADMIN");
@@ -1259,6 +1285,24 @@ impl App {
                                     }
                                 });
                                 ui.label(egui::RichText::new(&p.title).small());
+                                if !p.kill_chain.is_empty() {
+                                    egui::CollapsingHeader::new(
+                                        egui::RichText::new("kill chain").color(theme::MUTED).small(),
+                                    )
+                                    .id_salt(("kc", &p.title))
+                                    .show(ui, |ui| {
+                                        for st in &p.kill_chain {
+                                            ui.horizontal(|ui| {
+                                                ui.colored_label(
+                                                    kc_status_color(st.status),
+                                                    egui::RichText::new(format!("{}. {}", st.stage, st.label)).small().strong(),
+                                                );
+                                                ui.label(egui::RichText::new(st.status).color(kc_status_color(st.status)).small());
+                                            });
+                                            ui.label(egui::RichText::new(&st.detail).color(theme::MUTED).small());
+                                        }
+                                    });
+                                }
                             })
                             .response
                             .on_hover_cursor(egui::CursorIcon::Help)
@@ -1590,6 +1634,7 @@ impl App {
             Selection::Connection(_) => "Connection",
             Selection::Remediation(_) => "Remediation",
             Selection::Cert(_) => "Certificate",
+            Selection::Alert(_) => "Alert",
         };
         egui::SidePanel::right("detail")
             .default_width(380.0)
@@ -1616,6 +1661,7 @@ impl App {
                     Selection::Connection(id) => self.connection_body(ui, id),
                     Selection::Remediation(id) => self.remediation_body(ui, id),
                     Selection::Cert(id) => self.cert_body(ui, id),
+                    Selection::Alert(id) => self.alert_body(ui, id),
                 }
             });
     }
@@ -1649,7 +1695,7 @@ impl App {
                 ui.end_row();
                 ui.label(egui::RichText::new("Full path").color(theme::MUTED));
                 let full = resolve_path(&s.target_address, &f.location);
-                ui.label(egui::RichText::new(&full).monospace().small()).on_hover_text(&full);
+                copy_value(ui, &full);
                 ui.end_row();
                 ui.label(egui::RichText::new("Scanner").color(theme::MUTED));
                 ui.label(egui::RichText::new(&s.scanner_id).small());
@@ -2375,6 +2421,181 @@ impl App {
         });
     }
 
+    fn alerts(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Alerts");
+        ui.label(egui::RichText::new("Notifications the gateway raised - posture breaches, detected threats, SLO-gate failures. Read from the local store; click one for detail.").color(theme::MUTED).small());
+        ui.add_space(6.0);
+        let d = &self.data;
+        let mut open = None;
+        data_table(ui, "alerts", &["Time", "Severity", "Kind", "Title", "Delivered"],
+            d.alerts.len(), "No alerts recorded.", |ui, i| {
+            let a = &d.alerts[i];
+            ui.label(egui::RichText::new(fmt_dt(a.timestamp)).color(theme::MUTED));
+            let (col, txt) = alert_sev(a.severity);
+            ui.colored_label(col, txt);
+            ui.label(egui::RichText::new(&a.kind).small());
+            if link_cell(ui, &a.title) {
+                open = Some(Selection::Alert(a.id.clone()));
+            }
+            ui.label(egui::RichText::new(a.delivered.to_string()).color(theme::MUTED).small());
+        });
+        if let Some(s) = open {
+            self.selected = Some(s);
+        }
+    }
+
+    fn alert_body(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(a) = self.data.alerts.iter().find(|a| a.id == id).cloned() else {
+            self.selected = None;
+            return;
+        };
+        let (col, txt) = alert_sev(a.severity);
+        ui.horizontal(|ui| {
+            ui.colored_label(col, txt);
+            ui.label(egui::RichText::new(&a.kind).color(theme::MUTED));
+        });
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(&a.title).strong().size(15.0));
+        ui.add_space(8.0);
+        egui::Grid::new("adetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+            kv(ui, "Raised", &fmt_dt(a.timestamp));
+            kv(ui, "Delivered", &a.delivered.to_string());
+            ui.label(egui::RichText::new("Alert id").color(theme::MUTED));
+            ui.label(egui::RichText::new(&a.id).monospace().small());
+            ui.end_row();
+        });
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Message").strong());
+        ui.label(&a.message);
+        if !a.metadata.is_empty() {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("Metadata").strong());
+            let mut keys: Vec<&String> = a.metadata.keys().collect();
+            keys.sort();
+            egui::Grid::new("ameta").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+                for k in keys {
+                    kv(ui, k, &a.metadata[k]);
+                }
+            });
+        }
+    }
+
+    fn governance(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Governance / SLO");
+        ui.label(egui::RichText::new("Crypto-agility governance verdicts and PQC-migration SLO gates, tracked over time. Read from the local store.").color(theme::MUTED).small());
+        ui.add_space(8.0);
+        let d = &self.data;
+        if let Some(g) = d.gov_hist.last() {
+            ui.horizontal(|ui| {
+                stat_card(ui, "agility score", g.agility_score.round() as usize, score_color(g.agility_score));
+                stat_card(ui, "compliant", g.compliant as usize, theme::GOOD);
+                stat_card(ui, "deprecated", g.deprecated as usize, theme::MED);
+                stat_card(ui, "forbidden", g.forbidden as usize, theme::CRIT);
+            });
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(format!("Latest verdict: {}   ({})", g.verdict, fmt_dt(g.timestamp))).small());
+        } else {
+            ui.label(egui::RichText::new("No governance snapshots recorded yet.").color(theme::MUTED));
+        }
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new("PQC migration SLO").strong());
+        if let Some(s) = d.slo_hist.last() {
+            let pct = if s.total > 0 { (s.passing as f64 / s.total as f64) * 100.0 } else { 0.0 };
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("{pct:.0}% passing"))
+                    .size(20.0).strong()
+                    .color(if s.gate_breach { theme::CRIT } else { theme::GOOD }));
+                ui.label(egui::RichText::new(format!("{}/{} objectives · {} failing", s.passing, s.total, s.failing)).color(theme::MUTED).small());
+                if s.gate_breach {
+                    ui.colored_label(theme::CRIT, "GATE BREACHED");
+                }
+            });
+        } else {
+            ui.label(egui::RichText::new("No SLO snapshots recorded yet.").color(theme::MUTED));
+        }
+        ui.add_space(12.0);
+        let gh: Vec<&GovernanceSnapshot> = d.gov_hist.iter().rev().collect();
+        let sh: Vec<&SloSnapshot> = d.slo_hist.iter().rev().collect();
+        ui.columns(2, |cols| {
+            cols[0].label(egui::RichText::new("Governance history").strong());
+            cols[0].add_space(4.0);
+            data_table(&mut cols[0], "govhist", &["Time", "Score", "Verdict"], gh.len(), "No history yet.", |ui, i| {
+                let g = gh[i];
+                ui.label(egui::RichText::new(fmt_dt(g.timestamp)).color(theme::MUTED).small());
+                ui.label(format!("{:.0}", g.agility_score));
+                ui.label(egui::RichText::new(&g.verdict).small());
+            });
+            cols[1].label(egui::RichText::new("SLO history").strong());
+            cols[1].add_space(4.0);
+            data_table(&mut cols[1], "slohist", &["Time", "Pass/Total", "Gate"], sh.len(), "No history yet.", |ui, i| {
+                let s = sh[i];
+                ui.label(egui::RichText::new(fmt_dt(s.timestamp)).color(theme::MUTED).small());
+                ui.label(format!("{}/{}", s.passing, s.total));
+                ui.colored_label(if s.gate_breach { theme::CRIT } else { theme::GOOD },
+                    if s.gate_breach { "breach" } else { "ok" });
+            });
+        });
+    }
+
+    fn cbom(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.heading("Cryptographic Bill of Materials");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Export JSON").clicked() {
+                    self.export_cbom();
+                }
+            });
+        });
+        ui.label(egui::RichText::new("Every distinct cryptographic algorithm discovered across the estate, with its quantum-readiness. Built in-process from local scan findings - no network.").color(theme::MUTED).small());
+        if !self.export_status.is_empty() {
+            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+        }
+        ui.add_space(6.0);
+        let entries = cbom_entries(&self.data.findings);
+        if entries.is_empty() {
+            empty_state(ui, "No cryptographic assets found. Run a scan first (Scans → Scan directory, or `qw scan`).");
+            return;
+        }
+        let vuln = entries.iter().filter(|e| e.quantum_vulnerable).count();
+        ui.horizontal(|ui| {
+            stat_card(ui, "algorithms", entries.len(), theme::ACCENT);
+            stat_card(ui, "quantum-vulnerable", vuln, if vuln > 0 { theme::CRIT } else { theme::GOOD });
+            stat_card(ui, "quantum-safe", entries.len() - vuln, theme::GOOD);
+        });
+        ui.add_space(8.0);
+        data_table(ui, "cbom", &["Algorithm", "Used as", "Uses", "PQC", "Quantum-vulnerable"],
+            entries.len(), "-", |ui, i| {
+            let e = &entries[i];
+            ui.label(egui::RichText::new(&e.algorithm).monospace());
+            ui.label(egui::RichText::new(&e.kinds).color(theme::MUTED).small());
+            ui.label(e.count.to_string());
+            ui.colored_label(pqc_color(e.worst_pqc), pqc_label(e.worst_pqc));
+            ui.colored_label(if e.quantum_vulnerable { theme::CRIT } else { theme::GOOD },
+                if e.quantum_vulnerable { "yes" } else { "no" });
+        });
+    }
+
+    fn export_cbom(&mut self) {
+        let dir = std::path::Path::new(&self.source)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let path = dir.join("quantawatch-cbom.json");
+        let entries = cbom_entries(&self.data.findings);
+        self.export_status = match serde_json::to_string_pretty(&entries) {
+            Ok(json) => match std::fs::write(&path, json) {
+                Ok(_) => format!("Exported {} crypto assets to {}", entries.len(), path.display()),
+                Err(e) => format!("Export failed: {e}"),
+            },
+            Err(e) => format!("Serialize failed: {e}"),
+        };
+    }
+
     fn audit(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Audit log");
@@ -2529,9 +2750,11 @@ fn page_title(p: Page) -> &'static str {
         Page::Assets => "Assets",
         Page::Findings => "Findings",
         Page::Certificates => "Certificates",
+        Page::Cbom => "Crypto (CBOM)",
         Page::Compliance => "Compliance",
         Page::Frameworks => "Frameworks",
         Page::Soc2 => "SOC 2",
+        Page::Governance => "Governance/SLO",
         Page::Scans => "Scans",
         Page::Remediations => "Remediations",
         Page::Overlay => "PQC Overlay",
@@ -2539,6 +2762,7 @@ fn page_title(p: Page) -> &'static str {
         Page::Agents => "Agents",
         Page::Sessions => "Sessions",
         Page::Threats => "Threats",
+        Page::Alerts => "Alerts",
         Page::Audit => "Audit Log",
         Page::Access => "Access (RBAC)",
         Page::Settings => "Settings",
@@ -2550,9 +2774,10 @@ fn page_by_name(name: &str) -> Option<Page> {
     let n = name.trim().to_lowercase().replace([' ', '-', '_'], "");
     let pages = [
         Page::Overview, Page::AttackPaths, Page::Estate, Page::Endpoints, Page::Assets,
-        Page::Findings, Page::Certificates, Page::Compliance, Page::Frameworks, Page::Soc2,
-        Page::Scans, Page::Remediations, Page::Overlay, Page::Connections, Page::Agents,
-        Page::Sessions, Page::Threats, Page::Audit, Page::Access, Page::Settings, Page::About,
+        Page::Findings, Page::Certificates, Page::Cbom, Page::Compliance, Page::Frameworks,
+        Page::Soc2, Page::Governance, Page::Scans, Page::Remediations, Page::Overlay,
+        Page::Connections, Page::Agents, Page::Sessions, Page::Threats, Page::Alerts,
+        Page::Audit, Page::Access, Page::Settings, Page::About,
     ];
     pages
         .into_iter()
@@ -2671,6 +2896,108 @@ fn score_color(s: f64) -> egui::Color32 {
     } else {
         theme::CRIT
     }
+}
+
+/// Kill-chain stage status → color. `blocked`/`na` are good for the defender
+/// (the attacker can't advance); `active`/`feasible` are bad.
+fn kc_status_color(status: &str) -> egui::Color32 {
+    match status {
+        "active" => theme::CRIT,
+        "feasible" => theme::MED,
+        "pending" => theme::LOW,
+        "blocked" => theme::GOOD,
+        _ => theme::MUTED, // na
+    }
+}
+
+/// Alert severity → (color, label) for the Alerts page/panel.
+fn alert_sev(s: AlertSeverity) -> (egui::Color32, &'static str) {
+    match s {
+        AlertSeverity::Critical => (theme::CRIT, "CRITICAL"),
+        AlertSeverity::Warning => (theme::MED, "WARNING"),
+        AlertSeverity::Info => (theme::MUTED, "INFO"),
+    }
+}
+
+/// "Worst-first" rank for a PQC status - higher = more quantum-exposed. Used to
+/// pick the worst posture across all uses of one algorithm in the CBOM.
+fn pqc_rank(p: PqcStatus) -> u8 {
+    match p {
+        PqcStatus::PqcReady => 0,
+        PqcStatus::Hybrid => 1,
+        PqcStatus::Unknown => 2,
+        PqcStatus::ClassicalSecure => 3,
+        PqcStatus::ClassicalWeak => 4,
+    }
+}
+
+/// One row of the Cryptographic Bill of Materials: a distinct algorithm and the
+/// aggregate posture of every place it was found.
+#[derive(serde::Serialize)]
+struct CbomEntry {
+    algorithm: String,
+    /// Comma-joined asset kinds this algorithm is used as (e.g. "TlsConnection, Certificate").
+    kinds: String,
+    /// How many findings reference this algorithm.
+    count: usize,
+    /// Worst PQC posture observed across those uses.
+    #[serde(skip)]
+    worst_pqc: PqcStatus,
+    pqc_status: String,
+    quantum_vulnerable: bool,
+    example_location: String,
+}
+
+/// Collapse the finding list into a deduplicated crypto inventory keyed by
+/// algorithm. Findings with no named algorithm are skipped.
+fn cbom_entries(findings: &[FindingRecord]) -> Vec<CbomEntry> {
+    use std::collections::{BTreeMap, BTreeSet};
+    struct Acc {
+        worst: PqcStatus,
+        kinds: BTreeSet<String>,
+        count: usize,
+        example: String,
+    }
+    let mut map: BTreeMap<String, Acc> = BTreeMap::new();
+    for f in findings {
+        let Some(alg) = f.algorithm.as_ref().map(|a| a.trim()).filter(|a| !a.is_empty()) else {
+            continue;
+        };
+        let e = map.entry(alg.to_string()).or_insert_with(|| Acc {
+            worst: PqcStatus::PqcReady,
+            kinds: BTreeSet::new(),
+            count: 0,
+            example: f.location.clone(),
+        });
+        e.count += 1;
+        e.kinds.insert(format!("{:?}", f.asset_type));
+        if pqc_rank(f.pqc_status) > pqc_rank(e.worst) {
+            e.worst = f.pqc_status;
+            e.example = f.location.clone();
+        }
+    }
+    let mut out: Vec<CbomEntry> = map
+        .into_iter()
+        .map(|(algorithm, a)| CbomEntry {
+            algorithm,
+            kinds: a.kinds.into_iter().collect::<Vec<_>>().join(", "),
+            count: a.count,
+            worst_pqc: a.worst,
+            pqc_status: pqc_label(a.worst).to_string(),
+            quantum_vulnerable: matches!(
+                a.worst,
+                PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak
+            ),
+            example_location: a.example,
+        })
+        .collect();
+    // Most-exposed first, then most-used.
+    out.sort_by(|x, y| {
+        pqc_rank(y.worst_pqc)
+            .cmp(&pqc_rank(x.worst_pqc))
+            .then(y.count.cmp(&x.count))
+    });
+    out
 }
 fn status_str_color(s: &str) -> egui::Color32 {
     match s.to_lowercase().replace(['_', '-'], "").as_str() {
@@ -2923,6 +3250,23 @@ fn kv(ui: &mut egui::Ui, key: &str, value: &str) {
     ui.label(egui::RichText::new(key).color(theme::MUTED));
     ui.label(value);
     ui.end_row();
+}
+
+/// A monospace value that copies itself to the clipboard when clicked — for
+/// paths, hashes and fingerprints the user will want to paste elsewhere.
+fn copy_value(ui: &mut egui::Ui, value: &str) {
+    let resp = ui
+        .add(
+            egui::Label::new(
+                egui::RichText::new(value).monospace().small().color(theme::ACCENT),
+            )
+            .sense(egui::Sense::click()),
+        )
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("click to copy");
+    if resp.clicked() {
+        ui.output_mut(|o| o.copied_text = value.to_string());
+    }
 }
 
 fn has_tag(tags: &[String], tag: &str) -> bool {

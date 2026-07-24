@@ -22,6 +22,7 @@ qw-integrations = { path = "../qw-integrations" }
 qw-audit = { path = "../qw-audit" }
 chrono = { workspace = true }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 # Drives the async scanners on a background thread for in-process scanning.
 tokio = { workspace = true }

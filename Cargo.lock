@@ -4862,6 +4862,7 @@ dependencies = [
  "qw-integrations",
  "qw-scanner",
  "qw-store",
+ "serde",
  "serde_json",
  "tokio",
 ]
