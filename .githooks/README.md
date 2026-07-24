@@ -5,6 +5,12 @@ fresh clone until you opt in once (git ignores `core.hooksPath` from a clone by
 design — a repo shouldn't be able to run code on your machine automatically):
 
 ```sh
+make setup        # or, without make:  bash scripts/setup.sh
+```
+
+which sets:
+
+```sh
 git config core.hooksPath .githooks
 ```
 
