@@ -4858,8 +4858,10 @@ dependencies = [
  "egui",
  "qw-audit",
  "qw-cbom",
+ "qw-crypto",
  "qw-graph",
  "qw-integrations",
+ "qw-pki",
  "qw-scanner",
  "qw-store",
  "serde",
@@ -4890,6 +4892,7 @@ dependencies = [
  "qw-graph",
  "qw-integrations",
  "qw-monitor",
+ "qw-pki",
  "qw-policy",
  "qw-scanner",
  "qw-store",
@@ -4952,6 +4955,21 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "qw-pki"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "qw-crypto",
+ "qw-store",
+ "rcgen",
+ "serde_json",
+ "time",
+ "uuid",
 ]
 
 [[package]]

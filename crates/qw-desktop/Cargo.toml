@@ -19,6 +19,8 @@ qw-scanner = { path = "../qw-scanner" }
 qw-cbom = { path = "../qw-cbom" }
 qw-graph = { path = "../qw-graph" }
 qw-integrations = { path = "../qw-integrations" }
+qw-crypto = { path = "../qw-crypto" }
+qw-pki = { path = "../qw-pki" }
 qw-audit = { path = "../qw-audit" }
 chrono = { workspace = true }
 anyhow = { workspace = true }

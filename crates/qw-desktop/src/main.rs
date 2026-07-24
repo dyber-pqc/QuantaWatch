@@ -13,14 +13,19 @@ use eframe::egui;
 mod graphview;
 
 use std::sync::mpsc::Receiver;
+use std::sync::Arc;
 
 use graphview::GraphView;
+use qw_pki::CertAuthority;
 use qw_audit::{AuditBackend, AuditEntry, AuditEvent};
 use qw_cbom::{frameworks, soc2};
 use qw_cbom::{ComplianceEngine, PostureEngine, PostureSnapshot};
-use qw_scanner::types::{FindingRecord, FindingSeverity, FindingStatus, PqcStatus, ScanRecord};
+use qw_scanner::types::{
+    AssetLocation, CryptoAsset, Finding, FindingRecord, FindingSeverity, FindingStatus, PqcStatus,
+    ScanRecord,
+};
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
-use qw_integrations::RemediationTicket;
+use qw_integrations::{IntegrationConfig, RemediationOpts, RemediationTicket};
 use qw_store::{
     AlertEvent, AlertSeverity, AssetRow, CertificateRow, ConnectionRow, DbUser, EndpointRow,
     FlowRow, GovernanceSnapshot, OverlayRouteRow, SessionRow, SloSnapshot, Store, TargetRow,
@@ -278,6 +283,195 @@ fn run_scan_blocking(store: &Store, path: &str) -> ScanOutcome {
     }
 }
 
+// ------------------------------------------------------------------- network ops
+
+/// An outbound integration operation. These are the *only* things the desktop
+/// does over the network, and only when Online mode is enabled.
+enum NetOp {
+    /// Verify a stored connection's token against its provider API.
+    TestConnection { conn_id: String },
+    /// Discover + scan a connection's repos for quantum-vulnerable crypto.
+    ScanConnection { conn_id: String },
+    /// File a remediation ticket/PR for a finding via a connected tracker.
+    OpenTicket { finding_id: String, conn_id: String },
+}
+
+struct NetOutcome {
+    message: String,
+}
+
+/// Convert a stored connection (with its decrypted token) into the config the
+/// integration registry expects. Mirrors the gateway's `to_config`.
+fn conn_to_config(c: &ConnectionRow) -> IntegrationConfig {
+    let mut settings = std::collections::HashMap::new();
+    if let Some(org) = &c.org {
+        settings.insert("org".to_string(), org.clone());
+    }
+    if let Some(repo) = &c.repo {
+        settings.insert("repo".to_string(), repo.clone());
+    }
+    IntegrationConfig {
+        id: c.id.clone(),
+        integration_type: c.integration_type.clone(),
+        base_url: c.base_url.clone(),
+        api_token_env: String::new(),
+        token: Some(c.token.clone()),
+        default_project: c.project.clone(),
+        webhook_secret_env: None,
+        settings,
+    }
+}
+
+/// Reconstruct a scanner `Finding` from a stored record so it can be handed to
+/// an integration's `create_remediation`. Mirrors the gateway's
+/// `finding_from_record`.
+fn finding_from_record(r: &FindingRecord) -> Finding {
+    Finding {
+        id: r.id.clone(),
+        category: r.category.clone(),
+        severity: r.severity.clone(),
+        title: r.title.clone(),
+        description: r.description.clone(),
+        asset: CryptoAsset {
+            id: format!("asset-{}", r.id),
+            asset_type: r.asset_type.clone(),
+            name: r.title.clone(),
+            algorithm: r.algorithm.clone(),
+            key_length: None,
+            protocol_version: None,
+            location: AssetLocation {
+                source_type: "finding".to_string(),
+                path: r.location.clone(),
+                line: None,
+            },
+            discovered_by: "store".to_string(),
+            discovered_at: r.created_at,
+        },
+        remediation: r.remediation.clone(),
+        pqc_status: r.pqc_status,
+        metadata: std::collections::HashMap::new(),
+    }
+}
+
+/// Run one outbound integration op on a worker thread (owns its own tokio
+/// runtime; the desktop's main thread never blocks). All store writes happen
+/// here; the UI just refreshes on completion.
+fn run_net_op_blocking(store: &Store, op: NetOp) -> NetOutcome {
+    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(e) => return NetOutcome { message: format!("runtime error: {e}") },
+    };
+    match op {
+        NetOp::TestConnection { conn_id } => {
+            let Some(mut row) = store.get_connection(TENANT, &conn_id) else {
+                return NetOutcome { message: "connection not found".to_string() };
+            };
+            let Some(integ) = qw_integrations::build_one(&conn_to_config(&row)) else {
+                return NetOutcome { message: "could not construct integration".to_string() };
+            };
+            let msg = match rt.block_on(integ.test_connection()) {
+                Ok(status) => {
+                    row.last_status = Some(if status.connected { "connected" } else { "failed" }.to_string());
+                    row.last_user = status.user.clone();
+                    if status.connected {
+                        format!(
+                            "{} connected{}",
+                            row.display_name,
+                            status.user.map(|u| format!(" as {u}")).unwrap_or_default()
+                        )
+                    } else {
+                        format!("{} failed: {}", row.display_name, status.error.unwrap_or_default())
+                    }
+                }
+                Err(e) => {
+                    row.last_status = Some("failed".to_string());
+                    format!("{} test failed: {e}", row.display_name)
+                }
+            };
+            row.last_tested = Some(Utc::now());
+            store.upsert_connection(TENANT, &row);
+            NetOutcome { message: msg }
+        }
+        NetOp::ScanConnection { conn_id } => {
+            let Some(mut row) = store.get_connection(TENANT, &conn_id) else {
+                return NetOutcome { message: "connection not found".to_string() };
+            };
+            let Some(integ) = qw_integrations::build_one(&conn_to_config(&row)) else {
+                return NetOutcome { message: "could not construct integration".to_string() };
+            };
+            let mut cfg = ScannerConfig::default();
+            cfg.code.enabled = true;
+            cfg.dependencies.enabled = true;
+            let registry = build_scanner_registry(&cfg);
+            let res: Result<(usize, usize), String> = rt.block_on(async {
+                let targets = integ.discover_targets().await.map_err(|e| e.to_string())?;
+                let mut files = 0usize;
+                let mut all = Vec::new();
+                for target in &targets {
+                    let content = match integ.fetch_content(target).await {
+                        Ok(Some(c)) => c,
+                        Ok(None) => continue,
+                        Err(_) => continue,
+                    };
+                    let mut t = target.clone();
+                    t.metadata.insert("content".to_string(), content);
+                    let results = registry.scan_all(&t).await;
+                    files += 1;
+                    for r in &results {
+                        store.record_scan(TENANT, r, &t);
+                    }
+                    all.extend(results);
+                }
+                let findings: usize = all.iter().map(|r| r.findings.len()).sum();
+                let summary = PostureEngine::summarize(&all, &[]);
+                store.record_posture(TENANT, &PostureSnapshot::from_summary(&summary, "desktop-connection-scan"));
+                Ok((files, findings))
+            });
+            match res {
+                Ok((files, findings)) => {
+                    row.last_scanned = Some(Utc::now());
+                    row.findings_count = Some(findings as u32);
+                    store.upsert_connection(TENANT, &row);
+                    NetOutcome {
+                        message: format!("Scanned {}: {files} files, {findings} findings", row.display_name),
+                    }
+                }
+                Err(e) => NetOutcome { message: format!("Scan of {} failed: {e}", row.display_name) },
+            }
+        }
+        NetOp::OpenTicket { finding_id, conn_id } => {
+            let Some(record) = store.get_finding(TENANT, &finding_id) else {
+                return NetOutcome { message: "finding not found".to_string() };
+            };
+            let Some(row) = store.get_connection(TENANT, &conn_id) else {
+                return NetOutcome { message: "connection not found".to_string() };
+            };
+            let Some(integ) = qw_integrations::build_one(&conn_to_config(&row)) else {
+                return NetOutcome { message: "could not construct integration".to_string() };
+            };
+            // Attach the concrete PQC migration plan so the ticket carries the
+            // specific fix, not a generic recommendation.
+            let mut finding = finding_from_record(&record);
+            if let Some(plan) = qw_cbom::plan_migration(&record) {
+                finding.remediation = Some(qw_cbom::plan_to_markdown(&plan));
+            }
+            let opts = RemediationOpts {
+                project: row.project.clone(),
+                ..RemediationOpts::default()
+            };
+            match rt.block_on(integ.create_remediation(&finding, &opts)) {
+                Ok(ticket) => {
+                    store.record_remediation(TENANT, &ticket);
+                    NetOutcome {
+                        message: format!("Opened {} in {}", ticket.external_id, row.display_name),
+                    }
+                }
+                Err(e) => NetOutcome { message: format!("Ticket failed: {e}") },
+            }
+        }
+    }
+}
+
 // ----------------------------------------------------------------------------- app
 
 #[derive(PartialEq, Clone, Copy)]
@@ -387,6 +581,33 @@ struct App {
     scanning: bool,
     scan_rx: Option<Receiver<ScanOutcome>>,
     scan_status: String,
+    // Local PQC certificate authority (lazily created under <data>/pki on first
+    // issue). Fully offline - issuing/renewing/revoking is local crypto.
+    ca: Option<Arc<CertAuthority>>,
+    cert_form: CertForm,
+    cert_status: String,
+    // The most recently issued leaf private key, shown exactly once (never stored).
+    issued_key: Option<(String, String)>,
+    // Outbound integration ops (Online mode only): connection tests, repo scans,
+    // ticket creation. One at a time; result arrives on net_rx.
+    net_rx: Option<Receiver<NetOutcome>>,
+    net_busy: bool,
+    net_status: String,
+}
+
+#[derive(Default)]
+struct CertForm {
+    subject: String,
+    sans: String,
+    validity_days: String,
+    hybrid: bool,
+}
+
+/// A deferred action from a per-row certificate button, applied after the
+/// (immutably-borrowed) table has finished rendering.
+enum CertAction {
+    Renew(String),
+    Revoke(String),
 }
 
 impl App {
@@ -425,6 +646,13 @@ impl App {
             scanning: false,
             scan_rx: None,
             scan_status: String::new(),
+            ca: None,
+            cert_form: CertForm { validity_days: "90".to_string(), hybrid: true, ..Default::default() },
+            cert_status: String::new(),
+            issued_key: None,
+            net_rx: None,
+            net_busy: false,
+            net_status: String::new(),
         }
     }
 
@@ -453,6 +681,41 @@ impl App {
             let _ = tx.send(outcome);
             ctx.request_repaint(); // wake the UI when the scan finishes
         });
+    }
+
+    /// Kick off an outbound integration op on a worker thread. Refuses unless
+    /// Online mode is on (the air gap is explicit), and runs one at a time.
+    fn spawn_net_op(&mut self, ctx: &egui::Context, op: NetOp, label: &str) {
+        if !self.net_probes_enabled {
+            self.net_status = "Online mode is off - enable it in Settings to make network calls.".to_string();
+            return;
+        }
+        if self.net_busy {
+            self.net_status = "A network operation is already running.".to_string();
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.net_rx = Some(rx);
+        self.net_busy = true;
+        self.net_status = format!("{label} ...");
+        let store = self.store.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let outcome = run_net_op_blocking(&store, op);
+            let _ = tx.send(outcome);
+            ctx.request_repaint();
+        });
+    }
+
+    fn poll_net(&mut self) {
+        if let Some(rx) = &self.net_rx {
+            if let Ok(outcome) = rx.try_recv() {
+                self.net_status = outcome.message;
+                self.net_busy = false;
+                self.net_rx = None;
+                self.refresh();
+            }
+        }
     }
 
     /// Write the current findings to a JSON file next to the store (local file,
@@ -603,6 +866,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_scan();
         self.poll_probes();
+        self.poll_net();
         // Drain async terminal output (tshark captures, etc.).
         while let Ok(line) = self.term_rx.try_recv() {
             self.terminal_lines.push(line);
@@ -647,8 +911,9 @@ impl eframe::App for App {
             Page::Settings => self.settings(ui),
             Page::About => self.about(ui),
         });
-        // While a scan runs, keep the frame loop alive so poll_scan sees the result.
-        if self.scanning {
+        // While a scan or a network op runs, keep the frame loop alive so the
+        // poll_* methods see the result.
+        if self.scanning || self.net_busy {
             ctx.request_repaint();
         }
     }
@@ -1528,23 +1793,172 @@ impl App {
         }
     }
 
+    /// Lazily create (or load) the desktop's own local CA under `<data>/pki`.
+    /// This is where the operational ML-DSA identity + Ed25519 root live; it is
+    /// created only when the user first issues a cert, never at startup.
+    fn ensure_ca(&mut self) -> Result<Arc<CertAuthority>, String> {
+        if let Some(ca) = &self.ca {
+            return Ok(ca.clone());
+        }
+        let pki_dir = std::path::Path::new(&self.source)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("pki");
+        let id = qw_crypto::GatewayIdentity::load_or_generate(&pki_dir)
+            .map_err(|e| format!("CA identity: {e}"))?;
+        let ca = CertAuthority::load_or_create("QuantaWatch Desktop CA", &pki_dir, Arc::new(id))
+            .map_err(|e| format!("CA init: {e}"))?;
+        let ca = Arc::new(ca);
+        self.ca = Some(ca.clone());
+        Ok(ca)
+    }
+
+    fn issue_cert(&mut self) {
+        let subject = self.cert_form.subject.trim().to_string();
+        if subject.is_empty() {
+            self.cert_status = "A certificate needs a subject (CN).".to_string();
+            return;
+        }
+        let sans: Vec<String> = self
+            .cert_form
+            .sans
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        let days = self.cert_form.validity_days.trim().parse::<u32>().unwrap_or(90);
+        let hybrid = self.cert_form.hybrid;
+        let ca = match self.ensure_ca() {
+            Ok(c) => c,
+            Err(e) => {
+                self.cert_status = e;
+                return;
+            }
+        };
+        match ca.issue(&subject, &sans, days, hybrid) {
+            Ok((row, key_pem)) => {
+                self.store.record_certificate(TENANT, &row);
+                self.cert_status = format!(
+                    "Issued {} certificate for {} · serial {} · CA {}",
+                    row.key_type, subject, row.serial, ca.fingerprint()
+                );
+                self.issued_key = Some((subject, key_pem));
+                self.cert_form = CertForm { validity_days: days.to_string(), hybrid, ..Default::default() };
+                self.refresh();
+            }
+            Err(e) => self.cert_status = format!("Issue failed: {e}"),
+        }
+    }
+
+    fn renew_cert(&mut self, id: &str) {
+        let Some(prev) = self.store.get_certificate(TENANT, id) else {
+            self.cert_status = "certificate not found".to_string();
+            return;
+        };
+        let hybrid = prev.key_type == "hybrid";
+        let sans: Vec<String> = prev.sans.iter().filter(|s| **s != prev.subject).cloned().collect();
+        let ca = match self.ensure_ca() {
+            Ok(c) => c,
+            Err(e) => {
+                self.cert_status = e;
+                return;
+            }
+        };
+        // Renew = reissue the same subject/SANs with a fresh validity window.
+        match ca.issue(&prev.subject, &sans, 90, hybrid) {
+            Ok((row, key_pem)) => {
+                self.store.record_certificate(TENANT, &row);
+                self.cert_status = format!("Renewed {} · new serial {}", prev.subject, row.serial);
+                self.issued_key = Some((format!("{} (renewed)", prev.subject), key_pem));
+                self.refresh();
+            }
+            Err(e) => self.cert_status = format!("Renew failed: {e}"),
+        }
+    }
+
+    fn revoke_cert(&mut self, id: &str) {
+        let Some(mut cert) = self.store.get_certificate(TENANT, id) else {
+            self.cert_status = "certificate not found".to_string();
+            return;
+        };
+        cert.status = "revoked".to_string();
+        cert.revoked_at = Some(Utc::now());
+        self.store.record_certificate(TENANT, &cert);
+        self.cert_status = format!("Revoked {} (serial {})", cert.subject, cert.serial);
+        self.refresh();
+    }
+
     fn certificates(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Certificates");
+        ui.label(egui::RichText::new("Issued by this desktop's own local PQC CA (offline). Hybrid = classical Ed25519 X.509 leaf + an ML-DSA-65 binding over it.").color(theme::MUTED).small());
         ui.add_space(6.0);
+
+        // Issue form.
+        egui::CollapsingHeader::new("Issue a certificate")
+            .default_open(self.data.certs.is_empty())
+            .show(ui, |ui| {
+                egui::Grid::new("certform").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("Subject (CN)");
+                    ui.add(egui::TextEdit::singleline(&mut self.cert_form.subject).hint_text("svc.internal").desired_width(260.0));
+                    ui.end_row();
+                    ui.label("SANs (comma-sep)");
+                    ui.add(egui::TextEdit::singleline(&mut self.cert_form.sans).hint_text("svc.internal, svc.corp").desired_width(260.0));
+                    ui.end_row();
+                    ui.label("Validity (days)");
+                    ui.add(egui::TextEdit::singleline(&mut self.cert_form.validity_days).desired_width(80.0));
+                    ui.end_row();
+                    ui.label("Post-quantum");
+                    ui.checkbox(&mut self.cert_form.hybrid, "hybrid (adds ML-DSA-65 binding)");
+                    ui.end_row();
+                });
+                if ui.button("Issue certificate").clicked() {
+                    self.issue_cert();
+                }
+            });
+
+        // One-time private-key reveal after an issue/renew.
+        if let Some((subject, pem)) = self.issued_key.clone() {
+            egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.colored_label(theme::HIGH, "Private key (shown once)");
+                    ui.label(egui::RichText::new(&subject).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Dismiss").clicked() {
+                            self.issued_key = None;
+                        }
+                        if ui.button("Copy key").clicked() {
+                            ui.output_mut(|o| o.copied_text = pem.clone());
+                        }
+                    });
+                });
+                ui.label(egui::RichText::new("This leaf private key is never stored - copy it now.").color(theme::MUTED).small());
+                egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
+                    ui.label(egui::RichText::new(&pem).monospace().small());
+                });
+            });
+            ui.add_space(4.0);
+        }
+        if !self.cert_status.is_empty() {
+            ui.label(egui::RichText::new(&self.cert_status).color(theme::MUTED).small());
+        }
+        ui.add_space(6.0);
+
         if self.data.certs.is_empty() {
-            empty_state(ui, "No certificates issued. Use the gateway's internal PQC CA to issue hybrid certs.");
+            empty_state(ui, "No certificates yet. Issue one above with the local PQC CA.");
             return;
         }
         let now = Utc::now();
         let mut open: Option<Selection> = None;
+        let mut action: Option<CertAction> = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("certs")
                 .striped(true)
-                .num_columns(5)
+                .num_columns(6)
                 .spacing([16.0, 6.0])
                 .show(ui, |ui| {
-                    for h in ["Subject", "Type", "PQC", "Expires", "State"] {
+                    for h in ["Subject", "Type", "PQC", "Expires", "State", "Actions"] {
                         ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
                     }
                     ui.end_row();
@@ -1583,12 +1997,28 @@ impl App {
                         ui.colored_label(col, txt);
                         let state_col = if c.status == "active" { theme::GOOD } else { theme::CRIT };
                         ui.colored_label(state_col, &c.status);
+                        // Per-row actions: renew (reissue) and revoke.
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Renew").on_hover_text("reissue same subject/SANs with a fresh window").clicked() {
+                                action = Some(CertAction::Renew(c.id.clone()));
+                            }
+                            if c.status == "active"
+                                && ui.small_button("Revoke").on_hover_text("mark revoked (irreversible)").clicked()
+                            {
+                                action = Some(CertAction::Revoke(c.id.clone()));
+                            }
+                        });
                         ui.end_row();
                     }
                 });
         });
         if let Some(s) = open {
             self.selected = Some(s);
+        }
+        match action {
+            Some(CertAction::Renew(id)) => self.renew_cert(&id),
+            Some(CertAction::Revoke(id)) => self.revoke_cert(&id),
+            None => {}
         }
     }
 
@@ -1721,6 +2151,40 @@ impl App {
                 }
             }
         });
+
+        // File a remediation ticket/PR via a connected tracker (Online mode).
+        // The ticket carries this finding's concrete PQC migration plan.
+        let trackers: Vec<(String, String)> = self
+            .data
+            .connections
+            .iter()
+            .filter(|c| matches!(c.integration_type.as_str(), "jira" | "linear" | "github" | "gitlab"))
+            .map(|c| (c.id.clone(), c.display_name.clone()))
+            .collect();
+        let mut op: Option<NetOp> = None;
+        if !trackers.is_empty() {
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new("Open ticket:").small().color(theme::MUTED));
+                let online = self.net_probes_enabled && !self.net_busy;
+                for (cid, name) in &trackers {
+                    if ui.add_enabled(online, egui::Button::new(name).small()).clicked() {
+                        op = Some(NetOp::OpenTicket { finding_id: f.id.clone(), conn_id: cid.clone() });
+                    }
+                }
+            });
+            if !self.net_probes_enabled {
+                ui.label(egui::RichText::new("enable Online mode (Settings) to file tickets").color(theme::MUTED).small());
+            }
+            if !self.net_status.is_empty() {
+                ui.label(egui::RichText::new(&self.net_status).color(theme::LOW).small());
+            }
+        }
+        if let Some(op) = op {
+            let ctx = ui.ctx().clone();
+            self.spawn_net_op(&ctx, op, "Opening ticket");
+        }
+
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.label(egui::RichText::new("Description").strong());
@@ -2158,26 +2622,54 @@ impl App {
         ui.add_space(6.0);
         ui.heading("Connections");
         ui.label(egui::RichText::new("UI-managed integrations. Secrets are encrypted at rest and masked here.").color(theme::MUTED).small());
+        if self.net_probes_enabled {
+            ui.label(egui::RichText::new("Online mode ON - Test and Scan make live API calls.").color(theme::MUTED).small());
+        } else {
+            ui.label(egui::RichText::new("Offline - enable Online mode in Settings to test or scan connections.").color(theme::MUTED).small());
+        }
+        if !self.net_status.is_empty() {
+            ui.label(egui::RichText::new(&self.net_status).color(theme::LOW).small());
+        }
         ui.add_space(6.0);
         let mut open: Option<Selection> = None;
+        let mut op: Option<NetOp> = None;
+        let online = self.net_probes_enabled && !self.net_busy;
         {
         let d = &self.data;
-        data_table(ui, "connections", &["Name", "Type", "Base URL", "Status"],
+        data_table(ui, "connections", &["Name", "Type", "Status", "Last scan", "Actions"],
             d.connections.len(), "No connections. Add one from the gateway dashboard.", |ui, i| {
             let c = &d.connections[i];
             if link_cell(ui, &c.display_name) { open = Some(Selection::Connection(c.id.clone())); }
             ui.label(&c.integration_type);
-            ui.label(egui::RichText::new(c.base_url.as_deref().unwrap_or("-")).color(theme::MUTED));
             let (col, s) = match c.last_status.as_deref() {
                 Some("connected") => (theme::GOOD, "connected"),
                 Some("failed") => (theme::CRIT, "failed"),
                 _ => (theme::MUTED, "untested"),
             };
             ui.colored_label(col, s);
+            ui.label(egui::RichText::new(c.last_scanned.map(|t| fmt_dt(t)).unwrap_or_else(|| "-".to_string())).color(theme::MUTED).small());
+            ui.horizontal(|ui| {
+                if ui.add_enabled(online, egui::Button::new("Test").small()).clicked() {
+                    op = Some(NetOp::TestConnection { conn_id: c.id.clone() });
+                }
+                let scannable = matches!(c.integration_type.as_str(), "github" | "gitlab");
+                if scannable && ui.add_enabled(online, egui::Button::new("Scan repos").small()).clicked() {
+                    op = Some(NetOp::ScanConnection { conn_id: c.id.clone() });
+                }
+            });
         });
         }
         if let Some(s) = open {
             self.selected = Some(s);
+        }
+        if let Some(op) = op {
+            let ctx = ui.ctx().clone();
+            let label = match &op {
+                NetOp::TestConnection { .. } => "Testing connection",
+                NetOp::ScanConnection { .. } => "Scanning repos",
+                NetOp::OpenTicket { .. } => "Opening ticket",
+            };
+            self.spawn_net_op(&ctx, op, label);
         }
     }
 

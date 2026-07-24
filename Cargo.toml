@@ -13,6 +13,7 @@ members = [
     "crates/qw-cli",
     "crates/qw-desktop",
     "crates/qw-graph",
+    "crates/qw-pki",
 ]
 
 [workspace.package]

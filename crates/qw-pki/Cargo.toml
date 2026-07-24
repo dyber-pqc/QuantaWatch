@@ -1,0 +1,17 @@
+[package]
+name = "qw-pki"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Internal PQC certificate authority (hybrid Ed25519 + ML-DSA-65), shared by the gateway and the desktop app"
+
+[dependencies]
+qw-crypto = { path = "../qw-crypto" }
+qw-store = { path = "../qw-store" }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+anyhow = { workspace = true }
+base64 = "0.22"
+rcgen = { version = "0.13", features = ["x509-parser"] }
+time = "0.3"
