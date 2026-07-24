@@ -65,7 +65,30 @@ const HOST_TEMPLATES: &[(&str, &str, &str)] = &[
 ];
 
 fn main() -> eframe::Result<()> {
-    let data_dir = std::env::args().nth(1).unwrap_or_else(|| "./data".to_string());
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    // Headless self-check: exercise the exact main-thread crypto path (CA
+    // identity load + hybrid certificate issue) that historically overflowed the
+    // Windows main-thread stack, then exit. No window is created, so this runs in
+    // CI without a display and guards the stack-size fix in qw-desktop/build.rs.
+    if args.iter().any(|a| a == "--selfcheck") {
+        std::process::exit(match self_check() {
+            Ok(()) => {
+                println!("selfcheck OK - main-thread ML-DSA cert issue succeeded");
+                0
+            }
+            Err(e) => {
+                eprintln!("selfcheck FAILED: {e:#}");
+                1
+            }
+        });
+    }
+
+    let data_dir = args
+        .iter()
+        .find(|a| !a.starts_with('-'))
+        .cloned()
+        .unwrap_or_else(|| "./data".to_string());
     let db_path = std::path::Path::new(&data_dir).join("quantawatch.db");
 
     // Open the on-disk store; fall back to an empty in-memory one so the app
@@ -98,6 +121,31 @@ fn main() -> eframe::Result<()> {
             Ok(Box::new(App::new(store, source)))
         }),
     )
+}
+
+/// Run the CA identity + hybrid-certificate-issue path on the process main
+/// thread (in a throwaway temp dir) and verify it produces a hybrid cert.
+///
+/// This is deliberately the same sequence the UI runs on click, so if the
+/// main-thread stack reserve (set in `build.rs`) is ever removed or shrunk below
+/// what ML-DSA-65 needs, this fails with STATUS_STACK_OVERFLOW instead of the
+/// regression reaching users. Invoked via `--selfcheck` from CI.
+fn self_check() -> anyhow::Result<()> {
+    let dir = std::env::temp_dir().join(format!("qw-desktop-selfcheck-{}", std::process::id()));
+    let pki = dir.join("pki");
+    std::fs::create_dir_all(&pki)?;
+    let id = qw_crypto::GatewayIdentity::load_or_generate(&pki)?;
+    let ca = qw_pki::CertAuthority::load_or_create(
+        "QuantaWatch Desktop CA",
+        &pki,
+        std::sync::Arc::new(id),
+    )?;
+    let (row, key_pem) = ca.issue("selfcheck.internal", &[], 90, true)?;
+    anyhow::ensure!(row.key_type == "hybrid", "expected hybrid cert");
+    anyhow::ensure!(row.mldsa_signature.is_some(), "missing ML-DSA binding");
+    anyhow::ensure!(key_pem.contains("PRIVATE KEY"), "missing leaf key");
+    let _ = std::fs::remove_dir_all(&dir);
+    Ok(())
 }
 
 // ----------------------------------------------------------------------------- theme
@@ -3733,6 +3781,9 @@ fn resolve_path(root: &str, location: &str) -> String {
         // Already absolute — leave it.
         location.to_string()
     } else {
+        // Normalize the relative part's separators so the joined path the user
+        // copies is consistent (no `C:\repo\src/file.rs` mixed-slash output).
+        let loc = loc.replace('/', "\\");
         format!("{}\\{}", root.trim_end_matches(['/', '\\']), loc)
     }
 }
@@ -3833,4 +3884,81 @@ fn pretty_status(s: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use qw_scanner::types::{Confidence, CryptoAssetType, FindingCategory, FindingStatus};
+
+    #[test]
+    fn resolve_path_joins_relative_under_scanned_root() {
+        assert_eq!(
+            resolve_path("C:\\repos\\app", ".\\src\\tls.rs"),
+            "C:\\repos\\app\\src\\tls.rs"
+        );
+        assert_eq!(
+            resolve_path("C:\\repos\\app\\", "src/tls.rs"),
+            "C:\\repos\\app\\src\\tls.rs"
+        );
+    }
+
+    #[test]
+    fn resolve_path_leaves_absolute_and_empty_root_alone() {
+        // An already-absolute finding location is returned unchanged.
+        assert_eq!(resolve_path("C:\\repos\\app", "D:\\other\\x.rs"), "D:\\other\\x.rs");
+        assert_eq!(resolve_path("C:\\repos\\app", "/etc/ssl/openssl.cnf"), "/etc/ssl/openssl.cnf");
+        // No meaningful root -> hand back the location as-is.
+        assert_eq!(resolve_path(".", "src/tls.rs"), "src/tls.rs");
+        assert_eq!(resolve_path("", "src/tls.rs"), "src/tls.rs");
+    }
+
+    fn finding(alg: &str, kind: CryptoAssetType, pqc: PqcStatus, loc: &str) -> FindingRecord {
+        FindingRecord {
+            id: format!("{alg}-{loc}"),
+            scan_id: "s".into(),
+            category: FindingCategory::WeakAlgorithm,
+            severity: FindingSeverity::Medium,
+            title: alg.into(),
+            description: String::new(),
+            asset_type: kind,
+            algorithm: Some(alg.into()),
+            pqc_status: pqc,
+            location: loc.into(),
+            remediation: None,
+            created_at: Utc::now(),
+            confidence: Confidence::default(),
+            evidence: Vec::new(),
+            status: FindingStatus::default(),
+            note: None,
+        }
+    }
+
+    #[test]
+    fn cbom_dedups_by_algorithm_and_keeps_worst_pqc() {
+        let findings = vec![
+            finding("RSA-2048", CryptoAssetType::Certificate, PqcStatus::ClassicalSecure, "a.crt"),
+            finding("RSA-2048", CryptoAssetType::TlsConnection, PqcStatus::ClassicalWeak, "b.pem"),
+            finding("ML-KEM-768", CryptoAssetType::CryptoLibrary, PqcStatus::PqcReady, "kem.rs"),
+        ];
+        let entries = cbom_entries(&findings);
+        assert_eq!(entries.len(), 2, "two distinct algorithms");
+
+        let rsa = entries.iter().find(|e| e.algorithm == "RSA-2048").unwrap();
+        assert_eq!(rsa.count, 2, "both RSA findings collapse into one entry");
+        // Worst posture across the two uses wins, and it is quantum-vulnerable.
+        assert_eq!(rsa.worst_pqc, PqcStatus::ClassicalWeak);
+        assert!(rsa.quantum_vulnerable);
+        assert!(rsa.kinds.contains("Certificate") && rsa.kinds.contains("TlsConnection"));
+
+        let kem = entries.iter().find(|e| e.algorithm == "ML-KEM-768").unwrap();
+        assert!(!kem.quantum_vulnerable, "PQC-ready algorithm is not quantum-vulnerable");
+    }
+
+    #[test]
+    fn cbom_skips_findings_without_an_algorithm() {
+        let mut f = finding("", CryptoAssetType::DataStore, PqcStatus::ClassicalWeak, "x");
+        f.algorithm = None;
+        assert!(cbom_entries(&[f]).is_empty());
+    }
 }

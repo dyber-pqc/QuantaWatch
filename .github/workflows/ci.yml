@@ -42,6 +42,39 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  windows-desktop:
+    name: Windows Desktop
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # The desktop runs ML-DSA-65 keygen/signing on the eframe main thread; the
+      # Windows main-thread stack default (~1 MiB) is too small, which crashed
+      # certificate issue with STATUS_STACK_OVERFLOW. Linux CI can't catch it, so
+      # build + test the whole workspace on Windows here...
+      - name: Build and test workspace (Windows)
+        run: cargo test --workspace
+
+      # ...and run the desktop's headless self-check, which issues a hybrid cert
+      # on the *main* thread. If the stack reserve in qw-desktop/build.rs is ever
+      # lost, this exits non-zero (overflow) instead of shipping the regression.
+      - name: Desktop main-thread crypto self-check
+        run: cargo run -q -p qw-desktop -- --selfcheck
+
   dashboard-build:
     name: Dashboard Build
     runs-on: ubuntu-latest
