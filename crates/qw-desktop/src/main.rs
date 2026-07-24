@@ -104,6 +104,15 @@ fn main() -> eframe::Result<()> {
         ),
     };
 
+    // Headless board-report generation: assemble the executive report from the
+    // local store and exit, no window. Useful for automation / air-gapped hosts.
+    if args.iter().any(|a| a == "--board-report") {
+        let mut app = App::new(store, source);
+        app.export_board_report();
+        println!("{}", app.export_status);
+        std::process::exit(if app.export_status.contains("failed") { 1 } else { 0 });
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1240.0, 820.0])
@@ -1365,7 +1374,21 @@ impl App {
 
     fn overview(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
-        ui.heading("Posture overview");
+        ui.horizontal(|ui| {
+            ui.heading("Posture overview");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .button("Board report")
+                    .on_hover_text("Generate a print-ready executive Quantum-Risk board report (HTML) - fully offline")
+                    .clicked()
+                {
+                    self.export_board_report();
+                }
+            });
+        });
+        if !self.export_status.is_empty() {
+            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+        }
         ui.add_space(8.0);
 
         // In-process scan - reads local files only, no network.
@@ -2850,7 +2873,7 @@ impl App {
                     // Drill-down into the specific violating assets.
                     if !r.violations.is_empty() {
                         let head = format!("{} violating asset(s)", r.violations.len());
-                        egui::CollapsingHeader::new(head).id_source(&r.id).show(ui, |ui| {
+                        egui::CollapsingHeader::new(head).id_salt(&r.id).show(ui, |ui| {
                             egui::Grid::new(format!("viol-{}", r.id)).striped(true).num_columns(4).spacing([14.0, 4.0]).show(ui, |ui| {
                                 for h in ["Location", "Algorithm", "PQC", "Severity"] {
                                     ui.label(egui::RichText::new(h).strong().color(theme::MUTED).small());
@@ -2904,6 +2927,151 @@ impl App {
             },
             Err(e) => format!("Serialize failed: {e}"),
         };
+    }
+
+    /// Write a print-ready executive Quantum-Risk board report to disk. Assembled
+    /// entirely from the local store (posture + attack paths + compliance +
+    /// migration roadmap) - the offline counterpart of the gateway's
+    /// `/api/report/board`. Output is a self-contained HTML file.
+    fn export_board_report(&mut self) {
+        // Make sure the attack-path graph reflects current data even if the user
+        // hasn't opened the Attack Paths page this session (it builds lazily).
+        self.graph.sync(
+            &self.data.flows,
+            &self.data.targets,
+            &self.data.findings,
+            &self.data.assets,
+        );
+        let dir = std::path::Path::new(&self.source)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let path = dir.join("quantawatch-board-report.html");
+        let html = self.board_report_html();
+        self.export_status = match std::fs::write(&path, html) {
+            Ok(_) => format!("Wrote board report to {} (open in a browser, Print to PDF)", path.display()),
+            Err(e) => format!("Board report failed: {e}"),
+        };
+    }
+
+    fn board_report_html(&self) -> String {
+        let posture = self.data.posture.as_ref().map(|p| p.overall_score).unwrap_or(0.0);
+        let paths = self.graph.paths();
+        let critical_paths = paths.iter().filter(|p| p.severity == "critical").count();
+        let hndl = paths.iter().filter(|p| p.hndl).count();
+        let compliance = ComplianceEngine::assess(&self.data.findings);
+
+        // Composite Quantum Risk Score — identical weighting to the gateway report.
+        let exposure_penalty = (critical_paths as f64 * 8.0).min(40.0);
+        let quantum_risk =
+            ((posture * 0.5 + compliance.overall_compliance_pct * 0.5) - exposure_penalty).clamp(0.0, 100.0);
+        let grade = if quantum_risk >= 80.0 {
+            ("A", "#1a7f52")
+        } else if quantum_risk >= 60.0 {
+            ("B", "#b9770a")
+        } else if quantum_risk >= 40.0 {
+            ("C", "#c2671a")
+        } else {
+            ("D", "#c0353a")
+        };
+
+        let path_rows: String = paths.iter().take(8).map(|p| {
+            format!("<tr><td><span class='pill' style='background:{}'>{}</span></td><td><strong>{}</strong>{}</td><td class='num'>{:.0}</td><td>{}</td></tr>",
+                report_sev_color(&p.severity), html_esc(&p.severity), html_esc(&p.title),
+                if p.observed { "<div class='sub'>observed in traffic</div>" } else { "" },
+                p.score, if p.hndl { "HNDL" } else { "—" })
+        }).collect();
+
+        let fw_rows: String = compliance.frameworks.iter().map(|f| {
+            format!("<tr><td><strong>{}</strong> <span class='sub'>{}</span></td><td class='num'>{:.0}%</td><td class='num'>{}</td></tr>",
+                html_esc(&f.name), html_esc(&f.authority), f.compliance_pct,
+                f.nearest_deadline.map(|y| y.to_string()).unwrap_or_else(|| "—".into()))
+        }).collect();
+
+        let mig_rows: String = compliance.migration_items.iter().take(6).map(|m| {
+            format!("<tr><td><span class='pill' style='background:{}'>{}</span></td><td><strong>{}</strong><div class='sub'>&rarr; {}</div></td><td class='num'>{}</td><td class='num'>{}</td></tr>",
+                if m.priority == "P0" { "#c0353a" } else if m.priority == "P1" { "#c2671a" } else { "#5b5fc7" },
+                html_esc(&m.priority), html_esc(&m.title), html_esc(&m.target_state), m.affected_count, m.deadline_year)
+        }).collect();
+
+        let date = Utc::now().format("%Y-%m-%d %H:%M UTC");
+        let build = build_stamp();
+
+        format!(
+            r#"<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>QuantaWatch — Quantum Risk Board Report</title>
+<style>
+  @page {{ size: A4; margin: 16mm; }}
+  html {{ color-scheme: light; background:#fff; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family:"Segoe UI",Arial,sans-serif; color:#1f2024; background:#fff; padding:32px; max-width:900px; margin:0 auto; }}
+  .brand {{ display:flex; align-items:center; gap:12px; border-bottom:3px solid #5b5fc7; padding-bottom:16px; }}
+  .logo {{ width:38px;height:38px;border-radius:8px;background:#5b5fc7;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:19px; }}
+  h1 {{ font-size:21px; margin:0; }} .muted {{ color:#6b6b6f; font-size:12px; }}
+  h2 {{ font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:#5b5fc7; margin:26px 0 8px; }}
+  .hero {{ display:flex; gap:16px; margin-top:20px; align-items:stretch; }}
+  .grade {{ width:130px; border-radius:12px; color:#fff; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:14px; }}
+  .grade .g {{ font-size:44px; font-weight:800; line-height:1; }}
+  .kpis {{ flex:1; display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }}
+  .kpi {{ border:1px solid #e3e3e8; border-radius:10px; padding:12px; }}
+  .kpi .n {{ font-size:26px; font-weight:700; }} .kpi .l {{ font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:#6b6b6f; }}
+  table {{ width:100%; border-collapse:collapse; font-size:12.5px; }}
+  th {{ text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:#6b6b6f; border-bottom:1px solid #e3e3e8; padding:7px 9px; }}
+  td {{ padding:9px; border-bottom:1px solid #eee; vertical-align:top; }} td.num {{ text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }}
+  .sub {{ color:#6b6b6f; font-size:10.5px; margin-top:2px; }}
+  .pill {{ color:#fff; font-weight:700; font-size:10px; padding:2px 7px; border-radius:6px; }}
+  .foot {{ margin-top:28px; border-top:1px solid #e3e3e8; padding-top:12px; font-size:10px; color:#7a7a7e; }}
+  .noprint {{ margin-bottom:14px; }} button {{ background:#5b5fc7;color:#fff;border:0;border-radius:6px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer; }}
+  @media print {{ .noprint {{ display:none; }} body {{ padding:0; }} }}
+</style></head><body>
+  <div class="noprint"><button onclick="window.print()">Print / Save as PDF</button></div>
+  <div class="brand"><div class="logo">Q</div><div>
+    <h1>Quantum Risk — Board Report</h1>
+    <div class="muted">QuantaWatch Desktop · Post-Quantum Posture Management · {date}</div></div></div>
+
+  <div class="hero">
+    <div class="grade" style="background:{grade_color}"><div class="g">{grade}</div><div style="font-size:11px;margin-top:4px">QUANTUM RISK</div><div style="font-size:20px;font-weight:700;margin-top:6px">{quantum_risk:.0}</div></div>
+    <div class="kpis">
+      <div class="kpi"><div class="l">Posture</div><div class="n">{posture:.0}</div></div>
+      <div class="kpi"><div class="l">CNSA 2.0</div><div class="n">{compliance:.0}%</div></div>
+      <div class="kpi"><div class="l">Critical Paths</div><div class="n">{critical_paths}</div></div>
+      <div class="kpi"><div class="l">HNDL Exposures</div><div class="n">{hndl}</div></div>
+    </div>
+  </div>
+
+  <h2>Top Attack Paths (Harvest-Now-Decrypt-Later)</h2>
+  <table><thead><tr><th>Severity</th><th>Exposure Path</th><th class="num">Score</th><th>HNDL</th></tr></thead><tbody>{path_rows}</tbody></table>
+
+  <h2>Framework Compliance</h2>
+  <table><thead><tr><th>Framework</th><th class="num">Compliant</th><th class="num">Deadline</th></tr></thead><tbody>{fw_rows}</tbody></table>
+
+  <h2>Prioritized Migration Roadmap</h2>
+  <table><thead><tr><th>Priority</th><th>Action</th><th class="num">Assets</th><th class="num">By</th></tr></thead><tbody>{mig_rows}</tbody></table>
+
+  <div class="foot">Generated offline from the local QuantaWatch store by {build}. {total} cryptographic findings assessed against CNSA 2.0, NIST IR 8547 and FIPS 203/204. For a cryptographically-attested inventory, export the signed CBOM.</div>
+</body></html>"#,
+            date = date,
+            grade = grade.0,
+            grade_color = grade.1,
+            quantum_risk = quantum_risk,
+            posture = posture,
+            compliance = compliance.overall_compliance_pct,
+            critical_paths = critical_paths,
+            hndl = hndl,
+            build = html_esc(&build),
+            path_rows = if path_rows.is_empty() {
+                "<tr><td colspan=4 class='sub'>No attack paths detected.</td></tr>".into()
+            } else {
+                path_rows
+            },
+            fw_rows = fw_rows,
+            mig_rows = if mig_rows.is_empty() {
+                "<tr><td colspan=4 class='sub'>No migration actions required.</td></tr>".into()
+            } else {
+                mig_rows
+            },
+            total = compliance.total_findings,
+        )
     }
 
     fn compliance(&mut self, ui: &mut egui::Ui) {
@@ -3682,6 +3850,21 @@ fn sev_str_color(s: &str) -> egui::Color32 {
         "medium" => theme::MED,
         "low" => theme::LOW,
         _ => theme::MUTED,
+    }
+}
+
+/// Minimal HTML escaping for the board report (untrusted store strings).
+fn html_esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// Severity → print-friendly hex color for the board report.
+fn report_sev_color(s: &str) -> &'static str {
+    match s {
+        "critical" => "#c0353a",
+        "high" => "#c2671a",
+        "medium" => "#b9770a",
+        _ => "#5b5fc7",
     }
 }
 /// Map an audit event to a threat row (category, severity, message, blocked),
