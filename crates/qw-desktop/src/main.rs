@@ -1625,6 +1625,9 @@ impl App {
             self.selected = None;
             return;
         };
+        // The scan this finding came from carries the root that its (relative)
+        // location is anchored to — i.e. which repo/folder was scanned.
+        let scan = self.store.get_scan(TENANT, &f.scan_id);
         ui.horizontal(|ui| {
             ui.colored_label(sev_color(f.severity), sev_label(f.severity));
             ui.colored_label(pqc_color(f.pqc_status), pqc_label(f.pqc_status));
@@ -1639,8 +1642,22 @@ impl App {
                 kv(ui, "Algorithm", a);
             }
             kv(ui, "Confidence", &format!("{:?}", f.confidence));
+            if let Some(s) = &scan {
+                ui.label(egui::RichText::new("Scanned root").color(theme::MUTED));
+                ui.label(egui::RichText::new(&s.target_address).monospace().small())
+                    .on_hover_text("the repo/folder this scan ran against");
+                ui.end_row();
+                ui.label(egui::RichText::new("Full path").color(theme::MUTED));
+                let full = resolve_path(&s.target_address, &f.location);
+                ui.label(egui::RichText::new(&full).monospace().small()).on_hover_text(&full);
+                ui.end_row();
+                ui.label(egui::RichText::new("Scanner").color(theme::MUTED));
+                ui.label(egui::RichText::new(&s.scanner_id).small());
+                ui.end_row();
+            }
             ui.label(egui::RichText::new("Location").color(theme::MUTED));
-            ui.label(egui::RichText::new(&f.location).monospace().small());
+            ui.label(egui::RichText::new(&f.location).monospace().small())
+                .on_hover_text("relative to the scanned root above");
             ui.end_row();
         });
         ui.add_space(8.0);
@@ -2884,6 +2901,21 @@ fn link_cell(ui: &mut egui::Ui, text: &str) -> bool {
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .on_hover_text("click for details")
         .clicked()
+}
+
+/// Resolve a finding's (usually relative) location against the scanned root, so
+/// ".\Cargo.toml" scanned from "H:\repo" reads as "H:\repo\Cargo.toml".
+fn resolve_path(root: &str, location: &str) -> String {
+    let loc = location.trim_start_matches("./").trim_start_matches(".\\");
+    let root = root.trim();
+    if root.is_empty() || root == "." || root == "./" || root == ".\\" {
+        location.to_string()
+    } else if loc.contains(':') || loc.starts_with('/') || loc.starts_with('\\') {
+        // Already absolute — leave it.
+        location.to_string()
+    } else {
+        format!("{}\\{}", root.trim_end_matches(['/', '\\']), loc)
+    }
 }
 
 /// One "Key   value" row in a detail grid.
