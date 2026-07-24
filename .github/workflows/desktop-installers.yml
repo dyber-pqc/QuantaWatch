@@ -1,0 +1,68 @@
+name: Desktop Installers
+
+# Manual, publish-free build of the Windows desktop installers (MSI + setup.exe).
+# Produces downloadable artifacts only - no PyPI/Docker/GitHub-release side effects.
+# Use this to validate/hand out installers without cutting a real release tag.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Installer version (e.g. 0.1.0)"
+        required: false
+        default: "0.1.0"
+
+jobs:
+  build:
+    name: Build MSI + setup.exe
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust (pinned)
+        uses: dtolnay/rust-toolchain@1.93.0
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target/
+          key: ${{ runner.os }}-cargo-installers-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-installers-
+            ${{ runner.os }}-cargo-
+
+      - name: Build desktop (release)
+        run: cargo build --release --locked -p qw-desktop
+
+      # Sanity: exercise the main-thread crypto path (guards the stack fix).
+      - name: Desktop self-check
+        run: cargo run -q -p qw-desktop -- --selfcheck
+
+      - name: Build MSI (cargo-wix + WiX v3)
+        shell: pwsh
+        run: |
+          choco install wixtoolset --no-progress -y
+          cargo install cargo-wix --version "^0.3" --locked
+          cargo wix --package qw-desktop --no-build --nocapture `
+            --output target\wix\quantawatch-desktop.msi
+
+      - name: Build setup.exe (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $ver = "${{ github.event.inputs.version }}"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=$ver" "/Otarget\inno" `
+            crates\qw-desktop\installer\quantawatch-desktop.iss
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantawatch-desktop-installers
+          if-no-files-found: warn
+          path: |
+            target/release/quantawatch-desktop.exe
+            target/wix/quantawatch-desktop.msi
+            target/inno/quantawatch-desktop-setup.exe
