@@ -130,7 +130,10 @@ impl OverlayState {
     /// listener task is orphaned and stops accepting usefully after the next
     /// restart, when it is simply not re-bound.
     pub fn remove_route(&self, id: &str) {
-        self.routes.lock().unwrap_or_else(|e| e.into_inner()).retain(|r| r.id != id);
+        self.routes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|r| r.id != id);
     }
 
     /// Ensure a client-facing server TLS config exists (lazily self-signed).
@@ -348,8 +351,8 @@ async fn handle_conn(
 
         let (a, b) = if stats.upstream_tls {
             let host = stats.upstream.split(':').next().unwrap_or("upstream");
-            let sni = ServerName::try_from(host.to_string())
-                .map_err(|e| format!("upstream SNI: {e}"))?;
+            let sni =
+                ServerName::try_from(host.to_string()).map_err(|e| format!("upstream SNI: {e}"))?;
             let mut up = connector
                 .connect(sni, up)
                 .await

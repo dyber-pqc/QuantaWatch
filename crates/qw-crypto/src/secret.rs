@@ -117,7 +117,10 @@ mod tests {
         let token = "ghp_ABCdef0123456789";
         let enc = c.encrypt(token).unwrap();
         assert!(SecretCipher::is_ciphertext(&enc), "output must be tagged");
-        assert!(!enc.contains(token), "plaintext must not appear in ciphertext");
+        assert!(
+            !enc.contains(token),
+            "plaintext must not appear in ciphertext"
+        );
         assert_eq!(c.decrypt(&enc).unwrap(), token);
     }
 
@@ -139,7 +142,10 @@ mod tests {
     fn legacy_plaintext_reads_through() {
         let c = SecretCipher::from_key_material("k").unwrap();
         // A row written before encryption was enabled has no prefix.
-        assert_eq!(c.decrypt("legacy-plain-token").unwrap(), "legacy-plain-token");
+        assert_eq!(
+            c.decrypt("legacy-plain-token").unwrap(),
+            "legacy-plain-token"
+        );
     }
 
     #[test]

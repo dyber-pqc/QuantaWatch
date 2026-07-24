@@ -290,30 +290,24 @@ pub struct ScanRecord {
 /// or code pattern); Low = a port answered but the crypto wasn't characterized.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Confidence {
     High,
+    #[default]
     Medium,
     Low,
-}
-impl Default for Confidence {
-    fn default() -> Self {
-        Confidence::Medium
-    }
 }
 
 /// Triage state. Suppressed drops out of the work list (false positive /
 /// won't-fix) but is retained for the audit trail.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum FindingStatus {
+    #[default]
     Open,
     Acknowledged,
     Suppressed,
-}
-impl Default for FindingStatus {
-    fn default() -> Self {
-        FindingStatus::Open
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,7 +363,11 @@ pub fn evidence_of(f: &Finding, scanner_id: &str) -> Vec<String> {
     let mut ev = Vec::new();
     ev.push(format!(
         "Probe: {} scanner",
-        if scanner_id.is_empty() { &f.asset.discovered_by } else { scanner_id }
+        if scanner_id.is_empty() {
+            &f.asset.discovered_by
+        } else {
+            scanner_id
+        }
     ));
     ev.push(format!("Observed: {}", f.asset.discovered_at.to_rfc3339()));
     ev.push(format!("Location: {}", f.asset.location.path));
@@ -519,19 +517,19 @@ fn default_connect_timeout() -> u64 {
 /// fingerprinting for PQC readiness.
 fn default_crypto_ports() -> Vec<u16> {
     vec![
-        22,    // SSH
-        25,    // SMTP (STARTTLS)
-        443,   // HTTPS / TLS
-        465,   // SMTPS
-        587,   // SMTP submission (STARTTLS)
-        636,   // LDAPS
-        853,   // DNS-over-TLS
-        993,   // IMAPS
-        995,   // POP3S
-        3389,  // RDP (TLS)
-        5432,  // PostgreSQL (TLS)
-        6443,  // Kubernetes API (TLS)
-        8443,  // HTTPS-alt
+        22,   // SSH
+        25,   // SMTP (STARTTLS)
+        443,  // HTTPS / TLS
+        465,  // SMTPS
+        587,  // SMTP submission (STARTTLS)
+        636,  // LDAPS
+        853,  // DNS-over-TLS
+        993,  // IMAPS
+        995,  // POP3S
+        3389, // RDP (TLS)
+        5432, // PostgreSQL (TLS)
+        6443, // Kubernetes API (TLS)
+        8443, // HTTPS-alt
     ]
 }
 
@@ -717,24 +715,47 @@ mod tests {
         use CryptoAssetType::*;
         use PqcStatus::*;
         // Live measurements -> High.
-        assert_eq!(confidence_of(&golden_finding(TlsConnection, ClassicalSecure)), Confidence::High);
-        assert_eq!(confidence_of(&golden_finding(Certificate, ClassicalWeak)), Confidence::High);
-        assert_eq!(confidence_of(&golden_finding(DataStore, ClassicalWeak)), Confidence::High);
+        assert_eq!(
+            confidence_of(&golden_finding(TlsConnection, ClassicalSecure)),
+            Confidence::High
+        );
+        assert_eq!(
+            confidence_of(&golden_finding(Certificate, ClassicalWeak)),
+            Confidence::High
+        );
+        assert_eq!(
+            confidence_of(&golden_finding(DataStore, ClassicalWeak)),
+            Confidence::High
+        );
         // Static / heuristic match -> Medium.
-        assert_eq!(confidence_of(&golden_finding(CryptoLibrary, ClassicalSecure)), Confidence::Medium);
+        assert_eq!(
+            confidence_of(&golden_finding(CryptoLibrary, ClassicalSecure)),
+            Confidence::Medium
+        );
         // Uncharacterized (port answered, crypto unread) -> Low, whatever the type.
-        assert_eq!(confidence_of(&golden_finding(TlsConnection, Unknown)), Confidence::Low);
-        assert_eq!(confidence_of(&golden_finding(Certificate, Unknown)), Confidence::Low);
+        assert_eq!(
+            confidence_of(&golden_finding(TlsConnection, Unknown)),
+            Confidence::Low
+        );
+        assert_eq!(
+            confidence_of(&golden_finding(Certificate, Unknown)),
+            Confidence::Low
+        );
     }
 
     #[test]
     fn evidence_records_probe_and_observation() {
-        let ev = evidence_of(&golden_finding(CryptoAssetType::TlsConnection, PqcStatus::ClassicalSecure), "tls");
+        let ev = evidence_of(
+            &golden_finding(CryptoAssetType::TlsConnection, PqcStatus::ClassicalSecure),
+            "tls",
+        );
         assert!(ev.iter().any(|e| e.contains("Probe: tls")));
         assert!(ev.iter().any(|e| e.starts_with("Location: host:443")));
         assert!(ev.iter().any(|e| e.contains("Algorithm: RSA-2048")));
         assert!(ev.iter().any(|e| e.contains("Key length: 2048")));
-        assert!(ev.iter().any(|e| e.starts_with("Classified: classical_secure")));
+        assert!(ev
+            .iter()
+            .any(|e| e.starts_with("Classified: classical_secure")));
     }
 
     #[test]

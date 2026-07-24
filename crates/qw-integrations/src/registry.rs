@@ -120,7 +120,10 @@ pub fn build_one(config: &IntegrationConfig) -> Option<Box<dyn Integration>> {
         "linear" => crate::linear::LinearIntegration::from_config(config)
             .map(|i| Box::new(i) as Box<dyn Integration>),
         other => {
-            tracing::warn!(integration_type = other, "Unknown integration type, skipping");
+            tracing::warn!(
+                integration_type = other,
+                "Unknown integration type, skipping"
+            );
             None
         }
     }

@@ -178,24 +178,25 @@ impl AuthManager {
         }
 
         // Config-declared users first, then runtime-managed (DB) users.
-        let (role_name, org) = if let Some(u) = self.config.users.iter().find(|u| u.username == username) {
-            if verify_password(password, &u.password_hash) {
-                (u.role.clone(), u.org.clone())
+        let (role_name, org) =
+            if let Some(u) = self.config.users.iter().find(|u| u.username == username) {
+                if verify_password(password, &u.password_hash) {
+                    (u.role.clone(), u.org.clone())
+                } else {
+                    self.record_login_failure(username, now);
+                    return LoginOutcome::BadCredentials;
+                }
+            } else if let Some(u) = self.store.get_user(username) {
+                if verify_password(password, &u.password_hash) {
+                    (u.role, u.org)
+                } else {
+                    self.record_login_failure(username, now);
+                    return LoginOutcome::BadCredentials;
+                }
             } else {
                 self.record_login_failure(username, now);
                 return LoginOutcome::BadCredentials;
-            }
-        } else if let Some(u) = self.store.get_user(username) {
-            if verify_password(password, &u.password_hash) {
-                (u.role, u.org)
-            } else {
-                self.record_login_failure(username, now);
-                return LoginOutcome::BadCredentials;
-            }
-        } else {
-            self.record_login_failure(username, now);
-            return LoginOutcome::BadCredentials;
-        };
+            };
 
         // Success — clear any accumulated failures.
         self.store.clear_login_lockout(username);

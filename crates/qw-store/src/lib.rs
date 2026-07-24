@@ -494,8 +494,8 @@ fn pg_url_param<'a>(url: &'a str, key: &str) -> Option<&'a str> {
 
 /// Load a CA bundle (one or more PEM certificates) into a rustls root store.
 fn load_pg_roots(path: &str) -> anyhow::Result<rustls::RootCertStore> {
-    let pem = std::fs::read(path)
-        .map_err(|e| anyhow::anyhow!("reading sslrootcert '{path}': {e}"))?;
+    let pem =
+        std::fs::read(path).map_err(|e| anyhow::anyhow!("reading sslrootcert '{path}': {e}"))?;
     let mut reader = std::io::BufReader::new(&pem[..]);
     let mut roots = rustls::RootCertStore::empty();
     let mut added = 0usize;
@@ -758,9 +758,9 @@ impl Store {
             })
             .map_err(|e| anyhow::anyhow!("failed to spawn postgres executor: {e}"))?;
 
-        ready_rx
-            .recv()
-            .map_err(|_| anyhow::anyhow!("postgres executor exited before signalling readiness"))??;
+        ready_rx.recv().map_err(|_| {
+            anyhow::anyhow!("postgres executor exited before signalling readiness")
+        })??;
 
         Ok(Self {
             backend: Arc::new(Backend::Pg(PgExecutor { tx: job_tx })),
@@ -1031,8 +1031,7 @@ impl Store {
             // finding instead of appending a near-duplicate every scan. Keyed by
             // (location, title) — the asset and the check — not by status, so a
             // changed posture updates the same row.
-            let stable_id =
-                stable_finding_id(&finding.asset.location.path, &finding.title);
+            let stable_id = stable_finding_id(&finding.asset.location.path, &finding.title);
             // Preserve triage (acknowledged/suppressed + note) across re-scans —
             // an upsert would otherwise reset a suppressed finding to Open.
             let (status, note) = self
@@ -1043,12 +1042,12 @@ impl Store {
                 id: stable_id.clone(),
                 scan_id: scan_id.clone(),
                 category: finding.category.clone(),
-                severity: finding.severity.clone(),
+                severity: finding.severity,
                 title: finding.title.clone(),
                 description: finding.description.clone(),
                 asset_type: finding.asset.asset_type.clone(),
                 algorithm: finding.asset.algorithm.clone(),
-                pqc_status: finding.pqc_status.clone(),
+                pqc_status: finding.pqc_status,
                 location: finding.asset.location.path.clone(),
                 remediation: finding.remediation.clone(),
                 created_at: Utc::now(),
@@ -1560,7 +1559,11 @@ impl Store {
     }
 
     /// The previous evaluation of a policy (the drift baseline), if any.
-    pub fn latest_policy_snapshot(&self, tenant: &str, policy_id: &str) -> Option<PolicySnapshotRow> {
+    pub fn latest_policy_snapshot(
+        &self,
+        tenant: &str,
+        policy_id: &str,
+    ) -> Option<PolicySnapshotRow> {
         self.one_de(
             "SELECT data FROM policy_snapshots WHERE tenant = ?1 AND policy_id = ?2 LIMIT 1",
             &[tenant, policy_id],
@@ -1729,7 +1732,10 @@ impl Store {
 
     /// Every persisted route across all tenants — used at startup to re-bind.
     pub fn list_all_overlay_routes(&self) -> Vec<OverlayRouteRow> {
-        self.list_de("SELECT data FROM overlay_routes ORDER BY id LIMIT 100000", &[])
+        self.list_de(
+            "SELECT data FROM overlay_routes ORDER BY id LIMIT 100000",
+            &[],
+        )
     }
 
     pub fn delete_overlay_route(&self, tenant: &str, id: &str) {
@@ -1777,7 +1783,9 @@ impl Store {
     /// Find an endpoint by hostname (so repeat reports from the same host update
     /// in place rather than duplicating).
     pub fn find_endpoint_by_hostname(&self, tenant: &str, hostname: &str) -> Option<EndpointRow> {
-        self.list_endpoints(tenant).into_iter().find(|e| e.hostname == hostname)
+        self.list_endpoints(tenant)
+            .into_iter()
+            .find(|e| e.hostname == hostname)
     }
 
     pub fn delete_endpoint(&self, tenant: &str, id: &str) {
@@ -2136,7 +2144,10 @@ mod tests {
             &["default", "conn-1"],
         );
         assert!(raw[0].contains(secret));
-        assert_eq!(store.get_connection("default", "conn-1").unwrap().token, secret);
+        assert_eq!(
+            store.get_connection("default", "conn-1").unwrap().token,
+            secret
+        );
     }
 
     /// Regression: the Postgres backend must work when opened and queried from

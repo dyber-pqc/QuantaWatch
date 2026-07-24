@@ -40,7 +40,10 @@ pub struct HostInventory {
 /// Credentials for the SSH connection (supplied per-scan, used transiently).
 pub enum SshAuth {
     Password(String),
-    PrivateKey { pem: String, passphrase: Option<String> },
+    PrivateKey {
+        pem: String,
+        passphrase: Option<String>,
+    },
 }
 
 /// A trust-on-first-use client handler: we're inventorying the operator's own

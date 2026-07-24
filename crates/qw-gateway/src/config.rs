@@ -860,7 +860,10 @@ mod deployment_safety_tests {
     fn public_bind_with_shared_hash_is_refused() {
         let c = cfg(
             "0.0.0.0:9090",
-            vec![user("a", "$argon2id$unique-real-1"), user("b", "$argon2id$unique-real-1")],
+            vec![
+                user("a", "$argon2id$unique-real-1"),
+                user("b", "$argon2id$unique-real-1"),
+            ],
         );
         assert!(c.assert_deployment_safe().is_err());
     }
@@ -869,7 +872,10 @@ mod deployment_safety_tests {
     fn public_bind_with_unique_real_hashes_is_allowed() {
         let c = cfg(
             "0.0.0.0:9090",
-            vec![user("a", "$argon2id$unique-real-1"), user("b", "$argon2id$unique-real-2")],
+            vec![
+                user("a", "$argon2id$unique-real-1"),
+                user("b", "$argon2id$unique-real-2"),
+            ],
         );
         assert!(c.assert_deployment_safe().is_ok());
     }
@@ -890,13 +896,15 @@ mod deployment_safety_tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../../deploy/quantawatch.prod.yaml"
         );
-        let yaml = std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let yaml = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let cfg: GatewayConfig =
             serde_yaml::from_str(&yaml).expect("prod template must match the config schema");
         assert!(cfg.gateway.tls.is_some(), "prod template should enable TLS");
         assert!(cfg.auth.enabled, "prod template must enable auth");
-        assert!(cfg.rate_limit.enabled, "prod template must enable rate limiting");
+        assert!(
+            cfg.rate_limit.enabled,
+            "prod template must enable rate limiting"
+        );
         assert!(
             cfg.assert_deployment_safe().is_ok(),
             "prod template must pass the deployment-safety guard"

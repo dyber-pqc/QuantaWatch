@@ -41,7 +41,7 @@ impl CbomBuilder {
                 authenticated: true,
                 tls_version: Some(provider.tls_version.clone()),
                 cipher_suite: Some(provider.cipher_suite.clone()),
-                pqc_status: provider.pqc_status.clone(),
+                pqc_status: provider.pqc_status,
                 posture_score: score,
             });
         }
@@ -71,7 +71,7 @@ impl CbomBuilder {
                         version: tls_version,
                         cipher_suites: vec![CipherSuiteInfo {
                             name: cipher,
-                            pqc_status: finding.pqc_status.clone(),
+                            pqc_status: finding.pqc_status,
                         }],
                     }),
                     oid: None,
@@ -124,7 +124,7 @@ impl CbomBuilder {
                 confidence: 0.9,
             },
             posture_score: score,
-            pqc_status: finding.pqc_status.clone(),
+            pqc_status: finding.pqc_status,
         }
     }
 

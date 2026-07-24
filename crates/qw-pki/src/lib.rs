@@ -27,7 +27,8 @@ use rcgen::{
 use qw_crypto::GatewayIdentity;
 use qw_store::CertificateRow;
 
-const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 /// The internal CA: a persisted classical Ed25519 root plus an ML-DSA-65
 /// identity for the post-quantum binding.
@@ -41,7 +42,8 @@ pub struct CertAuthority {
 
 fn now_ts() -> (chrono::DateTime<chrono::Utc>, time::OffsetDateTime) {
     let c = chrono::Utc::now();
-    let t = time::OffsetDateTime::from_unix_timestamp(c.timestamp()).unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
+    let t = time::OffsetDateTime::from_unix_timestamp(c.timestamp())
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     (c, t)
 }
 
@@ -59,8 +61,8 @@ impl CertAuthority {
 
         let (ca_cert, ca_key, ca_cert_pem) = if cert_path.exists() && key_path.exists() {
             let key_pem = std::fs::read_to_string(&key_path)?;
-            let ca_key = KeyPair::from_pem(&key_pem)
-                .map_err(|e| anyhow::anyhow!("load CA key: {e}"))?;
+            let ca_key =
+                KeyPair::from_pem(&key_pem).map_err(|e| anyhow::anyhow!("load CA key: {e}"))?;
             let cert_pem = std::fs::read_to_string(&cert_path)?;
             // Rebuild the issuer Certificate from the persisted PEM so new leaves
             // chain to the same CA subject + key across restarts.
@@ -75,8 +77,12 @@ impl CertAuthority {
                 .map_err(|e| anyhow::anyhow!("generate CA key: {e}"))?;
             let mut params = CertificateParams::new(Vec::<String>::new())
                 .map_err(|e| anyhow::anyhow!("CA params: {e}"))?;
-            params.distinguished_name.push(DnType::CommonName, common_name);
-            params.distinguished_name.push(DnType::OrganizationName, "QuantaWatch");
+            params
+                .distinguished_name
+                .push(DnType::CommonName, common_name);
+            params
+                .distinguished_name
+                .push(DnType::OrganizationName, "QuantaWatch");
             params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
             params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
             let (_, t_now) = now_ts();
@@ -135,15 +141,15 @@ impl CertAuthority {
         validity_days: u32,
         hybrid: bool,
     ) -> anyhow::Result<(CertificateRow, String)> {
-        let leaf_key = KeyPair::generate_for(&PKCS_ED25519)
-            .map_err(|e| anyhow::anyhow!("leaf key: {e}"))?;
+        let leaf_key =
+            KeyPair::generate_for(&PKCS_ED25519).map_err(|e| anyhow::anyhow!("leaf key: {e}"))?;
 
         let mut names: Vec<String> = sans.to_vec();
         if !names.iter().any(|n| n == subject) {
             names.insert(0, subject.to_string());
         }
-        let mut params =
-            CertificateParams::new(names.clone()).map_err(|e| anyhow::anyhow!("leaf params: {e}"))?;
+        let mut params = CertificateParams::new(names.clone())
+            .map_err(|e| anyhow::anyhow!("leaf params: {e}"))?;
         params.distinguished_name.push(DnType::CommonName, subject);
         params.key_usages = vec![
             KeyUsagePurpose::DigitalSignature,
@@ -180,7 +186,12 @@ impl CertAuthority {
                 "hybrid".to_string(),
             )
         } else {
-            (None, None, "classical".to_string(), "classical_secure".to_string())
+            (
+                None,
+                None,
+                "classical".to_string(),
+                "classical_secure".to_string(),
+            )
         };
 
         let row = CertificateRow {

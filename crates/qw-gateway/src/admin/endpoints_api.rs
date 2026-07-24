@@ -38,6 +38,7 @@ fn pqc_rank(s: &str) -> u8 {
         _ => 2,
     }
 }
+#[allow(dead_code)]
 fn sev_rank(s: &str) -> u8 {
     match s {
         "critical" => 4,
@@ -83,6 +84,7 @@ struct Tpm {
     #[serde(default)]
     version: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)] // accepted wire field, not read yet
     manufacturer: Option<String>,
     #[serde(default)]
     algorithms: Vec<String>,
@@ -94,6 +96,7 @@ struct SecureBoot {
     #[serde(default)]
     signature_algorithm: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)] // accepted wire field, not read yet
     setup_mode: Option<bool>,
 }
 #[derive(Deserialize, Default)]
@@ -128,6 +131,7 @@ struct SshHostKey {
     #[serde(rename = "type")]
     key_type: String,
     #[serde(default)]
+    #[allow(dead_code)] // accepted wire field, not read yet
     bits: Option<u32>,
 }
 #[derive(Deserialize, Default)]
@@ -138,12 +142,20 @@ struct CertInfo {
     #[serde(default)]
     signature_algorithm: Option<String>,
     #[serde(default)]
+    #[allow(dead_code)] // accepted wire field, not read yet
     not_after: Option<String>,
 }
 
 // ---- Classification ----
 
-fn comp(category: &str, name: &str, detail: String, algorithm: Option<String>, pqc: &str, sev: &str) -> EndpointComponent {
+fn comp(
+    category: &str,
+    name: &str,
+    detail: String,
+    algorithm: Option<String>,
+    pqc: &str,
+    sev: &str,
+) -> EndpointComponent {
     EndpointComponent {
         category: category.to_string(),
         name: name.to_string(),
@@ -160,9 +172,20 @@ fn classify(r: &EndpointReport) -> Vec<EndpointComponent> {
     // Secure Boot — the signature over the boot chain.
     if let Some(sb) = &r.secure_boot {
         if !sb.enabled {
-            out.push(comp("secure_boot", "Secure Boot", "Secure Boot is disabled — the boot chain is unsigned and can be tampered with.".into(), None, "classical_weak", "high"));
+            out.push(comp(
+                "secure_boot",
+                "Secure Boot",
+                "Secure Boot is disabled — the boot chain is unsigned and can be tampered with."
+                    .into(),
+                None,
+                "classical_weak",
+                "high",
+            ));
         } else {
-            let alg = sb.signature_algorithm.clone().unwrap_or_else(|| "RSA-2048/SHA-256".into());
+            let alg = sb
+                .signature_algorithm
+                .clone()
+                .unwrap_or_else(|| "RSA-2048/SHA-256".into());
             out.push(comp(
                 "secure_boot", "Secure Boot",
                 format!("Boot chain signed with {alg}. Classical signatures are forgeable by a quantum computer, and boot-signing keys can only be rotated by a firmware update — a slow, hardware-pinned migration."),
@@ -174,9 +197,20 @@ fn classify(r: &EndpointReport) -> Vec<EndpointComponent> {
     // TPM — the hardware root of trust.
     if let Some(t) = &r.tpm {
         if !t.present {
-            out.push(comp("tpm", "TPM", "No TPM — no hardware root of trust for keys or attestation.".into(), None, "unknown", "medium"));
+            out.push(comp(
+                "tpm",
+                "TPM",
+                "No TPM — no hardware root of trust for keys or attestation.".into(),
+                None,
+                "unknown",
+                "medium",
+            ));
         } else {
-            let algs = if t.algorithms.is_empty() { "RSA-2048, ECC P-256".to_string() } else { t.algorithms.join(", ") };
+            let algs = if t.algorithms.is_empty() {
+                "RSA-2048, ECC P-256".to_string()
+            } else {
+                t.algorithms.join(", ")
+            };
             let ver = t.version.clone().unwrap_or_else(|| "2.0".into());
             out.push(comp(
                 "tpm", &format!("TPM {ver}"),
@@ -193,7 +227,14 @@ fn classify(r: &EndpointReport) -> Vec<EndpointComponent> {
             if bank.to_uppercase().contains("SHA-1") || bank.to_uppercase().contains("SHA1") {
                 out.push(comp("measured_boot", "Measured Boot", "Measured boot uses the SHA-1 PCR bank — SHA-1 is broken; switch to the SHA-256 bank.".into(), Some(bank), "classical_weak", "high"));
             } else {
-                out.push(comp("measured_boot", "Measured Boot", format!("Measured boot uses the {bank} PCR bank."), Some(bank), "classical_secure", "info"));
+                out.push(comp(
+                    "measured_boot",
+                    "Measured Boot",
+                    format!("Measured boot uses the {bank} PCR bank."),
+                    Some(bank),
+                    "classical_secure",
+                    "info",
+                ));
             }
         }
     }
@@ -201,7 +242,15 @@ fn classify(r: &EndpointReport) -> Vec<EndpointComponent> {
     // Disk encryption (symmetric — quantum-resilient at AES-256, note the margin).
     if let Some(de) = &r.disk_encryption {
         if !de.enabled {
-            out.push(comp("disk_encryption", "Disk encryption", "Disk is not encrypted — data at rest is exposed if the device is lost or seized.".into(), None, "classical_weak", "high"));
+            out.push(comp(
+                "disk_encryption",
+                "Disk encryption",
+                "Disk is not encrypted — data at rest is exposed if the device is lost or seized."
+                    .into(),
+                None,
+                "classical_weak",
+                "high",
+            ));
         } else {
             let cipher = de.cipher.clone().unwrap_or_else(|| "AES-256-XTS".into());
             let bits = de.key_bits.unwrap_or(256);
@@ -218,13 +267,28 @@ fn classify(r: &EndpointReport) -> Vec<EndpointComponent> {
     for k in &r.ssh_host_keys {
         let n = k.key_type.to_lowercase();
         let (pqc, sev, note) = if n.contains("ssh-rsa") || n.contains("ssh-dss") {
-            ("classical_weak", "medium", "SHA-1 RSA / DSA host key — deprecated.")
+            (
+                "classical_weak",
+                "medium",
+                "SHA-1 RSA / DSA host key — deprecated.",
+            )
         } else if n.contains("ed25519") || n.contains("ecdsa") || n.contains("rsa-sha2") {
-            ("classical_secure", "info", "Classical host key — no PQC host-key format ships yet.")
+            (
+                "classical_secure",
+                "info",
+                "Classical host key — no PQC host-key format ships yet.",
+            )
         } else {
             ("unknown", "low", "Unrecognized host key type.")
         };
-        out.push(comp("ssh_host_key", &format!("SSH host key {}", k.key_type), note.to_string(), Some(k.key_type.clone()), pqc, sev));
+        out.push(comp(
+            "ssh_host_key",
+            &format!("SSH host key {}", k.key_type),
+            note.to_string(),
+            Some(k.key_type.clone()),
+            pqc,
+            sev,
+        ));
     }
 
     // Certificates from the host store.
@@ -241,13 +305,37 @@ fn classify(r: &EndpointReport) -> Vec<EndpointComponent> {
             ("classical_secure", "info")
         };
         let subj = c.subject.clone().unwrap_or_else(|| "(certificate)".into());
-        out.push(comp("certificate", &subj, format!("Signature: {}", if sig.is_empty() { "unknown".into() } else { sig.clone() }), Some(sig), pqc, sev));
+        out.push(comp(
+            "certificate",
+            &subj,
+            format!(
+                "Signature: {}",
+                if sig.is_empty() {
+                    "unknown".into()
+                } else {
+                    sig.clone()
+                }
+            ),
+            Some(sig),
+            pqc,
+            sev,
+        ));
     }
 
     // Crypto libraries (informational inventory).
     for l in &r.crypto_libraries {
         let v = l.version.clone().unwrap_or_default();
-        out.push(comp("crypto_library", &l.name, format!("version {}", if v.is_empty() { "unknown".into() } else { v }), None, "unknown", "info"));
+        out.push(comp(
+            "crypto_library",
+            &l.name,
+            format!(
+                "version {}",
+                if v.is_empty() { "unknown".into() } else { v }
+            ),
+            None,
+            "unknown",
+            "info",
+        ));
     }
 
     out
@@ -306,7 +394,10 @@ pub async fn list_endpoints(
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
     let eps = state.store.list_endpoints(&tenant);
-    let vulnerable = eps.iter().filter(|e| matches!(e.pqc_status.as_str(), "classical_weak" | "classical_secure")).count();
+    let vulnerable = eps
+        .iter()
+        .filter(|e| matches!(e.pqc_status.as_str(), "classical_weak" | "classical_secure"))
+        .count();
     Json(json!({
         "endpoints": eps,
         "total": eps.len(),
@@ -348,17 +439,34 @@ pub async fn report(
 ) -> impl IntoResponse {
     // Validate the agent token if auth is enabled.
     if state.auth_manager.enabled() {
-        let presented = headers.get("x-qw-agent-token").and_then(|v| v.to_str().ok()).unwrap_or("");
+        let presented = headers
+            .get("x-qw-agent-token")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
         if presented.is_empty() || presented != state.agent_enroll_token.as_str() {
-            return (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid or missing agent token" }))).into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid or missing agent token" })),
+            )
+                .into_response();
         }
     }
     let body: EndpointReport = match serde_json::from_value(raw.clone()) {
         Ok(b) => b,
-        Err(e) => return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("invalid report: {e}") }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("invalid report: {e}") })),
+            )
+                .into_response()
+        }
     };
     if body.hostname.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "hostname is required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "hostname is required" })),
+        )
+            .into_response();
     }
 
     let tenant = qw_store::DEFAULT_TENANT.to_string();
@@ -374,7 +482,9 @@ pub async fn report(
 
     // Reuse an existing endpoint (same hostname) so re-reports update in place.
     let now = chrono::Utc::now();
-    let existing = state.store.find_endpoint_by_hostname(&tenant, &body.hostname);
+    let existing = state
+        .store
+        .find_endpoint_by_hostname(&tenant, &body.hostname);
     let (id, enrolled_at) = match &existing {
         Some(e) => (e.id.clone(), e.enrolled_at),
         None => (uuid::Uuid::new_v4().to_string(), now),
@@ -409,7 +519,13 @@ pub async fn report(
     };
     let scan_target = ScanTarget::network_host(&body.hostname);
     state.store.record_scan(&tenant, &result, &scan_target);
-    crate::background::recompute_and_snapshot(&state, &tenant, std::slice::from_ref(&result), "host-agent").await;
+    crate::background::recompute_and_snapshot(
+        &state,
+        &tenant,
+        std::slice::from_ref(&result),
+        "host-agent",
+    )
+    .await;
 
     let _ = state
         .audit_logger

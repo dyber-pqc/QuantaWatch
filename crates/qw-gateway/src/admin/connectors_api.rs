@@ -74,10 +74,7 @@ pub async fn get_connectors(
         .collect();
 
     // Assets discovered by any cloud/k8s source (i.e. not declared in config).
-    let cloud_assets = assets
-        .iter()
-        .filter(|a| a.source != "config")
-        .count();
+    let cloud_assets = assets.iter().filter(|a| a.source != "config").count();
 
     Json(json!({
         "connectors": connectors,

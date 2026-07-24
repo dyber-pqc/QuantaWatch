@@ -73,7 +73,12 @@ where
         let _ = tx.send(true);
     });
 
-    let proxy = tokio::spawn(serve_listener(proxy_app, listen_addr, tls.clone(), rx_proxy));
+    let proxy = tokio::spawn(serve_listener(
+        proxy_app,
+        listen_addr,
+        tls.clone(),
+        rx_proxy,
+    ));
     let admin = tokio::spawn(serve_listener(admin_app, admin_addr, tls, rx_admin));
 
     // Either listener finishing (graceful stop or error) ends the run.
@@ -96,18 +101,16 @@ async fn serve_listener(
 ) -> Result<()> {
     match tls {
         Some(tls) => {
-            let rustls_cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(
-                &tls.cert_file,
-                &tls.key_file,
-            )
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "loading gateway TLS cert '{}' / key '{}': {e}",
-                    tls.cert_file,
-                    tls.key_file
-                )
-            })?;
+            let rustls_cfg =
+                axum_server::tls_rustls::RustlsConfig::from_pem_file(&tls.cert_file, &tls.key_file)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "loading gateway TLS cert '{}' / key '{}': {e}",
+                            tls.cert_file,
+                            tls.key_file
+                        )
+                    })?;
 
             let handle = axum_server::Handle::new();
             let drain = handle.clone();

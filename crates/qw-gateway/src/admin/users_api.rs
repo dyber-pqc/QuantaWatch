@@ -18,7 +18,11 @@ use crate::state::AppState;
 
 /// Roles a user may be assigned (built-ins plus any custom role from the config).
 fn known_roles(state: &AppState) -> Vec<String> {
-    let mut roles = vec!["admin".to_string(), "operator".to_string(), "viewer".to_string()];
+    let mut roles = vec![
+        "admin".to_string(),
+        "operator".to_string(),
+        "viewer".to_string(),
+    ];
     for name in state.config.auth.roles.keys() {
         if !roles.contains(name) {
             roles.push(name.clone());
@@ -32,7 +36,10 @@ pub async fn list_users(
     State(state): State<AppState>,
     ctx: Option<Extension<AuthContext>>,
 ) -> impl IntoResponse {
-    let me = ctx.as_ref().map(|c| c.principal.clone()).unwrap_or_default();
+    let me = ctx
+        .as_ref()
+        .map(|c| c.principal.clone())
+        .unwrap_or_default();
     let config_users: Vec<_> = state
         .config
         .auth
@@ -72,21 +79,47 @@ pub async fn create_user(
     let tenant = tenant_of(&ctx);
     let username = body.username.trim().to_string();
     if username.is_empty() || body.password.len() < 8 {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "username required and password must be at least 8 characters" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(
+                json!({ "error": "username required and password must be at least 8 characters" }),
+            ),
+        )
+            .into_response();
     }
     if !known_roles(&state).iter().any(|r| r == &body.role) {
         return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("unknown role '{}'", body.role), "roles": known_roles(&state) }))).into_response();
     }
     // Don't shadow a config-declared user (config wins at login, so it'd confuse).
-    if state.config.auth.users.iter().any(|u| u.username == username) {
-        return (StatusCode::CONFLICT, Json(json!({ "error": "a config-defined user already has that name" }))).into_response();
+    if state
+        .config
+        .auth
+        .users
+        .iter()
+        .any(|u| u.username == username)
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "a config-defined user already has that name" })),
+        )
+            .into_response();
     }
     if state.store.get_user(&username).is_some() {
-        return (StatusCode::CONFLICT, Json(json!({ "error": "user already exists" }))).into_response();
+        return (
+            StatusCode::CONFLICT,
+            Json(json!({ "error": "user already exists" })),
+        )
+            .into_response();
     }
     let password_hash = match hash_password(&body.password) {
         Ok(h) => h,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("hash failed: {e}") }))).into_response(),
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("hash failed: {e}") })),
+            )
+                .into_response()
+        }
     };
     let user = qw_store::DbUser {
         username: username.clone(),
@@ -115,21 +148,39 @@ pub async fn update_user(
     Json(body): Json<UpdateUser>,
 ) -> impl IntoResponse {
     let Some(mut user) = state.store.get_user(&username) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such runtime user (config users are edited in the YAML)" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "no such runtime user (config users are edited in the YAML)" })),
+        )
+            .into_response();
     };
     if let Some(role) = body.role {
         if !known_roles(&state).iter().any(|r| r == &role) {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("unknown role '{role}'") }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": format!("unknown role '{role}'") })),
+            )
+                .into_response();
         }
         user.role = role;
     }
     if let Some(pw) = body.password {
         if pw.len() < 8 {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "password must be at least 8 characters" }))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": "password must be at least 8 characters" })),
+            )
+                .into_response();
         }
         match hash_password(&pw) {
             Ok(h) => user.password_hash = h,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("hash failed: {e}") }))).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": format!("hash failed: {e}") })),
+                )
+                    .into_response()
+            }
         }
     }
     state.store.upsert_user(&user);
@@ -142,11 +193,25 @@ pub async fn delete_user(
     ctx: Option<Extension<AuthContext>>,
     Path(username): Path<String>,
 ) -> impl IntoResponse {
-    if ctx.as_ref().map(|c| c.principal == username).unwrap_or(false) {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "you can't delete the account you're signed in as" }))).into_response();
+    if ctx
+        .as_ref()
+        .map(|c| c.principal == username)
+        .unwrap_or(false)
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "you can't delete the account you're signed in as" })),
+        )
+            .into_response();
     }
     if state.store.get_user(&username).is_none() {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "no such runtime user (config users are removed from the YAML)" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(
+                json!({ "error": "no such runtime user (config users are removed from the YAML)" }),
+            ),
+        )
+            .into_response();
     }
     state.store.delete_user(&username);
     // Also drop any live sessions for that user so access is revoked immediately.

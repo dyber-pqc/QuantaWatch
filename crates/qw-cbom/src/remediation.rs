@@ -162,7 +162,11 @@ fn classify(f: &FindingRecord) -> (MigrationStrategy, &'static str) {
 /// True when a data store reports no encryption at rest at all.
 fn is_unencrypted(f: &FindingRecord) -> bool {
     let a = f.algorithm.clone().unwrap_or_default().to_lowercase();
-    a.is_empty() || matches!(a.as_str(), "none" | "off" | "disabled" | "plaintext" | "false")
+    a.is_empty()
+        || matches!(
+            a.as_str(),
+            "none" | "off" | "disabled" | "plaintext" | "false"
+        )
 }
 
 fn priority_of(f: &FindingRecord, strategy: MigrationStrategy) -> MigrationPriority {
@@ -251,7 +255,10 @@ fn build_patch(
         MigrationStrategy::EncryptAtRest => Some(MigrationPatch {
             path: loc.clone(),
             kind: "encryption-at-rest".into(),
-            before: format!("# encryption at rest: {}", if a == "classical" { "none" } else { &a }),
+            before: format!(
+                "# encryption at rest: {}",
+                if a == "classical" { "none" } else { &a }
+            ),
             after: "# enable AES-256 at rest, e.g.:\n\
                     #   storage: { encryption: { algorithm: AES-256-GCM, kms_key: <arn> } }\n\
                     # BitLocker: -EncryptionMethod XtsAes256 · LUKS: aes-xts-plain64 (512-bit)\n\

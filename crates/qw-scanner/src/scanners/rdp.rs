@@ -9,6 +9,7 @@
 //!     trivially broken by a quantum computer;
 //!   * **Enhanced RDP Security (TLS)** — RDP tunnelled in TLS;
 //!   * **CredSSP / NLA** — TLS plus network-level authentication;
+//!
 //! and, whenever the server speaks TLS, completes a TLS handshake (reusing the
 //! TLS scanner) to fingerprint the actual key exchange and certificate. A
 //! classical TLS key exchange means the session is harvestable.
@@ -64,7 +65,7 @@ impl RdpScanner {
     /// supports). TPKT + X.224 CR + RDP_NEG_REQ.
     fn build_connection_request() -> Vec<u8> {
         let requested = PROTOCOL_SSL | PROTOCOL_HYBRID | PROTOCOL_HYBRID_EX; // 0x0B
-        // RDP_NEG_REQ: type(1)=0x01, flags(1)=0, length(2 LE)=8, requestedProtocols(4 LE).
+                                                                             // RDP_NEG_REQ: type(1)=0x01, flags(1)=0, length(2 LE)=8, requestedProtocols(4 LE).
         let mut neg = vec![0x01u8, 0x00, 0x08, 0x00];
         neg.extend_from_slice(&requested.to_le_bytes());
         // X.224 CR: LI(1), CR-CDT(0xE0), DST-REF(2)=0, SRC-REF(2)=0, class(1)=0, + neg.
@@ -107,7 +108,9 @@ impl RdpScanner {
 
         // X.224 CC: LI(1), code(1), DST-REF(2), SRC-REF(2), class(1), [RDP_NEG_*].
         if body.len() < 7 {
-            return Err(ScannerError::ParseError("short X.224 Connection Confirm".into()));
+            return Err(ScannerError::ParseError(
+                "short X.224 Connection Confirm".into(),
+            ));
         }
         let li = body[0] as usize;
         let code = body[1];
@@ -260,7 +263,11 @@ impl Scanner for RdpScanner {
         } else {
             format!("{}:3389", target.address)
         };
-        let host = address.split(':').next().unwrap_or(&target.address).to_string();
+        let host = address
+            .split(':')
+            .next()
+            .unwrap_or(&target.address)
+            .to_string();
         let timeout = Duration::from_secs(self.timeout_secs.max(3));
 
         let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&address))
@@ -318,7 +325,10 @@ mod tests {
         // RDP_NEG_REQ type + requestedProtocols = SSL|HYBRID|HYBRID_EX.
         assert_eq!(pkt[11], 0x01);
         let requested = u32::from_le_bytes([pkt[15], pkt[16], pkt[17], pkt[18]]);
-        assert_eq!(requested, PROTOCOL_SSL | PROTOCOL_HYBRID | PROTOCOL_HYBRID_EX);
+        assert_eq!(
+            requested,
+            PROTOCOL_SSL | PROTOCOL_HYBRID | PROTOCOL_HYBRID_EX
+        );
     }
 
     fn confirm(neg: Option<(u8, u32)>) -> Vec<u8> {
@@ -368,7 +378,11 @@ mod tests {
         assert_eq!(f.severity, FindingSeverity::High);
 
         // Explicit RDP_NEG_FAILURE: SSL not allowed -> weak.
-        let out = parse(confirm(Some((TYPE_RDP_NEG_FAILURE, SSL_NOT_ALLOWED_BY_SERVER)))).await;
+        let out = parse(confirm(Some((
+            TYPE_RDP_NEG_FAILURE,
+            SSL_NOT_ALLOWED_BY_SERVER,
+        ))))
+        .await;
         assert!(matches!(out, NegOutcome::Failure(c) if c == SSL_NOT_ALLOWED_BY_SERVER));
         let (f, _) = RdpScanner::security_finding("h", "h:3389", out);
         assert_eq!(f.pqc_status, PqcStatus::ClassicalWeak);

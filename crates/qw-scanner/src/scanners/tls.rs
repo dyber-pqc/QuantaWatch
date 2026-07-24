@@ -179,7 +179,11 @@ impl Scanner for TlsScanner {
         } else {
             format!("{}:443", target.address)
         };
-        let host = address.split(':').next().unwrap_or(&target.address).to_string();
+        let host = address
+            .split(':')
+            .next()
+            .unwrap_or(&target.address)
+            .to_string();
 
         let timeout = Duration::from_secs(self.config.timeout_secs);
         let tcp = tokio::time::timeout(timeout, TcpStream::connect(&address))
@@ -279,7 +283,7 @@ fn findings_from_conn(
         } else {
             None
         },
-        pqc_status: overall_pqc.clone(),
+        pqc_status: overall_pqc,
         metadata: std::collections::HashMap::from([
             ("tls_version".to_string(), tls_version_display.to_string()),
             ("cipher_suite".to_string(), cipher_suite),
@@ -300,19 +304,19 @@ fn findings_from_conn(
                 let subject = parsed.subject().to_string();
                 let not_after = parsed.validity().not_after.to_datetime();
 
-                let cert_pqc =
-                    if sig_alg_lc.contains("ml-dsa") || sig_alg_lc.contains("dilithium") {
-                        PqcStatus::PqcReady
-                    } else if sig_alg_lc.contains("ecdsa")
-                        || sig_alg_lc.contains("rsa")
-                        || sig_alg_lc.contains("ed25519")
-                        || sig_alg_lc.contains("ed448")
-                        || sig_alg_lc.contains("dsa")
-                    {
-                        PqcStatus::ClassicalSecure
-                    } else {
-                        PqcStatus::Unknown
-                    };
+                let cert_pqc = if sig_alg_lc.contains("ml-dsa") || sig_alg_lc.contains("dilithium")
+                {
+                    PqcStatus::PqcReady
+                } else if sig_alg_lc.contains("ecdsa")
+                    || sig_alg_lc.contains("rsa")
+                    || sig_alg_lc.contains("ed25519")
+                    || sig_alg_lc.contains("ed448")
+                    || sig_alg_lc.contains("dsa")
+                {
+                    PqcStatus::ClassicalSecure
+                } else {
+                    PqcStatus::Unknown
+                };
 
                 // Convert time::OffsetDateTime to chrono::DateTime<Utc>
                 let not_after_chrono = chrono::DateTime::<Utc>::from_timestamp(
@@ -342,7 +346,9 @@ fn findings_from_conn(
                     category: cert_category,
                     severity: cert_severity,
                     title: format!("Certificate #{} for {host}", i + 1),
-                    description: format!("Subject: {subject}, Issuer: {issuer}, Signature: {sig_alg}"),
+                    description: format!(
+                        "Subject: {subject}, Issuer: {issuer}, Signature: {sig_alg}"
+                    ),
                     asset: CryptoAsset {
                         id: uuid::Uuid::new_v4().to_string(),
                         asset_type: CryptoAssetType::Certificate,

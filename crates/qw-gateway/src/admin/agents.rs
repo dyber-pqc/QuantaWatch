@@ -124,7 +124,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     Some(info) => {
                         let info = info.value();
                         (
-                            info.pqc_status.clone(),
+                            info.pqc_status,
                             Some(info.tls_version.clone()),
                             Some(info.cipher_suite.clone()),
                             PostureEngine::score_service(info),
@@ -150,7 +150,7 @@ pub async fn list_agents(State(state): State<AppState>) -> impl IntoResponse {
                     .partial_cmp(&b.score)
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
-            .map(|p| (p.score, p.pqc_status.clone()))
+            .map(|p| (p.score, p.pqc_status))
             .unwrap_or((100.0, PqcStatus::Unknown));
 
         providers.sort_by(|a, b| {

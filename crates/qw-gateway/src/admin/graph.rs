@@ -30,7 +30,7 @@ pub fn build_graph(
             let v = e.value();
             qw_graph::ProviderChannel {
                 name: e.key().clone(),
-                pqc_status: v.pqc_status.clone(),
+                pqc_status: v.pqc_status,
                 tls_version: v.tls_version.clone(),
                 endpoint: v.endpoint.clone(),
             }
@@ -85,7 +85,6 @@ pub fn build_graph(
     };
     qw_graph::build_graph(&inputs, overrides)
 }
-
 
 pub async fn get_attack_paths(
     State(state): State<AppState>,
@@ -246,7 +245,7 @@ pub async fn remediate_path(
             discovered_at: chrono::Utc::now(),
         },
         remediation: Some(ap.recommendation.clone()),
-        pqc_status: ap.channel_pqc.clone(),
+        pqc_status: ap.channel_pqc,
         metadata: std::collections::HashMap::new(),
     };
     let opts = qw_integrations::RemediationOpts {

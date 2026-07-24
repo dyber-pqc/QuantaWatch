@@ -232,10 +232,7 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
         .providers
         .iter()
         .map(|c| {
-            let status = overrides
-                .get(&c.name)
-                .cloned()
-                .unwrap_or_else(|| c.pqc_status.clone());
+            let status = overrides.get(&c.name).cloned().unwrap_or(c.pqc_status);
             (
                 c.name.clone(),
                 (status, c.tls_version.clone(), c.endpoint.clone()),
@@ -271,7 +268,7 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
             let host = host_of(&f.location);
             let e = cert_by_host.entry(host).or_insert(PqcStatus::PqcReady);
             if channel_weight(&f.pqc_status) > channel_weight(e) {
-                *e = f.pqc_status.clone();
+                *e = f.pqc_status;
             }
         }
     }
@@ -460,10 +457,7 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
                 observed,
             });
 
-            let channel_status = providers
-                .get(p)
-                .map(|i| i.0.clone())
-                .unwrap_or(PqcStatus::Unknown);
+            let channel_status = providers.get(p).map(|i| i.0).unwrap_or(PqcStatus::Unknown);
             let cw = channel_weight(&channel_status);
             if cw <= 0.0 {
                 continue;
@@ -554,7 +548,7 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
                     agent: "—".into(),
                     provider: "—".into(),
                     tls_version: None,
-                    channel_pqc: f.pqc_status.clone(),
+                    channel_pqc: f.pqc_status,
                     node_ids: vec![did],
                     recommendation: format!(
                         "Replace {lib} with a maintained, PQC-capable library ({}).",
@@ -650,7 +644,9 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
         let host_status = parse_status(&t.pqc_status);
         let host_air = is_air_gapped(&t.tags);
         let prod = t.environment.to_lowercase().contains("prod")
-            || t.tags.iter().any(|x| x.contains("external") || x.contains("customer"));
+            || t.tags
+                .iter()
+                .any(|x| x.contains("external") || x.contains("customer"));
         let env_weight = if prod { 0.95 } else { 0.6 };
         push(
             &mut nodes,
@@ -668,7 +664,11 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
                     }
                 },
                 pqc_status: t.pqc_status.clone(),
-                risk: if host_air { 0.0 } else { channel_weight(&host_status) * 100.0 },
+                risk: if host_air {
+                    0.0
+                } else {
+                    channel_weight(&host_status) * 100.0
+                },
                 blast_radius: 0.0,
                 observed: false,
             },
@@ -687,7 +687,11 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
                     sublabel: format!(
                         "{} · {}",
                         t.host,
-                        if s.exposed { "exposed" } else { "internal (loopback)" }
+                        if s.exposed {
+                            "exposed"
+                        } else {
+                            "internal (loopback)"
+                        }
                     ),
                     pqc_status: s.pqc_status.clone(),
                     risk: channel_weight(&svc_status) * 100.0,
@@ -719,7 +723,10 @@ pub fn build_graph(inputs: &GraphInputs, overrides: &HashMap<String, PqcStatus>)
                 continue;
             }
             *blast.entry(host_id.clone()).or_insert(0.0) += cw * env_weight;
-            let hndl = matches!(svc_status, PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak);
+            let hndl = matches!(
+                svc_status,
+                PqcStatus::ClassicalSecure | PqcStatus::ClassicalWeak
+            );
             paths.push(AttackPath {
                 id: format!("service:{}:{}", t.id, s.port),
                 title: format!("{}:{} ({}) exposes a quantum-vulnerable channel", t.host, s.port, s.service),

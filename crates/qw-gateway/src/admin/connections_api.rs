@@ -116,7 +116,11 @@ pub async fn create_connection(
             .into_response();
     }
     if body.token.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "token is required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "token is required" })),
+        )
+            .into_response();
     }
     let opt = |s: Option<String>| s.filter(|v| !v.trim().is_empty());
     let row = ConnectionRow {
@@ -164,15 +168,30 @@ pub async fn test_connection(
     }
     let tenant = tenant_of(&ctx);
     let Some(mut row) = state.store.get_connection(&tenant, &id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "connection not found" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "connection not found" })),
+        )
+            .into_response();
     };
     let Some(integration) = qw_integrations::build_one(&to_config(&row)) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "could not construct integration" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "could not construct integration" })),
+        )
+            .into_response();
     };
     match integration.test_connection().await {
         Ok(status) => {
             row.last_tested = Some(chrono::Utc::now());
-            row.last_status = Some(if status.connected { "connected" } else { "failed" }.to_string());
+            row.last_status = Some(
+                if status.connected {
+                    "connected"
+                } else {
+                    "failed"
+                }
+                .to_string(),
+            );
             row.last_user = status.user.clone();
             state.store.upsert_connection(&tenant, &row);
             Json(json!({ "connection": masked(&row), "status": status })).into_response()
@@ -181,7 +200,11 @@ pub async fn test_connection(
             row.last_tested = Some(chrono::Utc::now());
             row.last_status = Some("failed".to_string());
             state.store.upsert_connection(&tenant, &row);
-            (StatusCode::BAD_GATEWAY, Json(json!({ "error": e.to_string() }))).into_response()
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response()
         }
     }
 }
@@ -198,10 +221,18 @@ pub async fn scan_connection(
     }
     let tenant = tenant_of(&ctx);
     let Some(mut row) = state.store.get_connection(&tenant, &id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": "connection not found" }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "connection not found" })),
+        )
+            .into_response();
     };
     let Some(integration) = qw_integrations::build_one(&to_config(&row)) else {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "could not construct integration" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "could not construct integration" })),
+        )
+            .into_response();
     };
 
     let mut result = match run_integration_scan(&state, &tenant, integration.as_ref(), &id).await {
@@ -264,7 +295,11 @@ fn migration_plan(result: &serde_json::Value) -> Vec<serde_json::Value> {
                         .filter(|s| !s.is_empty())
                         .unwrap_or("classical crypto")
                         .to_string();
-                    let sev = f.get("severity").and_then(|v| v.as_str()).unwrap_or("medium").to_string();
+                    let sev = f
+                        .get("severity")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("medium")
+                        .to_string();
                     let loc = f
                         .get("asset")
                         .and_then(|a| a.get("location"))
@@ -272,7 +307,9 @@ fn migration_plan(result: &serde_json::Value) -> Vec<serde_json::Value> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let entry = by_algo.entry(algo).or_insert((0, sev.clone(), BTreeMap::new()));
+                    let entry = by_algo
+                        .entry(algo)
+                        .or_insert((0, sev.clone(), BTreeMap::new()));
                     entry.0 += 1;
                     // Keep the highest severity seen.
                     if sev_rank(&sev) > sev_rank(&entry.1) {

@@ -154,8 +154,11 @@ pub async fn put_settings(
     // Clamp to sane bounds.
     s.max_scan_concurrency = s.max_scan_concurrency.min(256);
     s.finding_retention_days = s.finding_retention_days.min(3650);
-    s.disabled_scanners
-        .retain(|d| KNOWN_SCANNERS.iter().any(|(id, _)| id.eq_ignore_ascii_case(d)));
+    s.disabled_scanners.retain(|d| {
+        KNOWN_SCANNERS
+            .iter()
+            .any(|(id, _)| id.eq_ignore_ascii_case(d))
+    });
 
     let json = serde_json::to_string(&s).unwrap_or_default();
     state.store.put_settings(&tenant, &json);

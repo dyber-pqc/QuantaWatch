@@ -313,7 +313,7 @@ impl Scanner for CodeScanner {
                         findings.push(Finding {
                             id: uuid::Uuid::new_v4().to_string(),
                             category: pat.category.clone(),
-                            severity: pat.severity.clone(),
+                            severity: pat.severity,
                             title: pat.title.to_string(),
                             description: format!(
                                 "{} ({}:{}): {}",
@@ -338,7 +338,7 @@ impl Scanner for CodeScanner {
                                 discovered_at: Utc::now(),
                             },
                             remediation: remediation_for(&pat.category, matched, &ext),
-                            pqc_status: pat.pqc_status.clone(),
+                            pqc_status: pat.pqc_status,
                             metadata: HashMap::new(),
                         });
                         if findings.len() >= MAX_FINDINGS {
@@ -494,6 +494,9 @@ mod tests {
         assert!(CodeScanner::should_skip_dir("target", &[]));
         assert!(CodeScanner::should_skip_dir("node_modules", &[]));
         assert!(!CodeScanner::should_skip_dir("src", &[]));
-        assert!(CodeScanner::should_skip_dir("vendor", &["vendor".to_string()]));
+        assert!(CodeScanner::should_skip_dir(
+            "vendor",
+            &["vendor".to_string()]
+        ));
     }
 }

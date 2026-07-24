@@ -104,7 +104,7 @@ impl PostureEngine {
                 provider: provider.provider_name.clone(),
                 score,
                 tls_version: Some(provider.tls_version.clone()),
-                pqc_status: provider.pqc_status.clone(),
+                pqc_status: provider.pqc_status,
             });
         }
 

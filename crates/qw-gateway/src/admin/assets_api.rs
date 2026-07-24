@@ -47,7 +47,10 @@ pub async fn create_asset(
         )
             .into_response();
     }
-    let status = body.pqc_status.filter(|s| !s.is_empty()).unwrap_or_else(|| "unknown".to_string());
+    let status = body
+        .pqc_status
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
     let asset = qw_store::AssetRow {
         // Stable id from the address so re-adding the same asset updates it.
         id: format!("manual:{address}"),

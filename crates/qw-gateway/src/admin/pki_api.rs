@@ -13,7 +13,12 @@ use serde_json::json;
 use crate::auth::{tenant_of, AuthContext};
 use crate::state::AppState;
 
-fn ca_or_503(state: &AppState) -> Result<&std::sync::Arc<crate::pki::CertAuthority>, axum::response::Response> {
+// The Err arm is an axum Response (intentionally large); boxing it here would
+// only add an allocation to the 503 path.
+#[allow(clippy::result_large_err)]
+fn ca_or_503(
+    state: &AppState,
+) -> Result<&std::sync::Arc<crate::pki::CertAuthority>, axum::response::Response> {
     match &state.ca {
         Some(ca) => Ok(ca),
         None => Err((
@@ -63,7 +68,11 @@ pub async fn issue(
         Err(r) => return r,
     };
     if body.subject.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "subject is required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "subject is required" })),
+        )
+            .into_response();
     }
     let hybrid = body.key_type.as_deref() != Some("classical");
     let days = body
@@ -150,7 +159,12 @@ pub async fn renew(
     };
     let hybrid = prev.key_type == "hybrid";
     let days = state.config.pki.default_validity_days;
-    let sans: Vec<String> = prev.sans.iter().filter(|s| **s != prev.subject).cloned().collect();
+    let sans: Vec<String> = prev
+        .sans
+        .iter()
+        .filter(|s| **s != prev.subject)
+        .cloned()
+        .collect();
 
     match ca.issue(&prev.subject, &sans, days, hybrid) {
         Ok((row, key_pem)) => {

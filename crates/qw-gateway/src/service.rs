@@ -85,17 +85,16 @@ fn run_service(arguments: Vec<OsString>) -> Result<()> {
 
     // Bridge the SCM's stop control into an async shutdown signal.
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>();
-    let status_handle = service_control_handler::register(SERVICE_NAME, move |control| {
-        match control {
+    let status_handle =
+        service_control_handler::register(SERVICE_NAME, move |control| match control {
             ServiceControl::Stop | ServiceControl::Shutdown => {
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
             }
             ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
             _ => ServiceControlHandlerResult::NotImplemented,
-        }
-    })
-    .map_err(|e| anyhow!("could not register control handler: {e}"))?;
+        })
+        .map_err(|e| anyhow!("could not register control handler: {e}"))?;
 
     let set_status = |state: ServiceState, accept: ServiceControlAccept, wait: Duration| {
         status_handle.set_service_status(ServiceStatus {
@@ -141,7 +140,9 @@ fn run_service(arguments: Vec<OsString>) -> Result<()> {
         Duration::default(),
     )?;
 
-    let result = worker.join().unwrap_or_else(|_| Err(anyhow!("service worker panicked")));
+    let result = worker
+        .join()
+        .unwrap_or_else(|_| Err(anyhow!("service worker panicked")));
 
     set_status(
         ServiceState::Stopped,
@@ -244,7 +245,11 @@ pub fn install(config_path: &str, account: Option<&str>) -> Result<()> {
         error_control: ServiceErrorControl::Normal,
         executable_path: exe,
         // argv[0] is the exe; these follow it -> arguments[1] = config path.
-        launch_arguments: vec![OsString::from("service"), OsString::from("run"), OsString::from(&config)],
+        launch_arguments: vec![
+            OsString::from("service"),
+            OsString::from("run"),
+            OsString::from(&config),
+        ],
         dependencies: vec![],
         // A virtual account has no password; Windows manages it.
         account_name,
@@ -272,7 +277,9 @@ pub fn install(config_path: &str, account: Option<&str>) -> Result<()> {
     println!("  logs   : {state_dir}\\quantawatch-service.log");
     println!("\nStart it with:  sc start {SERVICE_NAME}");
     println!("Configure auto-restart on failure:");
-    println!("  sc failure {SERVICE_NAME} reset= 86400 actions= restart/5000/restart/5000/restart/30000");
+    println!(
+        "  sc failure {SERVICE_NAME} reset= 86400 actions= restart/5000/restart/5000/restart/30000"
+    );
     Ok(())
 }
 
@@ -306,7 +313,9 @@ pub fn uninstall() -> Result<()> {
         }
     }
 
-    service.delete().map_err(|e| anyhow!("delete service: {e}"))?;
+    service
+        .delete()
+        .map_err(|e| anyhow!("delete service: {e}"))?;
     println!("Removed service '{SERVICE_NAME}'");
     Ok(())
 }

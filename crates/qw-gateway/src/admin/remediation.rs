@@ -9,7 +9,10 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use qw_integrations::RemediationOpts;
-use qw_scanner::{AssetLocation, CryptoAsset, CryptoAssetType, Finding, FindingRecord, PqcStatus, ScanTarget, Scanner};
+use qw_scanner::{
+    AssetLocation, CryptoAsset, CryptoAssetType, Finding, FindingRecord, PqcStatus, ScanTarget,
+    Scanner,
+};
 
 use crate::auth::{tenant_of, AuthContext};
 use crate::config::AssetConfig;
@@ -17,7 +20,10 @@ use crate::state::AppState;
 
 /// Trailing `:port` of a location like `host:443`, if present.
 fn port_of(location: &str) -> Option<u16> {
-    location.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
+    location
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
 }
 
 /// Worse posture ranks lower — used to pick the worst finding on a port and to
@@ -127,7 +133,7 @@ pub(crate) fn finding_from_record(r: &FindingRecord) -> Finding {
     Finding {
         id: r.id.clone(),
         category: r.category.clone(),
-        severity: r.severity.clone(),
+        severity: r.severity,
         title: r.title.clone(),
         description: r.description.clone(),
         asset: CryptoAsset {
@@ -146,7 +152,7 @@ pub(crate) fn finding_from_record(r: &FindingRecord) -> Finding {
             discovered_at: r.created_at,
         },
         remediation: r.remediation.clone(),
-        pqc_status: r.pqc_status.clone(),
+        pqc_status: r.pqc_status,
         metadata: HashMap::new(),
     }
 }
@@ -291,14 +297,13 @@ pub async fn verify_finding(
     // Actively re-probe the endpoint's host with the network scanner (a declared
     // finding is authorized to re-check). It port-scans and fingerprints
     // TLS/SSH/RDP just like the Estate sweep.
-    let scanner = qw_scanner::scanners::network::NetworkScanner::new(
-        qw_scanner::NetworkScannerConfig {
+    let scanner =
+        qw_scanner::scanners::network::NetworkScanner::new(qw_scanner::NetworkScannerConfig {
             enabled: true,
             connect_timeout_ms: 1500,
             ports: qw_scanner::NetworkScannerConfig::default().ports,
             targets: vec![],
-        },
-    );
+        });
     let result = match scanner.scan(&ScanTarget::network_host(&host)).await {
         Ok(r) => r,
         Err(e) => {
@@ -310,7 +315,7 @@ pub async fn verify_finding(
         }
     };
 
-    let before = record.pqc_status.clone();
+    let before = record.pqc_status;
     // Worst fresh posture seen on the same port. `None` means nothing crypto-
     // relevant answered on that port during the re-check — which could be a
     // removed service OR simply an unreachable host. We must NOT treat that as
@@ -320,7 +325,7 @@ pub async fn verify_finding(
         .findings
         .iter()
         .filter(|f| port_of(&f.asset.location.path) == port)
-        .map(|f| f.pqc_status.clone())
+        .map(|f| f.pqc_status)
         .min_by_key(pqc_rank);
 
     let (after, resolved, improved, detail) = match fresh {
@@ -335,12 +340,12 @@ pub async fn verify_finding(
                 format!("{location} still reports {after} — the fix isn't live on this endpoint yet. (An overlay fix runs on a separate port; point clients there.)")
             };
             // Persist the fresh posture so a resolved finding leaves the list.
-            record.pqc_status = after.clone();
+            record.pqc_status = after;
             state.store.update_finding(&tenant, &record);
             (after, resolved, improved, detail)
         }
         None => (
-            before.clone(),
+            before,
             false,
             false,
             format!(
@@ -359,7 +364,14 @@ pub async fn verify_finding(
                 scanner_id: "verify".to_string(),
                 target: location.clone(),
                 finding_count: result.findings.len() as u32,
-                status: if resolved { "resolved" } else if improved { "improved" } else { "unchanged" }.to_string(),
+                status: if resolved {
+                    "resolved"
+                } else if improved {
+                    "improved"
+                } else {
+                    "unchanged"
+                }
+                .to_string(),
             },
         )
         .await;
@@ -477,7 +489,12 @@ pub async fn apply_fix(
         let Some(ca) = &state.ca else {
             return Json(json!({ "applied": false, "reason": "The internal PKI/CA is not configured (set pki.enabled)." })).into_response();
         };
-        match ca.issue(&host, &[host.clone()], state.config.pki.default_validity_days, true) {
+        match ca.issue(
+            &host,
+            std::slice::from_ref(&host),
+            state.config.pki.default_validity_days,
+            true,
+        ) {
             Ok((row, _key_pem)) => {
                 state.store.record_certificate(&tenant, &row);
                 for s in target.exposed_services.iter_mut() {
@@ -496,7 +513,13 @@ pub async fn apply_fix(
                 .into_response();
             }
             Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "applied": false, "reason": format!("cert issuance failed: {e}") }))).into_response();
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(
+                        json!({ "applied": false, "reason": format!("cert issuance failed: {e}") }),
+                    ),
+                )
+                    .into_response();
             }
         }
     }

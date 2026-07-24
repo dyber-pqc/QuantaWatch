@@ -143,7 +143,10 @@ pub struct PolicyResult {
 impl PolicyResult {
     /// The set of violation fingerprints — the drift baseline for this policy.
     pub fn fingerprints(&self) -> Vec<String> {
-        self.violations.iter().map(|v| v.fingerprint.clone()).collect()
+        self.violations
+            .iter()
+            .map(|v| v.fingerprint.clone())
+            .collect()
     }
 }
 
@@ -204,9 +207,9 @@ fn parse_severity(s: &str) -> Option<FindingSeverity> {
 /// finding's location), if any.
 fn asset_for<'a>(location: &str, assets: &'a [AssetContext]) -> Option<&'a AssetContext> {
     let loc = location.to_lowercase();
-    assets.iter().find(|a| {
-        !a.address.is_empty() && loc.contains(&a.address.to_lowercase())
-    })
+    assets
+        .iter()
+        .find(|a| !a.address.is_empty() && loc.contains(&a.address.to_lowercase()))
 }
 
 fn selector_matches(sel: &PolicySelector, f: &FindingRecord, assets: &[AssetContext]) -> bool {
@@ -228,7 +231,12 @@ fn selector_matches(sel: &PolicySelector, f: &FindingRecord, assets: &[AssetCont
                 return false;
             }
         }
-        if !sel.kinds.is_empty() && !sel.kinds.iter().any(|k| k.eq_ignore_ascii_case(&asset.kind)) {
+        if !sel.kinds.is_empty()
+            && !sel
+                .kinds
+                .iter()
+                .any(|k| k.eq_ignore_ascii_case(&asset.kind))
+        {
             return false;
         }
         for want in &sel.tags {
@@ -311,7 +319,11 @@ pub fn evaluate_policy(
 
     let days_to_deadline = policy.deadline.map(|d| (d - now).num_days());
     let deadline_passed = policy.deadline.map(|d| now > d).unwrap_or(false);
-    let status = if violations.is_empty() { "compliant" } else { "violated" };
+    let status = if violations.is_empty() {
+        "compliant"
+    } else {
+        "violated"
+    };
 
     PolicyResult {
         id: policy.id.clone(),
@@ -469,9 +481,33 @@ mod tests {
             algorithm_glob: Some("*ecdh*".into()),
             ..Default::default()
         };
-        let hit = finding("a", FindingCategory::MissingPqc, CryptoAssetType::TlsConnection, "ecdh-sha2", PqcStatus::ClassicalSecure, "h:22", FindingSeverity::High);
-        let miss_cat = finding("b", FindingCategory::WeakAlgorithm, CryptoAssetType::TlsConnection, "ecdh-sha2", PqcStatus::ClassicalWeak, "h:22", FindingSeverity::High);
-        let miss_algo = finding("c", FindingCategory::MissingPqc, CryptoAssetType::TlsConnection, "curve25519", PqcStatus::ClassicalSecure, "h:22", FindingSeverity::High);
+        let hit = finding(
+            "a",
+            FindingCategory::MissingPqc,
+            CryptoAssetType::TlsConnection,
+            "ecdh-sha2",
+            PqcStatus::ClassicalSecure,
+            "h:22",
+            FindingSeverity::High,
+        );
+        let miss_cat = finding(
+            "b",
+            FindingCategory::WeakAlgorithm,
+            CryptoAssetType::TlsConnection,
+            "ecdh-sha2",
+            PqcStatus::ClassicalWeak,
+            "h:22",
+            FindingSeverity::High,
+        );
+        let miss_algo = finding(
+            "c",
+            FindingCategory::MissingPqc,
+            CryptoAssetType::TlsConnection,
+            "curve25519",
+            PqcStatus::ClassicalSecure,
+            "h:22",
+            FindingSeverity::High,
+        );
         assert!(match_matches(&m, &hit));
         assert!(!match_matches(&m, &miss_cat));
         assert!(!match_matches(&m, &miss_algo));
@@ -490,8 +526,24 @@ mod tests {
             environment: "production".into(),
             tags: vec![],
         }];
-        let in_scope = finding("a", FindingCategory::MissingPqc, CryptoAssetType::DataStore, "rsa-2048", PqcStatus::ClassicalSecure, "orders-db.internal:5432", FindingSeverity::High);
-        let wrong_type = finding("b", FindingCategory::MissingPqc, CryptoAssetType::TlsConnection, "rsa-2048", PqcStatus::ClassicalSecure, "orders-db.internal:5432", FindingSeverity::High);
+        let in_scope = finding(
+            "a",
+            FindingCategory::MissingPqc,
+            CryptoAssetType::DataStore,
+            "rsa-2048",
+            PqcStatus::ClassicalSecure,
+            "orders-db.internal:5432",
+            FindingSeverity::High,
+        );
+        let wrong_type = finding(
+            "b",
+            FindingCategory::MissingPqc,
+            CryptoAssetType::TlsConnection,
+            "rsa-2048",
+            PqcStatus::ClassicalSecure,
+            "orders-db.internal:5432",
+            FindingSeverity::High,
+        );
         assert!(selector_matches(&sel, &in_scope, &assets));
         assert!(!selector_matches(&sel, &wrong_type, &assets));
         // No asset context for env resolution -> out of scope.
@@ -502,15 +554,34 @@ mod tests {
     fn evaluate_flags_violations_and_fingerprints() {
         let policies = default_policies();
         let findings = vec![
-            finding("f1", FindingCategory::WeakAlgorithm, CryptoAssetType::ProtocolEndpoint, "ssh-rsa", PqcStatus::ClassicalWeak, "bastion:22", FindingSeverity::Medium),
-            finding("f2", FindingCategory::MissingPqc, CryptoAssetType::TlsConnection, "curve25519", PqcStatus::ClassicalSecure, "api:443", FindingSeverity::High),
+            finding(
+                "f1",
+                FindingCategory::WeakAlgorithm,
+                CryptoAssetType::ProtocolEndpoint,
+                "ssh-rsa",
+                PqcStatus::ClassicalWeak,
+                "bastion:22",
+                FindingSeverity::Medium,
+            ),
+            finding(
+                "f2",
+                FindingCategory::MissingPqc,
+                CryptoAssetType::TlsConnection,
+                "curve25519",
+                PqcStatus::ClassicalSecure,
+                "api:443",
+                FindingSeverity::High,
+            ),
         ];
         let now = Utc::now();
         let results = evaluate_all(&policies, &findings, &[], now);
         let weak = results.iter().find(|r| r.id == "no-weak-crypto").unwrap();
         assert_eq!(weak.status, "violated");
         assert_eq!(weak.violation_count, 1);
-        assert_eq!(weak.violations[0].fingerprint, "bastion:22|weak_algorithm|ssh-rsa");
+        assert_eq!(
+            weak.violations[0].fingerprint,
+            "bastion:22|weak_algorithm|ssh-rsa"
+        );
         let kex = results.iter().find(|r| r.id == "pqc-key-exchange").unwrap();
         assert_eq!(kex.status, "violated");
         assert!(kex.days_to_deadline.unwrap() > 0);

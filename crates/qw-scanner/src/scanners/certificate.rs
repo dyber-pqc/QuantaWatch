@@ -123,7 +123,7 @@ impl Scanner for CertificateScanner {
                     discovered_at: Utc::now(),
                 },
                 remediation: Some("Reissue and replace the expired certificate".to_string()),
-                pqc_status: pqc_status.clone(),
+                pqc_status,
                 metadata: HashMap::new(),
             });
         } else if not_after_chrono < now_utc + chrono::Duration::days(30) {
@@ -151,7 +151,7 @@ impl Scanner for CertificateScanner {
                     discovered_at: Utc::now(),
                 },
                 remediation: Some("Renew the certificate before it expires".to_string()),
-                pqc_status: pqc_status.clone(),
+                pqc_status,
                 metadata: HashMap::new(),
             });
         }
@@ -222,7 +222,7 @@ impl Scanner for CertificateScanner {
             } else {
                 None
             },
-            pqc_status: pqc_status.clone(),
+            pqc_status,
             metadata: HashMap::from([
                 ("public_key_algorithm".to_string(), pubkey_alg),
             ]),

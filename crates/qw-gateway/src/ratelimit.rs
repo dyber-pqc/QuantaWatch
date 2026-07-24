@@ -177,11 +177,7 @@ fn client_ip(req: &Request, trust_forwarded: bool) -> String {
                 }
             }
         }
-        if let Some(xr) = req
-            .headers()
-            .get("x-real-ip")
-            .and_then(|v| v.to_str().ok())
-        {
+        if let Some(xr) = req.headers().get("x-real-ip").and_then(|v| v.to_str().ok()) {
             let ip = xr.trim();
             if !ip.is_empty() {
                 return ip.to_string();

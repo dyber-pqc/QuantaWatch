@@ -248,7 +248,8 @@ impl Scanner for StartTlsScanner {
             .map_err(|_| ScannerError::Timeout)??;
 
         // Socket is now ready for the TLS ClientHello — fingerprint it.
-        let findings = tls::fingerprint_stream(&host, &address, stream, timeout, "starttls").await?;
+        let findings =
+            tls::fingerprint_stream(&host, &address, stream, timeout, "starttls").await?;
 
         Ok(ScanResult {
             scanner_id: "starttls".to_string(),
@@ -315,7 +316,9 @@ mod tests {
             sock.write_all(b"S").await.unwrap();
         });
         let mut client = TcpStream::connect(addr).await.unwrap();
-        assert!(StartTlsScanner::negotiate_postgres(&mut client).await.is_ok());
+        assert!(StartTlsScanner::negotiate_postgres(&mut client)
+            .await
+            .is_ok());
     }
 
     /// Mock a PostgreSQL server that refuses TLS ('N') -> negotiation errors.
@@ -331,7 +334,9 @@ mod tests {
             sock.write_all(b"N").await.unwrap();
         });
         let mut client = TcpStream::connect(addr).await.unwrap();
-        assert!(StartTlsScanner::negotiate_postgres(&mut client).await.is_err());
+        assert!(StartTlsScanner::negotiate_postgres(&mut client)
+            .await
+            .is_err());
     }
 
     /// Mock an SMTP server with a multi-line EHLO advertising STARTTLS, then a
@@ -343,24 +348,34 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             let (mut sock, _) = listener.accept().await.unwrap();
-            sock.write_all(b"220 mail.test ESMTP ready\r\n").await.unwrap();
+            sock.write_all(b"220 mail.test ESMTP ready\r\n")
+                .await
+                .unwrap();
             // read EHLO line
             let mut b = [0u8; 1];
             let mut line = Vec::new();
             loop {
                 sock.read_exact(&mut b).await.unwrap();
-                if b[0] == LF { break; }
+                if b[0] == LF {
+                    break;
+                }
                 line.push(b[0]);
             }
-            sock.write_all(b"250-mail.test\r\n250-PIPELINING\r\n250 STARTTLS\r\n").await.unwrap();
+            sock.write_all(b"250-mail.test\r\n250-PIPELINING\r\n250 STARTTLS\r\n")
+                .await
+                .unwrap();
             // read STARTTLS line
             let mut line2 = Vec::new();
             loop {
                 sock.read_exact(&mut b).await.unwrap();
-                if b[0] == LF { break; }
+                if b[0] == LF {
+                    break;
+                }
                 line2.push(b[0]);
             }
-            assert!(String::from_utf8_lossy(&line2).to_uppercase().contains("STARTTLS"));
+            assert!(String::from_utf8_lossy(&line2)
+                .to_uppercase()
+                .contains("STARTTLS"));
             sock.write_all(b"220 ready to start TLS\r\n").await.unwrap();
         });
         let mut client = TcpStream::connect(addr).await.unwrap();
@@ -377,8 +392,15 @@ mod tests {
             let (mut sock, _) = listener.accept().await.unwrap();
             sock.write_all(b"220 mail.test ESMTP\r\n").await.unwrap();
             let mut b = [0u8; 1];
-            loop { sock.read_exact(&mut b).await.unwrap(); if b[0]==LF {break;} }
-            sock.write_all(b"250-mail.test\r\n250 PIPELINING\r\n").await.unwrap();
+            loop {
+                sock.read_exact(&mut b).await.unwrap();
+                if b[0] == LF {
+                    break;
+                }
+            }
+            sock.write_all(b"250-mail.test\r\n250 PIPELINING\r\n")
+                .await
+                .unwrap();
         });
         let mut client = TcpStream::connect(addr).await.unwrap();
         assert!(StartTlsScanner::negotiate_smtp(&mut client).await.is_err());

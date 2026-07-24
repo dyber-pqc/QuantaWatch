@@ -86,7 +86,7 @@ fn evaluate(request: &Value) -> Option<Decision> {
                 .ok()?;
             let summary = classify_cert(&pem);
             let (algorithm, pqc) = match &summary {
-                Some(s) => (Some(s.algorithm.clone()), s.pqc_status.clone()),
+                Some(s) => (Some(s.algorithm.clone()), s.pqc_status),
                 None => (None, PqcStatus::Unknown),
             };
             let reason = match pqc {
@@ -106,7 +106,10 @@ fn evaluate(request: &Value) -> Option<Decision> {
         "Ingress" => {
             // We can't see the referenced cert here; advise unless the workload
             // declares a PQC posture via annotation.
-            let terminates_tls = obj.pointer("/spec/tls").map(|t| !t.is_null()).unwrap_or(false);
+            let terminates_tls = obj
+                .pointer("/spec/tls")
+                .map(|t| !t.is_null())
+                .unwrap_or(false);
             let declared_pqc = obj
                 .pointer("/metadata/annotations/quantawatch.io~1pqc")
                 .and_then(Value::as_str)
@@ -135,7 +138,11 @@ pub async fn admission_review(
     Json(review): Json<Value>,
 ) -> impl IntoResponse {
     let request = review.get("request").cloned().unwrap_or(Value::Null);
-    let uid = request.get("uid").and_then(Value::as_str).unwrap_or("").to_string();
+    let uid = request
+        .get("uid")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
 
     let Some(decision) = evaluate(&request) else {
         // Nothing we gate → always admit.
@@ -147,7 +154,8 @@ pub async fn admission_review(
     };
 
     // Enforce mode denies; monitor mode admits with a warning.
-    let enforce = crate::admin::settings_api::load(&state, qw_store::DEFAULT_TENANT).k8s_admission_enforce;
+    let enforce =
+        crate::admin::settings_api::load(&state, qw_store::DEFAULT_TENANT).k8s_admission_enforce;
 
     // Record it as a finding so it surfaces in the dashboard either way.
     let finding = qw_scanner::Finding {
@@ -236,7 +244,9 @@ mod tests {
     #[test]
     fn non_tls_secret_is_ignored() {
         let review = json!({ "request": { "uid": "u", "kind": {"kind":"Secret"}, "object": { "type": "Opaque", "metadata": {"name":"x"} } } });
-        assert!(evaluate(&review["request"]).map(|d| d.reason).flatten().is_none());
+        assert!(evaluate(&review["request"])
+            .and_then(|d| d.reason)
+            .is_none());
     }
 
     #[test]
@@ -245,7 +255,12 @@ mod tests {
         let d = evaluate(&review["request"]).expect("evaluated");
         assert!(d.reason.is_some(), "classical cert must be flagged");
         assert!(d.subject.contains("prod/web-tls"));
-        assert!(d.algorithm.as_deref().unwrap_or("").to_uppercase().contains("RSA"));
+        assert!(d
+            .algorithm
+            .as_deref()
+            .unwrap_or("")
+            .to_uppercase()
+            .contains("RSA"));
     }
 
     #[test]

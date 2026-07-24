@@ -15,7 +15,13 @@ use qw_store::{AssetRow, FlowRow, TargetRow};
 
 use crate::theme;
 
-const COL_HEADERS: [&str; 5] = ["Identities", "Data", "Agents", "Providers", "Assets & Hosts"];
+const COL_HEADERS: [&str; 5] = [
+    "Identities",
+    "Data",
+    "Agents",
+    "Providers",
+    "Assets & Hosts",
+];
 const COL_GAP: f32 = 230.0;
 const ROW_GAP: f32 = 34.0;
 
@@ -191,7 +197,8 @@ impl GraphView {
         let mut nodes: Vec<LNode> = Vec::new();
         for n in &g.nodes {
             idx.insert(n.id.clone(), nodes.len());
-            let radius = 6.0 + (n.risk as f32 / 20.0).min(6.0) + (n.blast_radius as f32).sqrt().min(4.0);
+            let radius =
+                6.0 + (n.risk as f32 / 20.0).min(6.0) + (n.blast_radius as f32).sqrt().min(4.0);
             // Label the sublabel by node kind so "where it came from" is obvious.
             let where_label = match n.kind.as_str() {
                 "dependency" => "Found in",
@@ -287,6 +294,8 @@ impl GraphView {
             fy[a] += dy * 0.01;
             fy[b] -= dy * 0.01;
         }
+        // Indexes two parallel collections (fy + self.nodes), so the index is real.
+        #[allow(clippy::needless_range_loop)]
         for i in 0..n {
             fy[i] -= self.nodes[i].pos.y * 0.001;
             self.nodes[i].vy = (self.nodes[i].vy + fy[i]) * 0.80;
@@ -334,7 +343,11 @@ impl GraphView {
 
         // Hand cursor when hovering a node (signals it's clickable).
         if let Some(hp) = resp.hover_pos() {
-            if self.nodes.iter().any(|n| (to_screen(n.pos) - hp).length() < 16.0) {
+            if self
+                .nodes
+                .iter()
+                .any(|n| (to_screen(n.pos) - hp).length() < 16.0)
+            {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
         }
@@ -390,7 +403,8 @@ impl GraphView {
     /// Toggle a provider's simulated "harden to hybrid" override; forces a rebuild.
     pub fn set_override(&mut self, provider: &str, hardened: bool) {
         if hardened {
-            self.overrides.insert(provider.to_string(), PqcStatus::Hybrid);
+            self.overrides
+                .insert(provider.to_string(), PqcStatus::Hybrid);
         } else {
             self.overrides.remove(provider);
         }

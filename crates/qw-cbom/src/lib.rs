@@ -11,16 +11,16 @@ pub mod posture;
 pub mod remediation;
 pub mod soc2;
 
+pub use agility::{
+    default_policies, evaluate_all as evaluate_policies, evaluate_policy, AssetContext,
+    CryptoAgilityPolicy, PolicyMatch, PolicyResult, PolicySelector, Violation,
+};
 pub use builder::CbomBuilder;
 pub use business::{business_risk_score, BusinessContext, Criticality};
 pub use compliance::{
     ComplianceEngine, ComplianceReport, ComplianceStatus, FrameworkSummary, MigrationItem,
 };
 pub use deterministic::{dedupe_scan_results, make_deterministic};
-pub use agility::{
-    default_policies, evaluate_all as evaluate_policies, evaluate_policy, AssetContext,
-    CryptoAgilityPolicy, PolicyMatch, PolicyResult, PolicySelector, Violation,
-};
 pub use governance::{
     classify_asset, evaluate as evaluate_governance, AssetVerdict, CryptoPolicy, GovernanceReport,
     Verdict,

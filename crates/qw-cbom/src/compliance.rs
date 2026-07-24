@@ -328,7 +328,7 @@ impl ComplianceEngine {
                 b.refs.push(f.id.clone());
             }
             if f.severity > b.max_sev {
-                b.max_sev = f.severity.clone();
+                b.max_sev = f.severity;
             }
         };
 

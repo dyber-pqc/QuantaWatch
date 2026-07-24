@@ -16,16 +16,16 @@ use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 
 use graphview::GraphView;
-use qw_pki::CertAuthority;
 use qw_audit::{AuditBackend, AuditEntry, AuditEvent};
 use qw_cbom::{frameworks, soc2};
 use qw_cbom::{ComplianceEngine, PostureEngine, PostureSnapshot};
+use qw_integrations::{IntegrationConfig, RemediationOpts, RemediationTicket};
+use qw_pki::CertAuthority;
 use qw_scanner::types::{
     AssetLocation, CryptoAsset, Finding, FindingRecord, FindingSeverity, FindingStatus, PqcStatus,
     ScanRecord,
 };
 use qw_scanner::{build_scanner_registry, ScanTarget, ScannerConfig};
-use qw_integrations::{IntegrationConfig, RemediationOpts, RemediationTicket};
 use qw_store::{
     AlertEvent, AlertSeverity, AssetRow, CertificateRow, ConnectionRow, DbUser, EndpointRow,
     FlowRow, GovernanceSnapshot, OverlayRouteRow, SessionRow, SloSnapshot, Store, TargetRow,
@@ -40,7 +40,11 @@ fn build_stamp() -> String {
     let when = chrono::DateTime::from_timestamp(unix, 0)
         .map(|d| d.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_else(|| "?".to_string());
-    format!("v{} · {} · {when}", env!("CARGO_PKG_VERSION"), env!("QW_GIT_HASH"))
+    format!(
+        "v{} · {} · {when}",
+        env!("CARGO_PKG_VERSION"),
+        env!("QW_GIT_HASH")
+    )
 }
 
 /// Add-asset templates: (label, kind, default environment).
@@ -110,7 +114,11 @@ fn main() -> eframe::Result<()> {
         let mut app = App::new(store, source);
         app.export_board_report();
         println!("{}", app.export_status);
-        std::process::exit(if app.export_status.contains("failed") { 1 } else { 0 });
+        std::process::exit(if app.export_status.contains("failed") {
+            1
+        } else {
+            0
+        });
     }
 
     let options = eframe::NativeOptions {
@@ -311,7 +319,10 @@ fn run_scan_blocking(store: &Store, path: &str) -> ScanOutcome {
     cfg.dependencies.enabled = true;
     let registry = build_scanner_registry(&cfg);
 
-    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
         Err(e) => {
             return ScanOutcome {
@@ -331,7 +342,10 @@ fn run_scan_blocking(store: &Store, path: &str) -> ScanOutcome {
         store.record_scan(TENANT, r, &target);
     }
     let summary = PostureEngine::summarize(&results, &[]);
-    store.record_posture(TENANT, &PostureSnapshot::from_summary(&summary, "desktop-scan"));
+    store.record_posture(
+        TENANT,
+        &PostureSnapshot::from_summary(&summary, "desktop-scan"),
+    );
 
     ScanOutcome {
         findings: total,
@@ -386,7 +400,7 @@ fn finding_from_record(r: &FindingRecord) -> Finding {
     Finding {
         id: r.id.clone(),
         category: r.category.clone(),
-        severity: r.severity.clone(),
+        severity: r.severity,
         title: r.title.clone(),
         description: r.description.clone(),
         asset: CryptoAsset {
@@ -414,21 +428,39 @@ fn finding_from_record(r: &FindingRecord) -> Finding {
 /// runtime; the desktop's main thread never blocks). All store writes happen
 /// here; the UI just refreshes on completion.
 fn run_net_op_blocking(store: &Store, op: NetOp) -> NetOutcome {
-    let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(rt) => rt,
-        Err(e) => return NetOutcome { message: format!("runtime error: {e}") },
+        Err(e) => {
+            return NetOutcome {
+                message: format!("runtime error: {e}"),
+            }
+        }
     };
     match op {
         NetOp::TestConnection { conn_id } => {
             let Some(mut row) = store.get_connection(TENANT, &conn_id) else {
-                return NetOutcome { message: "connection not found".to_string() };
+                return NetOutcome {
+                    message: "connection not found".to_string(),
+                };
             };
             let Some(integ) = qw_integrations::build_one(&conn_to_config(&row)) else {
-                return NetOutcome { message: "could not construct integration".to_string() };
+                return NetOutcome {
+                    message: "could not construct integration".to_string(),
+                };
             };
             let msg = match rt.block_on(integ.test_connection()) {
                 Ok(status) => {
-                    row.last_status = Some(if status.connected { "connected" } else { "failed" }.to_string());
+                    row.last_status = Some(
+                        if status.connected {
+                            "connected"
+                        } else {
+                            "failed"
+                        }
+                        .to_string(),
+                    );
                     row.last_user = status.user.clone();
                     if status.connected {
                         format!(
@@ -437,7 +469,11 @@ fn run_net_op_blocking(store: &Store, op: NetOp) -> NetOutcome {
                             status.user.map(|u| format!(" as {u}")).unwrap_or_default()
                         )
                     } else {
-                        format!("{} failed: {}", row.display_name, status.error.unwrap_or_default())
+                        format!(
+                            "{} failed: {}",
+                            row.display_name,
+                            status.error.unwrap_or_default()
+                        )
                     }
                 }
                 Err(e) => {
@@ -451,10 +487,14 @@ fn run_net_op_blocking(store: &Store, op: NetOp) -> NetOutcome {
         }
         NetOp::ScanConnection { conn_id } => {
             let Some(mut row) = store.get_connection(TENANT, &conn_id) else {
-                return NetOutcome { message: "connection not found".to_string() };
+                return NetOutcome {
+                    message: "connection not found".to_string(),
+                };
             };
             let Some(integ) = qw_integrations::build_one(&conn_to_config(&row)) else {
-                return NetOutcome { message: "could not construct integration".to_string() };
+                return NetOutcome {
+                    message: "could not construct integration".to_string(),
+                };
             };
             let mut cfg = ScannerConfig::default();
             cfg.code.enabled = true;
@@ -481,7 +521,10 @@ fn run_net_op_blocking(store: &Store, op: NetOp) -> NetOutcome {
                 }
                 let findings: usize = all.iter().map(|r| r.findings.len()).sum();
                 let summary = PostureEngine::summarize(&all, &[]);
-                store.record_posture(TENANT, &PostureSnapshot::from_summary(&summary, "desktop-connection-scan"));
+                store.record_posture(
+                    TENANT,
+                    &PostureSnapshot::from_summary(&summary, "desktop-connection-scan"),
+                );
                 Ok((files, findings))
             });
             match res {
@@ -490,21 +533,35 @@ fn run_net_op_blocking(store: &Store, op: NetOp) -> NetOutcome {
                     row.findings_count = Some(findings as u32);
                     store.upsert_connection(TENANT, &row);
                     NetOutcome {
-                        message: format!("Scanned {}: {files} files, {findings} findings", row.display_name),
+                        message: format!(
+                            "Scanned {}: {files} files, {findings} findings",
+                            row.display_name
+                        ),
                     }
                 }
-                Err(e) => NetOutcome { message: format!("Scan of {} failed: {e}", row.display_name) },
+                Err(e) => NetOutcome {
+                    message: format!("Scan of {} failed: {e}", row.display_name),
+                },
             }
         }
-        NetOp::OpenTicket { finding_id, conn_id } => {
+        NetOp::OpenTicket {
+            finding_id,
+            conn_id,
+        } => {
             let Some(record) = store.get_finding(TENANT, &finding_id) else {
-                return NetOutcome { message: "finding not found".to_string() };
+                return NetOutcome {
+                    message: "finding not found".to_string(),
+                };
             };
             let Some(row) = store.get_connection(TENANT, &conn_id) else {
-                return NetOutcome { message: "connection not found".to_string() };
+                return NetOutcome {
+                    message: "connection not found".to_string(),
+                };
             };
             let Some(integ) = qw_integrations::build_one(&conn_to_config(&row)) else {
-                return NetOutcome { message: "could not construct integration".to_string() };
+                return NetOutcome {
+                    message: "could not construct integration".to_string(),
+                };
             };
             // Attach the concrete PQC migration plan so the ticket carries the
             // specific fix, not a generic recommendation.
@@ -523,7 +580,9 @@ fn run_net_op_blocking(store: &Store, op: NetOp) -> NetOutcome {
                         message: format!("Opened {} in {}", ticket.external_id, row.display_name),
                     }
                 }
-                Err(e) => NetOutcome { message: format!("Ticket failed: {e}") },
+                Err(e) => NetOutcome {
+                    message: format!("Ticket failed: {e}"),
+                },
             }
         }
     }
@@ -705,7 +764,11 @@ impl App {
             scan_rx: None,
             scan_status: String::new(),
             ca: None,
-            cert_form: CertForm { validity_days: "90".to_string(), hybrid: true, ..Default::default() },
+            cert_form: CertForm {
+                validity_days: "90".to_string(),
+                hybrid: true,
+                ..Default::default()
+            },
             cert_status: String::new(),
             issued_key: None,
             net_rx: None,
@@ -745,7 +808,8 @@ impl App {
     /// Online mode is on (the air gap is explicit), and runs one at a time.
     fn spawn_net_op(&mut self, ctx: &egui::Context, op: NetOp, label: &str) {
         if !self.net_probes_enabled {
-            self.net_status = "Online mode is off - enable it in Settings to make network calls.".to_string();
+            self.net_status =
+                "Online mode is off - enable it in Settings to make network calls.".to_string();
             return;
         }
         if self.net_busy {
@@ -786,7 +850,11 @@ impl App {
         let path = dir.join("quantawatch-findings.json");
         self.export_status = match serde_json::to_string_pretty(&self.data.findings) {
             Ok(json) => match std::fs::write(&path, json) {
-                Ok(_) => format!("Exported {} findings to {}", self.data.findings.len(), path.display()),
+                Ok(_) => format!(
+                    "Exported {} findings to {}",
+                    self.data.findings.len(),
+                    path.display()
+                ),
                 Err(e) => format!("Export failed: {e}"),
             },
             Err(e) => format!("Serialize failed: {e}"),
@@ -806,7 +874,11 @@ impl App {
             kind: non_empty(&f.kind, "tls_endpoint"),
             address: addr.to_string(),
             environment: non_empty(&f.environment, "default"),
-            tags: if f.air_gapped { vec!["air-gapped".to_string()] } else { Vec::new() },
+            tags: if f.air_gapped {
+                vec!["air-gapped".to_string()]
+            } else {
+                Vec::new()
+            },
             pqc_status: "unknown".to_string(),
             tls_version: None,
             last_scanned: None,
@@ -834,7 +906,11 @@ impl App {
             kind: non_empty(&f.kind, "server"),
             reachability: vec!["tls".to_string()],
             environment: non_empty(&f.environment, "default"),
-            tags: if f.air_gapped { vec!["air-gapped".to_string()] } else { Vec::new() },
+            tags: if f.air_gapped {
+                vec!["air-gapped".to_string()]
+            } else {
+                Vec::new()
+            },
             exposed_services: Vec::new(),
             containers: Vec::new(),
             host_info: None,
@@ -854,7 +930,11 @@ impl App {
         if let Some(mut a) = self.data.assets.iter().find(|a| a.id == id).cloned() {
             let on = toggle_tag(&mut a.tags, "air-gapped");
             self.store.upsert_asset(TENANT, &a);
-            self.edit_status = format!("{} is now {}", a.id, if on { "air-gapped" } else { "exposed" });
+            self.edit_status = format!(
+                "{} is now {}",
+                a.id,
+                if on { "air-gapped" } else { "exposed" }
+            );
             self.refresh();
         }
     }
@@ -864,7 +944,11 @@ impl App {
         if let Some(mut t) = self.data.targets.iter().find(|t| t.id == id).cloned() {
             let on = toggle_tag(&mut t.tags, "air-gapped");
             self.store.upsert_target(TENANT, &t);
-            self.edit_status = format!("{} is now {}", t.name, if on { "air-gapped" } else { "exposed" });
+            self.edit_status = format!(
+                "{} is now {}",
+                t.name,
+                if on { "air-gapped" } else { "exposed" }
+            );
             self.refresh();
         }
     }
@@ -874,12 +958,16 @@ impl App {
     fn start_probe(&mut self, id: String, addr: String, air_gapped: bool, ctx: &egui::Context) {
         if !self.net_probes_enabled {
             self.edit_status =
-                "Network probes are off - enable them in Settings to verify reachability.".to_string();
+                "Network probes are off - enable them in Settings to verify reachability."
+                    .to_string();
             return;
         }
         self.probe_results.insert(
             id.clone(),
-            ProbeState { reachable: None, detail: "probing...".to_string() },
+            ProbeState {
+                reachable: None,
+                detail: "probing...".to_string(),
+            },
         );
         let (tx, rx) = std::sync::mpsc::channel();
         // Keep a single receiver; a fresh probe replaces it (results still drain).
@@ -912,7 +1000,10 @@ impl App {
                 self.scan_rx = None;
                 self.scan_status = match o.error {
                     Some(e) => format!("Scan failed: {e}"),
-                    None => format!("Scan complete - {} findings, posture {:.0}", o.findings, o.score),
+                    None => format!(
+                        "Scan complete - {} findings, posture {:.0}",
+                        o.findings, o.score
+                    ),
                 };
                 self.refresh();
             }
@@ -984,24 +1075,44 @@ impl App {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("QuantaWatch").strong().size(18.0));
-                ui.label(egui::RichText::new("Desktop").color(theme::ACCENT).size(18.0));
-                ui.label(egui::RichText::new(build_stamp()).color(theme::MUTED).small())
-                    .on_hover_text("running build - version · git hash · build time");
+                ui.label(
+                    egui::RichText::new("Desktop")
+                        .color(theme::ACCENT)
+                        .size(18.0),
+                );
+                ui.label(
+                    egui::RichText::new(build_stamp())
+                        .color(theme::MUTED)
+                        .small(),
+                )
+                .on_hover_text("running build - version · git hash · build time");
                 ui.separator();
                 // Honest mode badge: pure-offline by default; probes are opt-in.
                 if self.net_probes_enabled {
                     ui.label(egui::RichText::new("PROBES ON").color(theme::HIGH).small());
-                    ui.label(egui::RichText::new("reachability checks enabled · no browser").color(theme::MUTED).small());
+                    ui.label(
+                        egui::RichText::new("reachability checks enabled · no browser")
+                            .color(theme::MUTED)
+                            .small(),
+                    );
                 } else {
                     ui.label(egui::RichText::new("OFFLINE").color(theme::GOOD).small());
-                    ui.label(egui::RichText::new("no network · no browser").color(theme::MUTED).small());
+                    ui.label(
+                        egui::RichText::new("no network · no browser")
+                            .color(theme::MUTED)
+                            .small(),
+                    );
                 }
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Refresh").clicked() {
                         self.refresh();
                     }
-                    if ui.selectable_label(self.terminal_open, "Terminal").on_hover_text("Ctrl+`").clicked() {
+                    if ui
+                        .selectable_label(self.terminal_open, "Terminal")
+                        .on_hover_text("Ctrl+`")
+                        .clicked()
+                    {
                         self.terminal_open = !self.terminal_open;
                     }
                     if let Some(t) = self.data.loaded_at {
@@ -1028,42 +1139,148 @@ impl App {
                     nav_item(ui, &mut self.page, Page::Overview, "📊  Overview", None);
 
                     nav_group(ui, "POSTURE");
-                    nav_item(ui, &mut self.page, Page::AttackPaths, "🎯  Attack paths", None);
-                    nav_item(ui, &mut self.page, Page::Estate, "🌐  Estate", Some(d.targets.len()));
-                    nav_item(ui, &mut self.page, Page::Endpoints, "💻  Endpoints", Some(d.endpoints.len()));
-                    nav_item(ui, &mut self.page, Page::Assets, "📦  Assets", Some(d.assets.len()));
-                    nav_item(ui, &mut self.page, Page::Findings, "⚠  Findings", Some(d.findings.len()));
-                    nav_item(ui, &mut self.page, Page::Certificates, "🔒  Certificates", Some(d.certs.len()));
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::AttackPaths,
+                        "🎯  Attack paths",
+                        None,
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Estate,
+                        "🌐  Estate",
+                        Some(d.targets.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Endpoints,
+                        "💻  Endpoints",
+                        Some(d.endpoints.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Assets,
+                        "📦  Assets",
+                        Some(d.assets.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Findings,
+                        "⚠  Findings",
+                        Some(d.findings.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Certificates,
+                        "🔒  Certificates",
+                        Some(d.certs.len()),
+                    );
                     nav_item(ui, &mut self.page, Page::Cbom, "📇  Crypto (CBOM)", None);
 
                     nav_group(ui, "GOVERNANCE");
                     nav_item(ui, &mut self.page, Page::Compliance, "📋  Compliance", None);
-                    nav_item(ui, &mut self.page, Page::CryptoPolicies, "📐  Crypto policies", None);
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::CryptoPolicies,
+                        "📐  Crypto policies",
+                        None,
+                    );
                     nav_item(ui, &mut self.page, Page::Frameworks, "📚  Frameworks", None);
                     nav_item(ui, &mut self.page, Page::Soc2, "✅  SOC 2", None);
-                    nav_item(ui, &mut self.page, Page::Governance, "📈  Governance/SLO", None);
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Governance,
+                        "📈  Governance/SLO",
+                        None,
+                    );
 
                     nav_group(ui, "OPERATE");
-                    nav_item(ui, &mut self.page, Page::Scans, "🔍  Scans", Some(d.scans.len()));
-                    nav_item(ui, &mut self.page, Page::Remediations, "🔧  Remediations", Some(d.remediations.len()));
-                    nav_item(ui, &mut self.page, Page::Overlay, "🔐  PQC Overlay", Some(d.overlay_routes.len()));
-                    nav_item(ui, &mut self.page, Page::Connections, "🔌  Connections", Some(d.connections.len()));
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Scans,
+                        "🔍  Scans",
+                        Some(d.scans.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Remediations,
+                        "🔧  Remediations",
+                        Some(d.remediations.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Overlay,
+                        "🔐  PQC Overlay",
+                        Some(d.overlay_routes.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Connections,
+                        "🔌  Connections",
+                        Some(d.connections.len()),
+                    );
 
                     nav_group(ui, "MONITOR");
-                    nav_item(ui, &mut self.page, Page::Agents, "🤖  Agents", Some(d.flows.len()));
-                    nav_item(ui, &mut self.page, Page::Sessions, "📝  Sessions", Some(d.sessions.len()));
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Agents,
+                        "🤖  Agents",
+                        Some(d.flows.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Sessions,
+                        "📝  Sessions",
+                        Some(d.sessions.len()),
+                    );
                     nav_item(ui, &mut self.page, Page::Threats, "🚨  Threats", None);
-                    nav_item(ui, &mut self.page, Page::Alerts, "🔔  Alerts", Some(d.alerts.len()));
-                    nav_item(ui, &mut self.page, Page::Audit, "📜  Audit log", Some(d.audit.len()));
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Alerts,
+                        "🔔  Alerts",
+                        Some(d.alerts.len()),
+                    );
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Audit,
+                        "📜  Audit log",
+                        Some(d.audit.len()),
+                    );
 
                     nav_group(ui, "ADMIN");
-                    nav_item(ui, &mut self.page, Page::Access, "🔑  Access (RBAC)", Some(d.users.len()));
+                    nav_item(
+                        ui,
+                        &mut self.page,
+                        Page::Access,
+                        "🔑  Access (RBAC)",
+                        Some(d.users.len()),
+                    );
                     nav_item(ui, &mut self.page, Page::Settings, "⚙  Settings", None);
                     nav_item(ui, &mut self.page, Page::About, "📖  About", None);
                     ui.add_space(12.0);
                     ui.separator();
                     ui.label(egui::RichText::new("store").color(theme::MUTED).small());
-                    ui.label(egui::RichText::new(&self.source).color(theme::MUTED).small());
+                    ui.label(
+                        egui::RichText::new(&self.source)
+                            .color(theme::MUTED)
+                            .small(),
+                    );
                 });
             });
     }
@@ -1091,9 +1308,14 @@ impl App {
                                     // One widget with BOTH click and drag sense: click
                                     // selects, drag reorders. (A dnd_drag_source has only
                                     // drag sense, which is why clicks stopped working.)
-                                    let lab = ui.label(egui::RichText::new(page_title(tab)).color(col));
+                                    let lab =
+                                        ui.label(egui::RichText::new(page_title(tab)).color(col));
                                     let resp = ui
-                                        .interact(lab.rect, egui::Id::new(("tab", idx)), egui::Sense::click_and_drag())
+                                        .interact(
+                                            lab.rect,
+                                            egui::Id::new(("tab", idx)),
+                                            egui::Sense::click_and_drag(),
+                                        )
                                         .on_hover_cursor(egui::CursorIcon::PointingHand);
                                     resp.dnd_set_drag_payload(idx);
                                     if resp.clicked() {
@@ -1103,13 +1325,31 @@ impl App {
                                         act = Some(TabAction::Close(tab));
                                     }
                                     resp.context_menu(|ui| {
-                                        if ui.button("Close").clicked() { act = Some(TabAction::Close(tab)); ui.close_menu(); }
-                                        if ui.button("Close others").clicked() { act = Some(TabAction::CloseOthers(tab)); ui.close_menu(); }
-                                        if ui.button("Close to the right").clicked() { act = Some(TabAction::CloseRight(idx)); ui.close_menu(); }
-                                        if ui.button("Close all").clicked() { act = Some(TabAction::CloseAll); ui.close_menu(); }
+                                        if ui.button("Close").clicked() {
+                                            act = Some(TabAction::Close(tab));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Close others").clicked() {
+                                            act = Some(TabAction::CloseOthers(tab));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Close to the right").clicked() {
+                                            act = Some(TabAction::CloseRight(idx));
+                                            ui.close_menu();
+                                        }
+                                        if ui.button("Close all").clicked() {
+                                            act = Some(TabAction::CloseAll);
+                                            ui.close_menu();
+                                        }
                                         ui.separator();
-                                        if idx > 0 && ui.button("Move left").clicked() { reorder = Some((idx, idx - 1)); ui.close_menu(); }
-                                        if idx + 1 < n && ui.button("Move right").clicked() { reorder = Some((idx, idx + 1)); ui.close_menu(); }
+                                        if idx > 0 && ui.button("Move left").clicked() {
+                                            reorder = Some((idx, idx - 1));
+                                            ui.close_menu();
+                                        }
+                                        if idx + 1 < n && ui.button("Move right").clicked() {
+                                            reorder = Some((idx, idx + 1));
+                                            ui.close_menu();
+                                        }
                                     });
                                     if let Some(payload) = resp.dnd_release_payload::<usize>() {
                                         reorder = Some((*payload, idx));
@@ -1187,51 +1427,65 @@ impl App {
     fn terminal_body(&mut self, ui: &mut egui::Ui) {
         // Pinned header (top) + input (bottom); output fills the middle. Using
         // nested panels keeps the height stable instead of drifting each frame.
-        egui::TopBottomPanel::top("term_header").resizable(false).show_inside(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("TERMINAL").small().strong().color(theme::MUTED));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("close").clicked() {
-                        self.terminal_open = false;
-                    }
-                    let float_lbl = if self.terminal_float { "dock" } else { "float" };
-                    if ui.small_button(float_lbl).on_hover_text("dock / float the terminal").clicked() {
-                        self.terminal_float = !self.terminal_float;
-                    }
-                    if ui.small_button("clear").clicked() {
-                        self.terminal_lines.clear();
+        egui::TopBottomPanel::top("term_header")
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("TERMINAL")
+                            .small()
+                            .strong()
+                            .color(theme::MUTED),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("close").clicked() {
+                            self.terminal_open = false;
+                        }
+                        let float_lbl = if self.terminal_float { "dock" } else { "float" };
+                        if ui
+                            .small_button(float_lbl)
+                            .on_hover_text("dock / float the terminal")
+                            .clicked()
+                        {
+                            self.terminal_float = !self.terminal_float;
+                        }
+                        if ui.small_button("clear").clicked() {
+                            self.terminal_lines.clear();
+                        }
+                    });
+                });
+            });
+        let mut submit: Option<String> = None;
+        egui::TopBottomPanel::bottom("term_input")
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(">").monospace().color(theme::ACCENT));
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(&mut self.terminal_input)
+                            .desired_width(f32::INFINITY)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text("type 'help'"),
+                    );
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        submit = Some(std::mem::take(&mut self.terminal_input));
+                        resp.request_focus();
                     }
                 });
             });
-        });
-        let mut submit: Option<String> = None;
-        egui::TopBottomPanel::bottom("term_input").resizable(false).show_inside(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(">").monospace().color(theme::ACCENT));
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut self.terminal_input)
-                        .desired_width(f32::INFINITY)
-                        .font(egui::TextStyle::Monospace)
-                        .hint_text("type 'help'"),
-                );
-                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    submit = Some(std::mem::take(&mut self.terminal_input));
-                    resp.request_focus();
-                }
-            });
-        });
         egui::CentralPanel::default().show_inside(ui, |ui| {
             egui::ScrollArea::vertical()
                 .stick_to_bottom(true)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     for line in &self.terminal_lines {
-                        ui.label(
-                            egui::RichText::new(line)
-                                .monospace()
-                                .size(12.0)
-                                .color(if line.starts_with('>') { theme::ACCENT } else { theme::TEXT }),
-                        );
+                        ui.label(egui::RichText::new(line).monospace().size(12.0).color(
+                            if line.starts_with('>') {
+                                theme::ACCENT
+                            } else {
+                                theme::TEXT
+                            },
+                        ));
                     }
                 });
         });
@@ -1259,16 +1513,20 @@ impl App {
                 self.terminal_lines.push(
                     "store:   help · clear · posture · findings [n] · estate · assets · certs · threats · paths · open <page> · refresh · version".to_string(),
                 );
-                self.terminal_lines.push(
-                    "scan:    scan <dir>   (in-process code scan)".to_string(),
-                );
+                self.terminal_lines
+                    .push("scan:    scan <dir>   (in-process code scan)".to_string());
                 self.terminal_lines.push(
                     "network: wireshark (detect tshark) · ifaces · capture <host> [count]   (needs probes ON + Wireshark)".to_string(),
                 );
             }
             "posture" => {
                 let msg = match &self.data.posture {
-                    Some(p) => format!("posture {:.0}/100 · {} findings · {} assets scored", p.overall_score, self.data.findings.len(), p.total_assets),
+                    Some(p) => format!(
+                        "posture {:.0}/100 · {} findings · {} assets scored",
+                        p.overall_score,
+                        self.data.findings.len(),
+                        p.total_assets
+                    ),
                     None => "no posture snapshot".to_string(),
                 };
                 self.terminal_lines.push(msg);
@@ -1278,32 +1536,102 @@ impl App {
                 let c = self.data.severity_counts();
                 self.terminal_lines.push(format!(
                     "{} findings - {} critical · {} high · {} medium · {} low · {} info",
-                    self.data.findings.len(), c[4], c[3], c[2], c[1], c[0]
+                    self.data.findings.len(),
+                    c[4],
+                    c[3],
+                    c[2],
+                    c[1],
+                    c[0]
                 ));
-                let rows: Vec<String> = self.data.findings.iter().take(n)
-                    .map(|f| format!("  [{}] {} - {}", sev_label(f.severity), f.title, f.location)).collect();
+                let rows: Vec<String> = self
+                    .data
+                    .findings
+                    .iter()
+                    .take(n)
+                    .map(|f| format!("  [{}] {} - {}", sev_label(f.severity), f.title, f.location))
+                    .collect();
                 self.terminal_lines.extend(rows);
             }
             "estate" => {
-                let rows: Vec<String> = self.data.targets.iter()
-                    .map(|t| format!("{} · {} · {} · {}", t.name, t.host, t.kind, pretty_status(&t.pqc_status))).collect();
-                self.terminal_lines.extend(if rows.is_empty() { vec!["(no hosts)".to_string()] } else { rows });
+                let rows: Vec<String> = self
+                    .data
+                    .targets
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{} · {} · {} · {}",
+                            t.name,
+                            t.host,
+                            t.kind,
+                            pretty_status(&t.pqc_status)
+                        )
+                    })
+                    .collect();
+                self.terminal_lines.extend(if rows.is_empty() {
+                    vec!["(no hosts)".to_string()]
+                } else {
+                    rows
+                });
             }
             "assets" => {
-                let rows: Vec<String> = self.data.assets.iter()
-                    .map(|a| format!("{} · {} · {}", a.id, a.address, pretty_status(&a.pqc_status))).collect();
-                self.terminal_lines.extend(if rows.is_empty() { vec!["(no assets)".to_string()] } else { rows });
+                let rows: Vec<String> = self
+                    .data
+                    .assets
+                    .iter()
+                    .map(|a| {
+                        format!(
+                            "{} · {} · {}",
+                            a.id,
+                            a.address,
+                            pretty_status(&a.pqc_status)
+                        )
+                    })
+                    .collect();
+                self.terminal_lines.extend(if rows.is_empty() {
+                    vec!["(no assets)".to_string()]
+                } else {
+                    rows
+                });
             }
-            "certs" => self.terminal_lines.push(format!("{} certificates", self.data.certs.len())),
+            "certs" => self
+                .terminal_lines
+                .push(format!("{} certificates", self.data.certs.len())),
             "threats" => {
-                let n = self.data.audit.iter().filter(|e| event_to_threat(&e.event).is_some()).count();
-                self.terminal_lines.push(format!("{n} threat events in the audit stream"));
+                let n = self
+                    .data
+                    .audit
+                    .iter()
+                    .filter(|e| event_to_threat(&e.event).is_some())
+                    .count();
+                self.terminal_lines
+                    .push(format!("{n} threat events in the audit stream"));
             }
             "paths" => {
-                self.graph.sync(&self.data.flows, &self.data.targets, &self.data.findings, &self.data.assets);
-                let rows: Vec<String> = self.graph.paths().iter().take(10)
-                    .map(|p| format!("[{:.0}] {} - {}", p.score, p.severity.to_uppercase(), p.title)).collect();
-                self.terminal_lines.extend(if rows.is_empty() { vec!["(no attack paths)".to_string()] } else { rows });
+                self.graph.sync(
+                    &self.data.flows,
+                    &self.data.targets,
+                    &self.data.findings,
+                    &self.data.assets,
+                );
+                let rows: Vec<String> = self
+                    .graph
+                    .paths()
+                    .iter()
+                    .take(10)
+                    .map(|p| {
+                        format!(
+                            "[{:.0}] {} - {}",
+                            p.score,
+                            p.severity.to_uppercase(),
+                            p.title
+                        )
+                    })
+                    .collect();
+                self.terminal_lines.extend(if rows.is_empty() {
+                    vec!["(no attack paths)".to_string()]
+                } else {
+                    rows
+                });
             }
             "scan" => {
                 if arg.is_empty() {
@@ -1317,7 +1645,8 @@ impl App {
             "open" => match page_by_name(&arg) {
                 Some(p) => {
                     self.page = p;
-                    self.terminal_lines.push(format!("opened {}", page_title(p)));
+                    self.terminal_lines
+                        .push(format!("opened {}", page_title(p)));
                 }
                 None => self.terminal_lines.push(format!("unknown page: {arg}")),
             },
@@ -1330,7 +1659,9 @@ impl App {
                     self.tshark_ver = Some(v.clone());
                     self.terminal_lines.push(format!("detected: {v}"));
                 }
-                None => self.terminal_lines.push("tshark not found on PATH - install Wireshark".to_string()),
+                None => self
+                    .terminal_lines
+                    .push("tshark not found on PATH - install Wireshark".to_string()),
             },
             "ifaces" => match tshark_interfaces() {
                 Ok(list) => self.terminal_lines.extend(list),
@@ -1338,14 +1669,20 @@ impl App {
             },
             "capture" => {
                 if !self.net_probes_enabled {
-                    self.terminal_lines.push("network probes are off - enable them in Settings first".to_string());
+                    self.terminal_lines
+                        .push("network probes are off - enable them in Settings first".to_string());
                 } else if arg.is_empty() {
-                    self.terminal_lines.push("usage: capture <host> [count]   (needs Wireshark/tshark + capture perms)".to_string());
+                    self.terminal_lines.push(
+                        "usage: capture <host> [count]   (needs Wireshark/tshark + capture perms)"
+                            .to_string(),
+                    );
                 } else {
                     let mut a = arg.split_whitespace();
                     let host = a.next().unwrap_or("").to_string();
                     let count: usize = a.next().and_then(|s| s.parse().ok()).unwrap_or(20);
-                    self.terminal_lines.push(format!("capturing up to {count} packets to/from {host} via tshark (≤8s)..."));
+                    self.terminal_lines.push(format!(
+                        "capturing up to {count} packets to/from {host} via tshark (≤8s)..."
+                    ));
                     let tx = self.term_tx.clone();
                     let ctx2 = ctx.clone();
                     std::thread::spawn(move || {
@@ -1363,8 +1700,12 @@ impl App {
                     });
                 }
             }
-            "version" => self.terminal_lines.push(format!("qw-desktop {}", build_stamp())),
-            other => self.terminal_lines.push(format!("unknown command: {other} (try 'help')")),
+            "version" => self
+                .terminal_lines
+                .push(format!("qw-desktop {}", build_stamp())),
+            other => self
+                .terminal_lines
+                .push(format!("unknown command: {other} (try 'help')")),
         }
         let len = self.terminal_lines.len();
         if len > 500 {
@@ -1387,7 +1728,11 @@ impl App {
             });
         });
         if !self.export_status.is_empty() {
-            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(&self.export_status)
+                    .color(theme::MUTED)
+                    .small(),
+            );
         }
         ui.add_space(8.0);
 
@@ -1416,12 +1761,18 @@ impl App {
                 });
                 if !self.scan_status.is_empty() {
                     ui.add_space(4.0);
-                    ui.label(egui::RichText::new(&self.scan_status).color(theme::MUTED).small());
+                    ui.label(
+                        egui::RichText::new(&self.scan_status)
+                            .color(theme::MUTED)
+                            .small(),
+                    );
                 }
                 ui.label(
-                    egui::RichText::new("Local files only - no network. Findings are written to the store.")
-                        .color(theme::MUTED)
-                        .small(),
+                    egui::RichText::new(
+                        "Local files only - no network. Findings are written to the store.",
+                    )
+                    .color(theme::MUTED)
+                    .small(),
                 );
             });
         ui.add_space(12.0);
@@ -1432,28 +1783,31 @@ impl App {
             .rounding(8.0)
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    match score {
-                        Some(s) => {
-                            let col = score_color(s);
-                            ui.label(egui::RichText::new(format!("{s:.0}")).size(48.0).strong().color(col));
-                            ui.vertical(|ui| {
-                                ui.add_space(10.0);
-                                ui.label(egui::RichText::new("/ 100 PQC posture").color(theme::MUTED));
-                                ui.add(
-                                    egui::ProgressBar::new((s / 100.0) as f32)
-                                        .desired_width(360.0)
-                                        .fill(col),
-                                );
-                            });
-                        }
-                        None => {
-                            ui.label(
-                                egui::RichText::new("No posture snapshot yet")
-                                    .size(22.0)
-                                    .color(theme::MUTED),
+                ui.horizontal(|ui| match score {
+                    Some(s) => {
+                        let col = score_color(s);
+                        ui.label(
+                            egui::RichText::new(format!("{s:.0}"))
+                                .size(48.0)
+                                .strong()
+                                .color(col),
+                        );
+                        ui.vertical(|ui| {
+                            ui.add_space(10.0);
+                            ui.label(egui::RichText::new("/ 100 PQC posture").color(theme::MUTED));
+                            ui.add(
+                                egui::ProgressBar::new((s / 100.0) as f32)
+                                    .desired_width(360.0)
+                                    .fill(col),
                             );
-                        }
+                        });
+                    }
+                    None => {
+                        ui.label(
+                            egui::RichText::new("No posture snapshot yet")
+                                .size(22.0)
+                                .color(theme::MUTED),
+                        );
                     }
                 });
             });
@@ -1540,9 +1894,12 @@ impl App {
             ui.heading("Attack paths");
             let (n, e) = self.graph.counts();
             ui.label(
-                egui::RichText::new(format!("{n} nodes · {e} edges · {} paths", self.graph.paths().len()))
-                    .color(theme::MUTED)
-                    .small(),
+                egui::RichText::new(format!(
+                    "{n} nodes · {e} edges · {} paths",
+                    self.graph.paths().len()
+                ))
+                .color(theme::MUTED)
+                .small(),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("Reset view").clicked() {
@@ -1559,7 +1916,10 @@ impl App {
         );
         ui.add_space(4.0);
         if self.graph.counts().0 == 0 {
-            empty_state(ui, "Nothing to graph yet - run a scan or register estate hosts.");
+            empty_state(
+                ui,
+                "Nothing to graph yet - run a scan or register estate hosts.",
+            );
             return;
         }
 
@@ -1575,9 +1935,17 @@ impl App {
                     .show(ui, |ui| {
                         let providers = self.graph.providers().to_vec();
                         if providers.is_empty() {
-                            ui.label(egui::RichText::new("No provider channels to harden.").color(theme::MUTED).small());
+                            ui.label(
+                                egui::RichText::new("No provider channels to harden.")
+                                    .color(theme::MUTED)
+                                    .small(),
+                            );
                         } else {
-                            ui.label(egui::RichText::new("harden to hybrid ML-KEM:").color(theme::MUTED).small());
+                            ui.label(
+                                egui::RichText::new("harden to hybrid ML-KEM:")
+                                    .color(theme::MUTED)
+                                    .small(),
+                            );
                             for p in &providers {
                                 let mut on = self.graph.is_hardened(p);
                                 if ui.checkbox(&mut on, p).changed() {
@@ -1587,8 +1955,15 @@ impl App {
                             if self.graph.has_overrides() {
                                 let base = self.graph.base_risk();
                                 let sim = self.graph.sim_risk();
-                                let red = if base > 0.0 { (base - sim) / base * 100.0 } else { 0.0 };
-                                ui.colored_label(theme::GOOD, format!("risk {base:.0} -> {sim:.0}  (-{red:.0}%)"));
+                                let red = if base > 0.0 {
+                                    (base - sim) / base * 100.0
+                                } else {
+                                    0.0
+                                };
+                                ui.colored_label(
+                                    theme::GOOD,
+                                    format!("risk {base:.0} -> {sim:.0}  (-{red:.0}%)"),
+                                );
                                 if ui.small_button("reset").clicked() {
                                     self.graph.clear_overrides();
                                 }
@@ -1615,18 +1990,28 @@ impl App {
                                         graphview::severity_color(&p.severity),
                                         format!("{:.0}", p.score),
                                     );
-                                    ui.label(egui::RichText::new(p.severity.to_uppercase()).small());
+                                    ui.label(
+                                        egui::RichText::new(p.severity.to_uppercase()).small(),
+                                    );
                                     if p.hndl {
-                                        ui.colored_label(theme::CRIT, egui::RichText::new("HNDL").small());
+                                        ui.colored_label(
+                                            theme::CRIT,
+                                            egui::RichText::new("HNDL").small(),
+                                        );
                                     }
                                     if p.observed {
-                                        ui.colored_label(theme::LOW, egui::RichText::new("observed").small());
+                                        ui.colored_label(
+                                            theme::LOW,
+                                            egui::RichText::new("observed").small(),
+                                        );
                                     }
                                 });
                                 ui.label(egui::RichText::new(&p.title).small());
                                 if !p.kill_chain.is_empty() {
                                     egui::CollapsingHeader::new(
-                                        egui::RichText::new("kill chain").color(theme::MUTED).small(),
+                                        egui::RichText::new("kill chain")
+                                            .color(theme::MUTED)
+                                            .small(),
                                     )
                                     .id_salt(("kc", &p.title))
                                     .show(ui, |ui| {
@@ -1634,11 +2019,24 @@ impl App {
                                             ui.horizontal(|ui| {
                                                 ui.colored_label(
                                                     kc_status_color(st.status),
-                                                    egui::RichText::new(format!("{}. {}", st.stage, st.label)).small().strong(),
+                                                    egui::RichText::new(format!(
+                                                        "{}. {}",
+                                                        st.stage, st.label
+                                                    ))
+                                                    .small()
+                                                    .strong(),
                                                 );
-                                                ui.label(egui::RichText::new(st.status).color(kc_status_color(st.status)).small());
+                                                ui.label(
+                                                    egui::RichText::new(st.status)
+                                                        .color(kc_status_color(st.status))
+                                                        .small(),
+                                                );
                                             });
-                                            ui.label(egui::RichText::new(&st.detail).color(theme::MUTED).small());
+                                            ui.label(
+                                                egui::RichText::new(&st.detail)
+                                                    .color(theme::MUTED)
+                                                    .small(),
+                                            );
                                         }
                                     });
                                 }
@@ -1688,11 +2086,19 @@ impl App {
                 if ui.button("Export JSON").clicked() {
                     self.export_findings();
                 }
-                ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter...").desired_width(220.0));
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.filter)
+                        .hint_text("filter...")
+                        .desired_width(220.0),
+                );
             });
         });
         if !self.export_status.is_empty() {
-            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(&self.export_status)
+                    .color(theme::MUTED)
+                    .small(),
+            );
         }
         ui.add_space(6.0);
 
@@ -1705,12 +2111,19 @@ impl App {
                 filter.is_empty()
                     || f.title.to_lowercase().contains(&filter)
                     || f.location.to_lowercase().contains(&filter)
-                    || f.algorithm.as_deref().unwrap_or("").to_lowercase().contains(&filter)
+                    || f.algorithm
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&filter)
             })
             .collect();
 
         if rows.is_empty() {
-            empty_state(ui, "No findings match. Run a scan via the gateway or `qw scan`.");
+            empty_state(
+                ui,
+                "No findings match. Run a scan via the gateway or `qw scan`.",
+            );
             return;
         }
 
@@ -1727,8 +2140,9 @@ impl App {
                     for f in rows {
                         ui.colored_label(sev_color(f.severity), sev_label(f.severity));
                         // Clickable title → open the detail panel. Tooltip previews it.
-                        let title = egui::Label::new(egui::RichText::new(&f.title).color(theme::ACCENT))
-                            .sense(egui::Sense::click());
+                        let title =
+                            egui::Label::new(egui::RichText::new(&f.title).color(theme::ACCENT))
+                                .sense(egui::Sense::click());
                         let mut tip = f.description.clone();
                         if let Some(r) = &f.remediation {
                             tip.push_str(&format!("\n\nFix: {r}"));
@@ -1796,7 +2210,11 @@ impl App {
             self.add_target();
         }
         if !self.edit_status.is_empty() {
-            ui.label(egui::RichText::new(&self.edit_status).color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(&self.edit_status)
+                    .color(theme::MUTED)
+                    .small(),
+            );
         }
         ui.add_space(6.0);
 
@@ -1807,48 +2225,74 @@ impl App {
         {
             let d = &self.data;
             let probes = &self.probe_results;
-            data_table(ui, "estate", &["Name", "Host", "Kind", "Env", "PQC", "Exposure", ""],
-                d.targets.len(), "No registered hosts. Register one above.", |ui, i| {
-                let t = &d.targets[i];
-                let air = has_tag(&t.tags, "air-gapped");
-                let name = ui.add(egui::Label::new(egui::RichText::new(&t.name).color(theme::ACCENT)).sense(egui::Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("click for details");
-                if name.clicked() {
-                    open = Some(Selection::Host(t.id.clone()));
-                }
-                name.context_menu(|ui| {
-                    if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
-                        toggle = Some(t.id.clone());
-                        ui.close_menu();
-                    }
-                    if ui.button("Verify reachability").clicked() {
-                        probe = Some((t.id.clone(), t.host.clone(), air));
-                        ui.close_menu();
-                    }
-                    if ui.button("Delete host").clicked() {
-                        del = Some(t.id.clone());
-                        ui.close_menu();
-                    }
-                });
-                ui.label(egui::RichText::new(&t.host).color(theme::MUTED));
-                ui.label(&t.kind);
-                ui.label(&t.environment);
-                ui.colored_label(status_str_color(&t.pqc_status), pretty_status(&t.pqc_status));
-                ui.horizontal(|ui| {
-                    let (col, txt) = if air { (theme::GOOD, "air-gapped") } else { (theme::MUTED, "exposed") };
-                    if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+            data_table(
+                ui,
+                "estate",
+                &["Name", "Host", "Kind", "Env", "PQC", "Exposure", ""],
+                d.targets.len(),
+                "No registered hosts. Register one above.",
+                |ui, i| {
+                    let t = &d.targets[i];
+                    let air = has_tag(&t.tags, "air-gapped");
+                    let name = ui
+                        .add(
+                            egui::Label::new(egui::RichText::new(&t.name).color(theme::ACCENT))
+                                .sense(egui::Sense::click()),
+                        )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("toggle · right-click to verify reachability").clicked()
-                    {
-                        toggle = Some(t.id.clone());
+                        .on_hover_text("click for details");
+                    if name.clicked() {
+                        open = Some(Selection::Host(t.id.clone()));
                     }
-                    probe_badge(ui, probes.get(&t.id), air);
-                });
-                if ui.small_button("Del").on_hover_text("delete").clicked() {
-                    del = Some(t.id.clone());
-                }
-            });
+                    name.context_menu(|ui| {
+                        if ui
+                            .button(if air {
+                                "Mark exposed"
+                            } else {
+                                "Mark air-gapped"
+                            })
+                            .clicked()
+                        {
+                            toggle = Some(t.id.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button("Verify reachability").clicked() {
+                            probe = Some((t.id.clone(), t.host.clone(), air));
+                            ui.close_menu();
+                        }
+                        if ui.button("Delete host").clicked() {
+                            del = Some(t.id.clone());
+                            ui.close_menu();
+                        }
+                    });
+                    ui.label(egui::RichText::new(&t.host).color(theme::MUTED));
+                    ui.label(&t.kind);
+                    ui.label(&t.environment);
+                    ui.colored_label(
+                        status_str_color(&t.pqc_status),
+                        pretty_status(&t.pqc_status),
+                    );
+                    ui.horizontal(|ui| {
+                        let (col, txt) = if air {
+                            (theme::GOOD, "air-gapped")
+                        } else {
+                            (theme::MUTED, "exposed")
+                        };
+                        if ui
+                            .selectable_label(air, egui::RichText::new(txt).color(col).small())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("toggle · right-click to verify reachability")
+                            .clicked()
+                        {
+                            toggle = Some(t.id.clone());
+                        }
+                        probe_badge(ui, probes.get(&t.id), air);
+                    });
+                    if ui.small_button("Del").on_hover_text("delete").clicked() {
+                        del = Some(t.id.clone());
+                    }
+                },
+            );
         }
         if let Some(s) = open {
             self.selected = Some(s);
@@ -1901,7 +2345,12 @@ impl App {
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty())
             .collect();
-        let days = self.cert_form.validity_days.trim().parse::<u32>().unwrap_or(90);
+        let days = self
+            .cert_form
+            .validity_days
+            .trim()
+            .parse::<u32>()
+            .unwrap_or(90);
         let hybrid = self.cert_form.hybrid;
         let ca = match self.ensure_ca() {
             Ok(c) => c,
@@ -1915,10 +2364,17 @@ impl App {
                 self.store.record_certificate(TENANT, &row);
                 self.cert_status = format!(
                     "Issued {} certificate for {} · serial {} · CA {}",
-                    row.key_type, subject, row.serial, ca.fingerprint()
+                    row.key_type,
+                    subject,
+                    row.serial,
+                    ca.fingerprint()
                 );
                 self.issued_key = Some((subject, key_pem));
-                self.cert_form = CertForm { validity_days: days.to_string(), hybrid, ..Default::default() };
+                self.cert_form = CertForm {
+                    validity_days: days.to_string(),
+                    hybrid,
+                    ..Default::default()
+                };
                 self.refresh();
             }
             Err(e) => self.cert_status = format!("Issue failed: {e}"),
@@ -1931,7 +2387,12 @@ impl App {
             return;
         };
         let hybrid = prev.key_type == "hybrid";
-        let sans: Vec<String> = prev.sans.iter().filter(|s| **s != prev.subject).cloned().collect();
+        let sans: Vec<String> = prev
+            .sans
+            .iter()
+            .filter(|s| **s != prev.subject)
+            .cloned()
+            .collect();
         let ca = match self.ensure_ca() {
             Ok(c) => c,
             Err(e) => {
@@ -1973,20 +2434,37 @@ impl App {
         egui::CollapsingHeader::new("Issue a certificate")
             .default_open(self.data.certs.is_empty())
             .show(ui, |ui| {
-                egui::Grid::new("certform").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                    ui.label("Subject (CN)");
-                    ui.add(egui::TextEdit::singleline(&mut self.cert_form.subject).hint_text("svc.internal").desired_width(260.0));
-                    ui.end_row();
-                    ui.label("SANs (comma-sep)");
-                    ui.add(egui::TextEdit::singleline(&mut self.cert_form.sans).hint_text("svc.internal, svc.corp").desired_width(260.0));
-                    ui.end_row();
-                    ui.label("Validity (days)");
-                    ui.add(egui::TextEdit::singleline(&mut self.cert_form.validity_days).desired_width(80.0));
-                    ui.end_row();
-                    ui.label("Post-quantum");
-                    ui.checkbox(&mut self.cert_form.hybrid, "hybrid (adds ML-DSA-65 binding)");
-                    ui.end_row();
-                });
+                egui::Grid::new("certform")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Subject (CN)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.cert_form.subject)
+                                .hint_text("svc.internal")
+                                .desired_width(260.0),
+                        );
+                        ui.end_row();
+                        ui.label("SANs (comma-sep)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.cert_form.sans)
+                                .hint_text("svc.internal, svc.corp")
+                                .desired_width(260.0),
+                        );
+                        ui.end_row();
+                        ui.label("Validity (days)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.cert_form.validity_days)
+                                .desired_width(80.0),
+                        );
+                        ui.end_row();
+                        ui.label("Post-quantum");
+                        ui.checkbox(
+                            &mut self.cert_form.hybrid,
+                            "hybrid (adds ML-DSA-65 binding)",
+                        );
+                        ui.end_row();
+                    });
                 if ui.button("Issue certificate").clicked() {
                     self.issue_cert();
                 }
@@ -1994,33 +2472,50 @@ impl App {
 
         // One-time private-key reveal after an issue/renew.
         if let Some((subject, pem)) = self.issued_key.clone() {
-            egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.colored_label(theme::HIGH, "Private key (shown once)");
-                    ui.label(egui::RichText::new(&subject).strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Dismiss").clicked() {
-                            self.issued_key = None;
-                        }
-                        if ui.button("Copy key").clicked() {
-                            ui.output_mut(|o| o.copied_text = pem.clone());
-                        }
+            egui::Frame::none()
+                .fill(theme::CARD)
+                .rounding(6.0)
+                .inner_margin(egui::Margin::same(8.0))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.colored_label(theme::HIGH, "Private key (shown once)");
+                        ui.label(egui::RichText::new(&subject).strong());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Dismiss").clicked() {
+                                self.issued_key = None;
+                            }
+                            if ui.button("Copy key").clicked() {
+                                ui.output_mut(|o| o.copied_text = pem.clone());
+                            }
+                        });
                     });
+                    ui.label(
+                        egui::RichText::new("This leaf private key is never stored - copy it now.")
+                            .color(theme::MUTED)
+                            .small(),
+                    );
+                    egui::ScrollArea::vertical()
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(&pem).monospace().small());
+                        });
                 });
-                ui.label(egui::RichText::new("This leaf private key is never stored - copy it now.").color(theme::MUTED).small());
-                egui::ScrollArea::vertical().max_height(120.0).show(ui, |ui| {
-                    ui.label(egui::RichText::new(&pem).monospace().small());
-                });
-            });
             ui.add_space(4.0);
         }
         if !self.cert_status.is_empty() {
-            ui.label(egui::RichText::new(&self.cert_status).color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(&self.cert_status)
+                    .color(theme::MUTED)
+                    .small(),
+            );
         }
         ui.add_space(6.0);
 
         if self.data.certs.is_empty() {
-            empty_state(ui, "No certificates yet. Issue one above with the local PQC CA.");
+            empty_state(
+                ui,
+                "No certificates yet. Issue one above with the local PQC CA.",
+            );
             return;
         }
         let now = Utc::now();
@@ -2103,20 +2598,32 @@ impl App {
         let mut open: Option<Selection> = None;
         {
             let d = &self.data;
-            data_table(ui, "scans", &["Scanner", "Target", "Status", "Findings", "Completed"],
-                d.scans.len(), "No scans recorded yet. Run one from the Overview page.", |ui, i| {
-                let s = &d.scans[i];
-                let name = ui.add(egui::Label::new(egui::RichText::new(&s.scanner_id).color(theme::ACCENT)).sense(egui::Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("click for details");
-                if name.clicked() {
-                    open = Some(Selection::Scan(s.id.clone()));
-                }
-                ui.label(egui::RichText::new(&s.target_address).color(theme::MUTED));
-                ui.label(format!("{:?}", s.status));
-                ui.label(s.finding_count.to_string());
-                ui.label(egui::RichText::new(fmt_dt(s.completed_at)).color(theme::MUTED));
-            });
+            data_table(
+                ui,
+                "scans",
+                &["Scanner", "Target", "Status", "Findings", "Completed"],
+                d.scans.len(),
+                "No scans recorded yet. Run one from the Overview page.",
+                |ui, i| {
+                    let s = &d.scans[i];
+                    let name = ui
+                        .add(
+                            egui::Label::new(
+                                egui::RichText::new(&s.scanner_id).color(theme::ACCENT),
+                            )
+                            .sense(egui::Sense::click()),
+                        )
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .on_hover_text("click for details");
+                    if name.clicked() {
+                        open = Some(Selection::Scan(s.id.clone()));
+                    }
+                    ui.label(egui::RichText::new(&s.target_address).color(theme::MUTED));
+                    ui.label(format!("{:?}", s.status));
+                    ui.label(s.finding_count.to_string());
+                    ui.label(egui::RichText::new(fmt_dt(s.completed_at)).color(theme::MUTED));
+                },
+            );
         }
         if let Some(s) = open {
             self.selected = Some(s);
@@ -2186,33 +2693,40 @@ impl App {
         ui.add_space(6.0);
         ui.label(egui::RichText::new(&f.title).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("fdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            kv(ui, "Category", &f.category.to_string());
-            if let Some(a) = &f.algorithm {
-                kv(ui, "Algorithm", a);
-            }
-            kv(ui, "Confidence", &format!("{:?}", f.confidence));
-            if let Some(s) = &scan {
-                ui.label(egui::RichText::new("Scanned root").color(theme::MUTED));
-                ui.label(egui::RichText::new(&s.target_address).monospace().small())
-                    .on_hover_text("the repo/folder this scan ran against");
+        egui::Grid::new("fdetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                kv(ui, "Category", &f.category.to_string());
+                if let Some(a) = &f.algorithm {
+                    kv(ui, "Algorithm", a);
+                }
+                kv(ui, "Confidence", &format!("{:?}", f.confidence));
+                if let Some(s) = &scan {
+                    ui.label(egui::RichText::new("Scanned root").color(theme::MUTED));
+                    ui.label(egui::RichText::new(&s.target_address).monospace().small())
+                        .on_hover_text("the repo/folder this scan ran against");
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Full path").color(theme::MUTED));
+                    let full = resolve_path(&s.target_address, &f.location);
+                    copy_value(ui, &full);
+                    ui.end_row();
+                    ui.label(egui::RichText::new("Scanner").color(theme::MUTED));
+                    ui.label(egui::RichText::new(&s.scanner_id).small());
+                    ui.end_row();
+                }
+                ui.label(egui::RichText::new("Location").color(theme::MUTED));
+                ui.label(egui::RichText::new(&f.location).monospace().small())
+                    .on_hover_text("relative to the scanned root above");
                 ui.end_row();
-                ui.label(egui::RichText::new("Full path").color(theme::MUTED));
-                let full = resolve_path(&s.target_address, &f.location);
-                copy_value(ui, &full);
-                ui.end_row();
-                ui.label(egui::RichText::new("Scanner").color(theme::MUTED));
-                ui.label(egui::RichText::new(&s.scanner_id).small());
-                ui.end_row();
-            }
-            ui.label(egui::RichText::new("Location").color(theme::MUTED));
-            ui.label(egui::RichText::new(&f.location).monospace().small())
-                .on_hover_text("relative to the scanned root above");
-            ui.end_row();
-        });
+            });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Set status:").small().color(theme::MUTED));
+            ui.label(
+                egui::RichText::new("Set status:")
+                    .small()
+                    .color(theme::MUTED),
+            );
             for (lbl, st) in [
                 ("Open", FindingStatus::Open),
                 ("Acknowledge", FindingStatus::Acknowledged),
@@ -2232,26 +2746,49 @@ impl App {
             .data
             .connections
             .iter()
-            .filter(|c| matches!(c.integration_type.as_str(), "jira" | "linear" | "github" | "gitlab"))
+            .filter(|c| {
+                matches!(
+                    c.integration_type.as_str(),
+                    "jira" | "linear" | "github" | "gitlab"
+                )
+            })
             .map(|c| (c.id.clone(), c.display_name.clone()))
             .collect();
         let mut op: Option<NetOp> = None;
         if !trackers.is_empty() {
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("Open ticket:").small().color(theme::MUTED));
+                ui.label(
+                    egui::RichText::new("Open ticket:")
+                        .small()
+                        .color(theme::MUTED),
+                );
                 let online = self.net_probes_enabled && !self.net_busy;
                 for (cid, name) in &trackers {
-                    if ui.add_enabled(online, egui::Button::new(name).small()).clicked() {
-                        op = Some(NetOp::OpenTicket { finding_id: f.id.clone(), conn_id: cid.clone() });
+                    if ui
+                        .add_enabled(online, egui::Button::new(name).small())
+                        .clicked()
+                    {
+                        op = Some(NetOp::OpenTicket {
+                            finding_id: f.id.clone(),
+                            conn_id: cid.clone(),
+                        });
                     }
                 }
             });
             if !self.net_probes_enabled {
-                ui.label(egui::RichText::new("enable Online mode (Settings) to file tickets").color(theme::MUTED).small());
+                ui.label(
+                    egui::RichText::new("enable Online mode (Settings) to file tickets")
+                        .color(theme::MUTED)
+                        .small(),
+                );
             }
             if !self.net_status.is_empty() {
-                ui.label(egui::RichText::new(&self.net_status).color(theme::LOW).small());
+                ui.label(
+                    egui::RichText::new(&self.net_status)
+                        .color(theme::LOW)
+                        .small(),
+                );
             }
         }
         if let Some(op) = op {
@@ -2265,7 +2802,11 @@ impl App {
             ui.label(&f.description);
             if let Some(rem) = &f.remediation {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("Remediation").strong().color(theme::GOOD));
+                ui.label(
+                    egui::RichText::new("Remediation")
+                        .strong()
+                        .color(theme::GOOD),
+                );
                 ui.label(rem);
             }
             if !f.evidence.is_empty() {
@@ -2286,30 +2827,46 @@ impl App {
         ui.label(egui::RichText::new(&a.id).strong().size(15.0));
         ui.add_space(8.0);
         let air = has_tag(&a.tags, "air-gapped");
-        egui::Grid::new("adetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            kv(ui, "Kind", &a.kind);
-            ui.label(egui::RichText::new("Address").color(theme::MUTED));
-            ui.label(egui::RichText::new(&a.address).monospace().small());
-            ui.end_row();
-            kv(ui, "Environment", &a.environment);
-            ui.label(egui::RichText::new("PQC").color(theme::MUTED));
-            ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
-            ui.end_row();
-            if let Some(v) = &a.tls_version {
-                kv(ui, "TLS", v);
-            }
-            kv(ui, "Source", &a.source);
-            ui.label(egui::RichText::new("Exposure").color(theme::MUTED));
-            ui.colored_label(if air { theme::GOOD } else { theme::MUTED }, if air { "air-gapped" } else { "exposed" });
-            ui.end_row();
-            kv(ui, "Last scanned", &fmt_opt_dt(a.last_scanned));
-            if !a.tags.is_empty() {
-                kv(ui, "Tags", &a.tags.join(", "));
-            }
-        });
+        egui::Grid::new("adetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                kv(ui, "Kind", &a.kind);
+                ui.label(egui::RichText::new("Address").color(theme::MUTED));
+                ui.label(egui::RichText::new(&a.address).monospace().small());
+                ui.end_row();
+                kv(ui, "Environment", &a.environment);
+                ui.label(egui::RichText::new("PQC").color(theme::MUTED));
+                ui.colored_label(
+                    status_str_color(&a.pqc_status),
+                    pretty_status(&a.pqc_status),
+                );
+                ui.end_row();
+                if let Some(v) = &a.tls_version {
+                    kv(ui, "TLS", v);
+                }
+                kv(ui, "Source", &a.source);
+                ui.label(egui::RichText::new("Exposure").color(theme::MUTED));
+                ui.colored_label(
+                    if air { theme::GOOD } else { theme::MUTED },
+                    if air { "air-gapped" } else { "exposed" },
+                );
+                ui.end_row();
+                kv(ui, "Last scanned", &fmt_opt_dt(a.last_scanned));
+                if !a.tags.is_empty() {
+                    kv(ui, "Tags", &a.tags.join(", "));
+                }
+            });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
+            if ui
+                .button(if air {
+                    "Mark exposed"
+                } else {
+                    "Mark air-gapped"
+                })
+                .clicked()
+            {
                 self.toggle_asset_airgap(&a.id);
             }
             if ui.button("Delete").clicked() {
@@ -2328,25 +2885,45 @@ impl App {
         ui.label(egui::RichText::new(&t.name).strong().size(15.0));
         ui.add_space(8.0);
         let air = has_tag(&t.tags, "air-gapped");
-        egui::Grid::new("hdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            ui.label(egui::RichText::new("Host").color(theme::MUTED));
-            ui.label(egui::RichText::new(&t.host).monospace().small());
-            ui.end_row();
-            kv(ui, "Kind", &t.kind);
-            kv(ui, "Environment", &t.environment);
-            ui.label(egui::RichText::new("PQC").color(theme::MUTED));
-            ui.colored_label(status_str_color(&t.pqc_status), pretty_status(&t.pqc_status));
-            ui.end_row();
-            kv(ui, "Reachability", &t.reachability.join(", "));
-            kv(ui, "Deep scanned", if t.deep_scanned { "yes" } else { "no" });
-            ui.label(egui::RichText::new("Exposure").color(theme::MUTED));
-            ui.colored_label(if air { theme::GOOD } else { theme::MUTED }, if air { "air-gapped" } else { "exposed" });
-            ui.end_row();
-            kv(ui, "Last scanned", &fmt_opt_dt(t.last_scanned));
-        });
+        egui::Grid::new("hdetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Host").color(theme::MUTED));
+                ui.label(egui::RichText::new(&t.host).monospace().small());
+                ui.end_row();
+                kv(ui, "Kind", &t.kind);
+                kv(ui, "Environment", &t.environment);
+                ui.label(egui::RichText::new("PQC").color(theme::MUTED));
+                ui.colored_label(
+                    status_str_color(&t.pqc_status),
+                    pretty_status(&t.pqc_status),
+                );
+                ui.end_row();
+                kv(ui, "Reachability", &t.reachability.join(", "));
+                kv(
+                    ui,
+                    "Deep scanned",
+                    if t.deep_scanned { "yes" } else { "no" },
+                );
+                ui.label(egui::RichText::new("Exposure").color(theme::MUTED));
+                ui.colored_label(
+                    if air { theme::GOOD } else { theme::MUTED },
+                    if air { "air-gapped" } else { "exposed" },
+                );
+                ui.end_row();
+                kv(ui, "Last scanned", &fmt_opt_dt(t.last_scanned));
+            });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
+            if ui
+                .button(if air {
+                    "Mark exposed"
+                } else {
+                    "Mark air-gapped"
+                })
+                .clicked()
+            {
                 self.toggle_target_airgap(&t.id);
             }
             if ui.button("Delete").clicked() {
@@ -2358,19 +2935,31 @@ impl App {
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             if t.exposed_services.is_empty() {
-                ui.label(egui::RichText::new("No exposed services scanned.").color(theme::MUTED).small());
+                ui.label(
+                    egui::RichText::new("No exposed services scanned.")
+                        .color(theme::MUTED)
+                        .small(),
+                );
             } else {
-                ui.label(egui::RichText::new(format!("Exposed services ({})", t.exposed_services.len())).strong());
+                ui.label(
+                    egui::RichText::new(format!("Exposed services ({})", t.exposed_services.len()))
+                        .strong(),
+                );
                 for s in &t.exposed_services {
                     ui.horizontal(|ui| {
-                        ui.colored_label(status_str_color(&s.pqc_status), format!(":{} {}", s.port, s.service));
+                        ui.colored_label(
+                            status_str_color(&s.pqc_status),
+                            format!(":{} {}", s.port, s.service),
+                        );
                         ui.label(egui::RichText::new(&s.detail).color(theme::MUTED).small());
                     });
                 }
             }
             if !t.containers.is_empty() {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new(format!("Containers ({})", t.containers.len())).strong());
+                ui.label(
+                    egui::RichText::new(format!("Containers ({})", t.containers.len())).strong(),
+                );
             }
         });
     }
@@ -2382,19 +2971,26 @@ impl App {
         };
         ui.label(egui::RichText::new(&s.scanner_id).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("sdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            ui.label(egui::RichText::new("Target").color(theme::MUTED));
-            ui.label(egui::RichText::new(&s.target_address).monospace().small());
-            ui.end_row();
-            kv(ui, "Status", &format!("{:?}", s.status));
-            kv(ui, "Findings", &s.finding_count.to_string());
-            kv(ui, "Started", &fmt_dt(s.started_at));
-            kv(ui, "Completed", &fmt_dt(s.completed_at));
-            ui.label(egui::RichText::new("Content hash").color(theme::MUTED));
-            ui.label(egui::RichText::new(truncate_str(&s.content_hash, 24)).monospace().small())
+        egui::Grid::new("sdetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Target").color(theme::MUTED));
+                ui.label(egui::RichText::new(&s.target_address).monospace().small());
+                ui.end_row();
+                kv(ui, "Status", &format!("{:?}", s.status));
+                kv(ui, "Findings", &s.finding_count.to_string());
+                kv(ui, "Started", &fmt_dt(s.started_at));
+                kv(ui, "Completed", &fmt_dt(s.completed_at));
+                ui.label(egui::RichText::new("Content hash").color(theme::MUTED));
+                ui.label(
+                    egui::RichText::new(truncate_str(&s.content_hash, 24))
+                        .monospace()
+                        .small(),
+                )
                 .on_hover_text(&s.content_hash);
-            ui.end_row();
-        });
+                ui.end_row();
+            });
     }
 
     fn endpoint_body(&mut self, ui: &mut egui::Ui, id: &str) {
@@ -2404,37 +3000,52 @@ impl App {
         };
         ui.label(egui::RichText::new(&e.hostname).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("edetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            kv(ui, "OS", &e.os);
-            kv(ui, "OS kind", &e.os_kind);
-            kv(ui, "Agent", e.agent_version.as_deref().unwrap_or("-"));
-            ui.label(egui::RichText::new("PQC").color(theme::MUTED));
-            ui.colored_label(status_str_color(&e.pqc_status), pretty_status(&e.pqc_status));
-            ui.end_row();
-            kv(ui, "Findings", &e.findings_count.to_string());
-            kv(ui, "Enrolled", &fmt_dt(e.enrolled_at));
-            kv(ui, "Last report", &fmt_dt(e.last_report));
-        });
+        egui::Grid::new("edetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                kv(ui, "OS", &e.os);
+                kv(ui, "OS kind", &e.os_kind);
+                kv(ui, "Agent", e.agent_version.as_deref().unwrap_or("-"));
+                ui.label(egui::RichText::new("PQC").color(theme::MUTED));
+                ui.colored_label(
+                    status_str_color(&e.pqc_status),
+                    pretty_status(&e.pqc_status),
+                );
+                ui.end_row();
+                kv(ui, "Findings", &e.findings_count.to_string());
+                kv(ui, "Enrolled", &fmt_dt(e.enrolled_at));
+                kv(ui, "Last report", &fmt_dt(e.last_report));
+            });
     }
 
     fn session_body(&mut self, ui: &mut egui::Ui, id: &str) {
-        let Some(s) = self.data.sessions.iter().find(|s| s.session_id == id).cloned() else {
+        let Some(s) = self
+            .data
+            .sessions
+            .iter()
+            .find(|s| s.session_id == id)
+            .cloned()
+        else {
             self.selected = None;
             return;
         };
         ui.label(egui::RichText::new(&s.agent_name).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("sesdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            ui.label(egui::RichText::new("Session").color(theme::MUTED));
-            ui.label(egui::RichText::new(&s.session_id).monospace().small());
-            ui.end_row();
-            kv(ui, "Provider", &s.provider);
-            kv(ui, "Model", &s.model);
-            kv(ui, "Requests", &s.request_count.to_string());
-            kv(ui, "Tokens", &s.total_tokens.to_string());
-            kv(ui, "Client IP", &s.client_ip);
-            kv(ui, "Created", &fmt_dt(s.created_at));
-        });
+        egui::Grid::new("sesdetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(egui::RichText::new("Session").color(theme::MUTED));
+                ui.label(egui::RichText::new(&s.session_id).monospace().small());
+                ui.end_row();
+                kv(ui, "Provider", &s.provider);
+                kv(ui, "Model", &s.model);
+                kv(ui, "Requests", &s.request_count.to_string());
+                kv(ui, "Tokens", &s.total_tokens.to_string());
+                kv(ui, "Client IP", &s.client_ip);
+                kv(ui, "Created", &fmt_dt(s.created_at));
+            });
     }
 
     fn connection_body(&mut self, ui: &mut egui::Ui, id: &str) {
@@ -2444,18 +3055,21 @@ impl App {
         };
         ui.label(egui::RichText::new(&c.display_name).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("conndetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            kv(ui, "Type", &c.integration_type);
-            kv(ui, "Base URL", c.base_url.as_deref().unwrap_or("-"));
-            kv(ui, "Org", c.org.as_deref().unwrap_or("-"));
-            kv(ui, "Project", c.project.as_deref().unwrap_or("-"));
-            kv(ui, "Status", c.last_status.as_deref().unwrap_or("untested"));
-            kv(ui, "Secret", "****** (encrypted at rest)");
-            kv(ui, "Created", &fmt_dt(c.created_at));
-            if let Some(n) = c.findings_count {
-                kv(ui, "Findings", &n.to_string());
-            }
-        });
+        egui::Grid::new("conndetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                kv(ui, "Type", &c.integration_type);
+                kv(ui, "Base URL", c.base_url.as_deref().unwrap_or("-"));
+                kv(ui, "Org", c.org.as_deref().unwrap_or("-"));
+                kv(ui, "Project", c.project.as_deref().unwrap_or("-"));
+                kv(ui, "Status", c.last_status.as_deref().unwrap_or("untested"));
+                kv(ui, "Secret", "****** (encrypted at rest)");
+                kv(ui, "Created", &fmt_dt(c.created_at));
+                if let Some(n) = c.findings_count {
+                    kv(ui, "Findings", &n.to_string());
+                }
+            });
     }
 
     fn remediation_body(&mut self, ui: &mut egui::Ui, id: &str) {
@@ -2465,18 +3079,21 @@ impl App {
         };
         ui.label(egui::RichText::new(&r.external_id).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("remdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            kv(ui, "Integration", &r.integration_id);
-            kv(ui, "Status", &format!("{:?}", r.status));
-            ui.label(egui::RichText::new("Finding").color(theme::MUTED));
-            ui.label(egui::RichText::new(&r.finding_id).monospace().small());
-            ui.end_row();
-            kv(ui, "Created", &fmt_dt(r.created_at));
-            kv(ui, "Updated", &fmt_dt(r.updated_at));
-            ui.label(egui::RichText::new("URL").color(theme::MUTED));
-            ui.label(egui::RichText::new(&r.external_url).small());
-            ui.end_row();
-        });
+        egui::Grid::new("remdetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                kv(ui, "Integration", &r.integration_id);
+                kv(ui, "Status", &format!("{:?}", r.status));
+                ui.label(egui::RichText::new("Finding").color(theme::MUTED));
+                ui.label(egui::RichText::new(&r.finding_id).monospace().small());
+                ui.end_row();
+                kv(ui, "Created", &fmt_dt(r.created_at));
+                kv(ui, "Updated", &fmt_dt(r.updated_at));
+                ui.label(egui::RichText::new("URL").color(theme::MUTED));
+                ui.label(egui::RichText::new(&r.external_url).small());
+                ui.end_row();
+            });
     }
 
     fn cert_body(&mut self, ui: &mut egui::Ui, id: &str) {
@@ -2486,23 +3103,41 @@ impl App {
         };
         ui.label(egui::RichText::new(&c.subject).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("certdetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            kv(ui, "Key type", &c.key_type);
-            ui.label(egui::RichText::new("PQC").color(theme::MUTED));
-            ui.colored_label(status_str_color(&c.pqc_status), pretty_status(&c.pqc_status));
-            ui.end_row();
-            kv(ui, "State", &c.status);
-            ui.label(egui::RichText::new("Serial").color(theme::MUTED));
-            ui.label(egui::RichText::new(&c.serial).monospace().small());
-            ui.end_row();
-            kv(ui, "Not before", &fmt_dt(c.not_before));
-            kv(ui, "Not after", &fmt_dt(c.not_after));
-            ui.label(egui::RichText::new("CA fingerprint").color(theme::MUTED));
-            ui.label(egui::RichText::new(truncate_str(&c.ca_fingerprint, 24)).monospace().small())
+        egui::Grid::new("certdetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                kv(ui, "Key type", &c.key_type);
+                ui.label(egui::RichText::new("PQC").color(theme::MUTED));
+                ui.colored_label(
+                    status_str_color(&c.pqc_status),
+                    pretty_status(&c.pqc_status),
+                );
+                ui.end_row();
+                kv(ui, "State", &c.status);
+                ui.label(egui::RichText::new("Serial").color(theme::MUTED));
+                ui.label(egui::RichText::new(&c.serial).monospace().small());
+                ui.end_row();
+                kv(ui, "Not before", &fmt_dt(c.not_before));
+                kv(ui, "Not after", &fmt_dt(c.not_after));
+                ui.label(egui::RichText::new("CA fingerprint").color(theme::MUTED));
+                ui.label(
+                    egui::RichText::new(truncate_str(&c.ca_fingerprint, 24))
+                        .monospace()
+                        .small(),
+                )
                 .on_hover_text(&c.ca_fingerprint);
-            ui.end_row();
-            kv(ui, "Hybrid binding", if c.mldsa_signature.is_some() { "ML-DSA-65 present" } else { "none" });
-        });
+                ui.end_row();
+                kv(
+                    ui,
+                    "Hybrid binding",
+                    if c.mldsa_signature.is_some() {
+                        "ML-DSA-65 present"
+                    } else {
+                        "none"
+                    },
+                );
+            });
         if !c.sans.is_empty() {
             ui.add_space(6.0);
             ui.label(egui::RichText::new("SANs").strong());
@@ -2519,18 +3154,27 @@ impl App {
         let mut open: Option<Selection> = None;
         {
             let d = &self.data;
-            data_table(ui, "endpoints", &["Hostname", "OS", "Agent", "PQC", "Findings", "Last report"],
-                d.endpoints.len(), "No host agents enrolled.", |ui, i| {
-                let e = &d.endpoints[i];
-                if link_cell(ui, &e.hostname) {
-                    open = Some(Selection::Endpoint(e.id.clone()));
-                }
-                ui.label(egui::RichText::new(&e.os).color(theme::MUTED));
-                ui.label(e.agent_version.as_deref().unwrap_or("-"));
-                ui.colored_label(status_str_color(&e.pqc_status), pretty_status(&e.pqc_status));
-                ui.label(e.findings_count.to_string());
-                ui.label(egui::RichText::new(fmt_dt(e.last_report)).color(theme::MUTED));
-            });
+            data_table(
+                ui,
+                "endpoints",
+                &["Hostname", "OS", "Agent", "PQC", "Findings", "Last report"],
+                d.endpoints.len(),
+                "No host agents enrolled.",
+                |ui, i| {
+                    let e = &d.endpoints[i];
+                    if link_cell(ui, &e.hostname) {
+                        open = Some(Selection::Endpoint(e.id.clone()));
+                    }
+                    ui.label(egui::RichText::new(&e.os).color(theme::MUTED));
+                    ui.label(e.agent_version.as_deref().unwrap_or("-"));
+                    ui.colored_label(
+                        status_str_color(&e.pqc_status),
+                        pretty_status(&e.pqc_status),
+                    );
+                    ui.label(e.findings_count.to_string());
+                    ui.label(egui::RichText::new(fmt_dt(e.last_report)).color(theme::MUTED));
+                },
+            );
         }
         if let Some(s) = open {
             self.selected = Some(s);
@@ -2546,7 +3190,11 @@ impl App {
         egui::CollapsingHeader::new("Add asset").show(ui, |ui| {
             let cur = self.asset_form.kind.clone();
             egui::ComboBox::from_label("Template")
-                .selected_text(if cur.is_empty() { "- choose -".to_string() } else { cur })
+                .selected_text(if cur.is_empty() {
+                    "- choose -".to_string()
+                } else {
+                    cur
+                })
                 .show_ui(ui, |ui| {
                     for (name, kind, env) in ASSET_TEMPLATES {
                         if ui.selectable_label(false, *name).clicked() {
@@ -2557,22 +3205,32 @@ impl App {
                         }
                     }
                 });
-            egui::Grid::new("assetform").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
-                ui.label("ID");
-                ui.text_edit_singleline(&mut self.asset_form.id);
-                ui.end_row();
-                ui.label("Address");
-                ui.text_edit_singleline(&mut self.asset_form.address);
-                ui.end_row();
-                ui.label("Kind");
-                ui.text_edit_singleline(&mut self.asset_form.kind);
-                ui.end_row();
-                ui.label("Environment");
-                ui.text_edit_singleline(&mut self.asset_form.environment);
-                ui.end_row();
-            });
-            ui.checkbox(&mut self.asset_form.air_gapped, "Air-gapped (no network path - suppresses HNDL risk)");
-            ui.label(egui::RichText::new("kind defaults to tls_endpoint, env to default.").color(theme::MUTED).small());
+            egui::Grid::new("assetform")
+                .num_columns(2)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label("ID");
+                    ui.text_edit_singleline(&mut self.asset_form.id);
+                    ui.end_row();
+                    ui.label("Address");
+                    ui.text_edit_singleline(&mut self.asset_form.address);
+                    ui.end_row();
+                    ui.label("Kind");
+                    ui.text_edit_singleline(&mut self.asset_form.kind);
+                    ui.end_row();
+                    ui.label("Environment");
+                    ui.text_edit_singleline(&mut self.asset_form.environment);
+                    ui.end_row();
+                });
+            ui.checkbox(
+                &mut self.asset_form.air_gapped,
+                "Air-gapped (no network path - suppresses HNDL risk)",
+            );
+            ui.label(
+                egui::RichText::new("kind defaults to tls_endpoint, env to default.")
+                    .color(theme::MUTED)
+                    .small(),
+            );
             if ui.button("Add asset").clicked() {
                 add = true;
             }
@@ -2581,7 +3239,11 @@ impl App {
             self.add_asset();
         }
         if !self.edit_status.is_empty() {
-            ui.label(egui::RichText::new(&self.edit_status).color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(&self.edit_status)
+                    .color(theme::MUTED)
+                    .small(),
+            );
         }
         ui.add_space(6.0);
 
@@ -2592,48 +3254,74 @@ impl App {
         {
             let d = &self.data;
             let probes = &self.probe_results;
-            data_table(ui, "assets", &["Asset", "Kind", "Address", "Env", "PQC", "Exposure", ""],
-                d.assets.len(), "No declared assets. Add one above.", |ui, i| {
-                let a = &d.assets[i];
-                let air = has_tag(&a.tags, "air-gapped");
-                let name = ui.add(egui::Label::new(egui::RichText::new(&a.id).color(theme::ACCENT)).sense(egui::Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text("click for details");
-                if name.clicked() {
-                    open = Some(Selection::Asset(a.id.clone()));
-                }
-                name.context_menu(|ui| {
-                    if ui.button(if air { "Mark exposed" } else { "Mark air-gapped" }).clicked() {
-                        toggle = Some(a.id.clone());
-                        ui.close_menu();
-                    }
-                    if ui.button("Verify reachability").clicked() {
-                        probe = Some((a.id.clone(), a.address.clone(), air));
-                        ui.close_menu();
-                    }
-                    if ui.button("Delete asset").clicked() {
-                        del = Some(a.id.clone());
-                        ui.close_menu();
-                    }
-                });
-                ui.label(&a.kind);
-                ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
-                ui.label(&a.environment);
-                ui.colored_label(status_str_color(&a.pqc_status), pretty_status(&a.pqc_status));
-                ui.horizontal(|ui| {
-                    let (col, txt) = if air { (theme::GOOD, "air-gapped") } else { (theme::MUTED, "exposed") };
-                    if ui.selectable_label(air, egui::RichText::new(txt).color(col).small())
+            data_table(
+                ui,
+                "assets",
+                &["Asset", "Kind", "Address", "Env", "PQC", "Exposure", ""],
+                d.assets.len(),
+                "No declared assets. Add one above.",
+                |ui, i| {
+                    let a = &d.assets[i];
+                    let air = has_tag(&a.tags, "air-gapped");
+                    let name = ui
+                        .add(
+                            egui::Label::new(egui::RichText::new(&a.id).color(theme::ACCENT))
+                                .sense(egui::Sense::click()),
+                        )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("toggle · right-click to verify reachability").clicked()
-                    {
-                        toggle = Some(a.id.clone());
+                        .on_hover_text("click for details");
+                    if name.clicked() {
+                        open = Some(Selection::Asset(a.id.clone()));
                     }
-                    probe_badge(ui, probes.get(&a.id), air);
-                });
-                if ui.small_button("Del").on_hover_text("delete").clicked() {
-                    del = Some(a.id.clone());
-                }
-            });
+                    name.context_menu(|ui| {
+                        if ui
+                            .button(if air {
+                                "Mark exposed"
+                            } else {
+                                "Mark air-gapped"
+                            })
+                            .clicked()
+                        {
+                            toggle = Some(a.id.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button("Verify reachability").clicked() {
+                            probe = Some((a.id.clone(), a.address.clone(), air));
+                            ui.close_menu();
+                        }
+                        if ui.button("Delete asset").clicked() {
+                            del = Some(a.id.clone());
+                            ui.close_menu();
+                        }
+                    });
+                    ui.label(&a.kind);
+                    ui.label(egui::RichText::new(&a.address).color(theme::MUTED));
+                    ui.label(&a.environment);
+                    ui.colored_label(
+                        status_str_color(&a.pqc_status),
+                        pretty_status(&a.pqc_status),
+                    );
+                    ui.horizontal(|ui| {
+                        let (col, txt) = if air {
+                            (theme::GOOD, "air-gapped")
+                        } else {
+                            (theme::MUTED, "exposed")
+                        };
+                        if ui
+                            .selectable_label(air, egui::RichText::new(txt).color(col).small())
+                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                            .on_hover_text("toggle · right-click to verify reachability")
+                            .clicked()
+                        {
+                            toggle = Some(a.id.clone());
+                        }
+                        probe_badge(ui, probes.get(&a.id), air);
+                    });
+                    if ui.small_button("Del").on_hover_text("delete").clicked() {
+                        del = Some(a.id.clone());
+                    }
+                },
+            );
         }
         if let Some(s) = open {
             self.selected = Some(s);
@@ -2658,16 +3346,28 @@ impl App {
         ui.add_space(6.0);
         let mut open: Option<Selection> = None;
         {
-        let d = &self.data;
-        data_table(ui, "remediations", &["Ticket", "Integration", "Status", "Finding", "Updated"],
-            d.remediations.len(), "No remediation tickets opened.", |ui, i| {
-            let r = &d.remediations[i];
-            if link_cell(ui, &r.external_id) { open = Some(Selection::Remediation(r.id.clone())); }
-            ui.label(egui::RichText::new(&r.integration_id).color(theme::MUTED));
-            ui.label(format!("{:?}", r.status));
-            ui.label(egui::RichText::new(truncate_str(&r.finding_id, 14)).monospace().small());
-            ui.label(egui::RichText::new(fmt_dt(r.updated_at)).color(theme::MUTED));
-        });
+            let d = &self.data;
+            data_table(
+                ui,
+                "remediations",
+                &["Ticket", "Integration", "Status", "Finding", "Updated"],
+                d.remediations.len(),
+                "No remediation tickets opened.",
+                |ui, i| {
+                    let r = &d.remediations[i];
+                    if link_cell(ui, &r.external_id) {
+                        open = Some(Selection::Remediation(r.id.clone()));
+                    }
+                    ui.label(egui::RichText::new(&r.integration_id).color(theme::MUTED));
+                    ui.label(format!("{:?}", r.status));
+                    ui.label(
+                        egui::RichText::new(truncate_str(&r.finding_id, 14))
+                            .monospace()
+                            .small(),
+                    );
+                    ui.label(egui::RichText::new(fmt_dt(r.updated_at)).color(theme::MUTED));
+                },
+            );
         }
         if let Some(s) = open {
             self.selected = Some(s);
@@ -2677,61 +3377,135 @@ impl App {
     fn overlay(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("PQC Overlay");
-        ui.label(egui::RichText::new("Hybrid-PQC TLS listeners fronting legacy upstreams.").color(theme::MUTED).small());
+        ui.label(
+            egui::RichText::new("Hybrid-PQC TLS listeners fronting legacy upstreams.")
+                .color(theme::MUTED)
+                .small(),
+        );
         ui.add_space(6.0);
         let d = &self.data;
-        data_table(ui, "overlay", &["Route", "Listen", "Upstream", "Upstream TLS", "Mode"],
-            d.overlay_routes.len(), "No overlay routes configured.", |ui, i| {
-            let r = &d.overlay_routes[i];
-            ui.label(&r.id);
-            ui.label(egui::RichText::new(&r.listen).monospace().small());
-            ui.label(egui::RichText::new(&r.upstream).monospace().small());
-            ui.colored_label(if r.upstream_tls { theme::GOOD } else { theme::MUTED },
-                if r.upstream_tls { "re-encrypt" } else { "plaintext" });
-            ui.colored_label(if r.mode == "pqc-only" { theme::GOOD } else { theme::LOW }, &r.mode);
-        });
+        data_table(
+            ui,
+            "overlay",
+            &["Route", "Listen", "Upstream", "Upstream TLS", "Mode"],
+            d.overlay_routes.len(),
+            "No overlay routes configured.",
+            |ui, i| {
+                let r = &d.overlay_routes[i];
+                ui.label(&r.id);
+                ui.label(egui::RichText::new(&r.listen).monospace().small());
+                ui.label(egui::RichText::new(&r.upstream).monospace().small());
+                ui.colored_label(
+                    if r.upstream_tls {
+                        theme::GOOD
+                    } else {
+                        theme::MUTED
+                    },
+                    if r.upstream_tls {
+                        "re-encrypt"
+                    } else {
+                        "plaintext"
+                    },
+                );
+                ui.colored_label(
+                    if r.mode == "pqc-only" {
+                        theme::GOOD
+                    } else {
+                        theme::LOW
+                    },
+                    &r.mode,
+                );
+            },
+        );
     }
 
     fn connections(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Connections");
-        ui.label(egui::RichText::new("UI-managed integrations. Secrets are encrypted at rest and masked here.").color(theme::MUTED).small());
+        ui.label(
+            egui::RichText::new(
+                "UI-managed integrations. Secrets are encrypted at rest and masked here.",
+            )
+            .color(theme::MUTED)
+            .small(),
+        );
         if self.net_probes_enabled {
-            ui.label(egui::RichText::new("Online mode ON - Test and Scan make live API calls.").color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new("Online mode ON - Test and Scan make live API calls.")
+                    .color(theme::MUTED)
+                    .small(),
+            );
         } else {
-            ui.label(egui::RichText::new("Offline - enable Online mode in Settings to test or scan connections.").color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(
+                    "Offline - enable Online mode in Settings to test or scan connections.",
+                )
+                .color(theme::MUTED)
+                .small(),
+            );
         }
         if !self.net_status.is_empty() {
-            ui.label(egui::RichText::new(&self.net_status).color(theme::LOW).small());
+            ui.label(
+                egui::RichText::new(&self.net_status)
+                    .color(theme::LOW)
+                    .small(),
+            );
         }
         ui.add_space(6.0);
         let mut open: Option<Selection> = None;
         let mut op: Option<NetOp> = None;
         let online = self.net_probes_enabled && !self.net_busy;
         {
-        let d = &self.data;
-        data_table(ui, "connections", &["Name", "Type", "Status", "Last scan", "Actions"],
-            d.connections.len(), "No connections. Add one from the gateway dashboard.", |ui, i| {
-            let c = &d.connections[i];
-            if link_cell(ui, &c.display_name) { open = Some(Selection::Connection(c.id.clone())); }
-            ui.label(&c.integration_type);
-            let (col, s) = match c.last_status.as_deref() {
-                Some("connected") => (theme::GOOD, "connected"),
-                Some("failed") => (theme::CRIT, "failed"),
-                _ => (theme::MUTED, "untested"),
-            };
-            ui.colored_label(col, s);
-            ui.label(egui::RichText::new(c.last_scanned.map(|t| fmt_dt(t)).unwrap_or_else(|| "-".to_string())).color(theme::MUTED).small());
-            ui.horizontal(|ui| {
-                if ui.add_enabled(online, egui::Button::new("Test").small()).clicked() {
-                    op = Some(NetOp::TestConnection { conn_id: c.id.clone() });
-                }
-                let scannable = matches!(c.integration_type.as_str(), "github" | "gitlab");
-                if scannable && ui.add_enabled(online, egui::Button::new("Scan repos").small()).clicked() {
-                    op = Some(NetOp::ScanConnection { conn_id: c.id.clone() });
-                }
-            });
-        });
+            let d = &self.data;
+            data_table(
+                ui,
+                "connections",
+                &["Name", "Type", "Status", "Last scan", "Actions"],
+                d.connections.len(),
+                "No connections. Add one from the gateway dashboard.",
+                |ui, i| {
+                    let c = &d.connections[i];
+                    if link_cell(ui, &c.display_name) {
+                        open = Some(Selection::Connection(c.id.clone()));
+                    }
+                    ui.label(&c.integration_type);
+                    let (col, s) = match c.last_status.as_deref() {
+                        Some("connected") => (theme::GOOD, "connected"),
+                        Some("failed") => (theme::CRIT, "failed"),
+                        _ => (theme::MUTED, "untested"),
+                    };
+                    ui.colored_label(col, s);
+                    ui.label(
+                        egui::RichText::new(
+                            c.last_scanned
+                                .map(fmt_dt)
+                                .unwrap_or_else(|| "-".to_string()),
+                        )
+                        .color(theme::MUTED)
+                        .small(),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(online, egui::Button::new("Test").small())
+                            .clicked()
+                        {
+                            op = Some(NetOp::TestConnection {
+                                conn_id: c.id.clone(),
+                            });
+                        }
+                        let scannable = matches!(c.integration_type.as_str(), "github" | "gitlab");
+                        if scannable
+                            && ui
+                                .add_enabled(online, egui::Button::new("Scan repos").small())
+                                .clicked()
+                        {
+                            op = Some(NetOp::ScanConnection {
+                                conn_id: c.id.clone(),
+                            });
+                        }
+                    });
+                },
+            );
         }
         if let Some(s) = open {
             self.selected = Some(s);
@@ -2750,19 +3524,50 @@ impl App {
     fn agents(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Agents");
-        ui.label(egui::RichText::new("Observed agent → provider flows from the in-path proxy.").color(theme::MUTED).small());
+        ui.label(
+            egui::RichText::new("Observed agent → provider flows from the in-path proxy.")
+                .color(theme::MUTED)
+                .small(),
+        );
         ui.add_space(6.0);
         let d = &self.data;
-        data_table(ui, "agents", &["Agent", "Provider", "Requests", "Sensitive", "Threats", "Last seen"],
-            d.flows.len(), "No observed flows yet.", |ui, i| {
-            let f = &d.flows[i];
-            ui.label(&f.agent);
-            ui.label(&f.provider);
-            ui.label(f.requests.to_string());
-            ui.colored_label(if f.sensitive > 0 { theme::HIGH } else { theme::MUTED }, f.sensitive.to_string());
-            ui.colored_label(if f.threats > 0 { theme::CRIT } else { theme::MUTED }, f.threats.to_string());
-            ui.label(egui::RichText::new(fmt_dt(f.last_seen)).color(theme::MUTED));
-        });
+        data_table(
+            ui,
+            "agents",
+            &[
+                "Agent",
+                "Provider",
+                "Requests",
+                "Sensitive",
+                "Threats",
+                "Last seen",
+            ],
+            d.flows.len(),
+            "No observed flows yet.",
+            |ui, i| {
+                let f = &d.flows[i];
+                ui.label(&f.agent);
+                ui.label(&f.provider);
+                ui.label(f.requests.to_string());
+                ui.colored_label(
+                    if f.sensitive > 0 {
+                        theme::HIGH
+                    } else {
+                        theme::MUTED
+                    },
+                    f.sensitive.to_string(),
+                );
+                ui.colored_label(
+                    if f.threats > 0 {
+                        theme::CRIT
+                    } else {
+                        theme::MUTED
+                    },
+                    f.threats.to_string(),
+                );
+                ui.label(egui::RichText::new(fmt_dt(f.last_seen)).color(theme::MUTED));
+            },
+        );
     }
 
     fn sessions(&mut self, ui: &mut egui::Ui) {
@@ -2771,17 +3576,32 @@ impl App {
         ui.add_space(6.0);
         let mut open: Option<Selection> = None;
         {
-        let d = &self.data;
-        data_table(ui, "sessions", &["Agent", "Provider", "Model", "Requests", "Client IP", "Started"],
-            d.sessions.len(), "No sessions recorded.", |ui, i| {
-            let s = &d.sessions[i];
-            if link_cell(ui, &s.agent_name) { open = Some(Selection::Session(s.session_id.clone())); }
-            ui.label(&s.provider);
-            ui.label(egui::RichText::new(&s.model).color(theme::MUTED));
-            ui.label(s.request_count.to_string());
-            ui.label(egui::RichText::new(&s.client_ip).monospace().small());
-            ui.label(egui::RichText::new(fmt_dt(s.created_at)).color(theme::MUTED));
-        });
+            let d = &self.data;
+            data_table(
+                ui,
+                "sessions",
+                &[
+                    "Agent",
+                    "Provider",
+                    "Model",
+                    "Requests",
+                    "Client IP",
+                    "Started",
+                ],
+                d.sessions.len(),
+                "No sessions recorded.",
+                |ui, i| {
+                    let s = &d.sessions[i];
+                    if link_cell(ui, &s.agent_name) {
+                        open = Some(Selection::Session(s.session_id.clone()));
+                    }
+                    ui.label(&s.provider);
+                    ui.label(egui::RichText::new(&s.model).color(theme::MUTED));
+                    ui.label(s.request_count.to_string());
+                    ui.label(egui::RichText::new(&s.client_ip).monospace().small());
+                    ui.label(egui::RichText::new(fmt_dt(s.created_at)).color(theme::MUTED));
+                },
+            );
         }
         if let Some(s) = open {
             self.selected = Some(s);
@@ -2794,17 +3614,26 @@ impl App {
         ui.label(egui::RichText::new("Runtime user accounts from the store. Config-file users are managed by the gateway.").color(theme::MUTED).small());
         ui.add_space(6.0);
         let d = &self.data;
-        data_table(ui, "users", &["User", "Role", "Org", "Created"],
-            d.users.len(), "No runtime users. Add users via the gateway admin center.", |ui, i| {
-            let u = &d.users[i];
-            ui.label(&u.username);
-            let rc = match u.role.as_str() {
-                "admin" => theme::CRIT, "operator" => theme::HIGH, "auditor" => theme::LOW, _ => theme::MUTED,
-            };
-            ui.colored_label(rc, &u.role);
-            ui.label(&u.org);
-            ui.label(egui::RichText::new(fmt_dt(u.created_at)).color(theme::MUTED));
-        });
+        data_table(
+            ui,
+            "users",
+            &["User", "Role", "Org", "Created"],
+            d.users.len(),
+            "No runtime users. Add users via the gateway admin center.",
+            |ui, i| {
+                let u = &d.users[i];
+                ui.label(&u.username);
+                let rc = match u.role.as_str() {
+                    "admin" => theme::CRIT,
+                    "operator" => theme::HIGH,
+                    "auditor" => theme::LOW,
+                    _ => theme::MUTED,
+                };
+                ui.colored_label(rc, &u.role);
+                ui.label(&u.org);
+                ui.label(egui::RichText::new(fmt_dt(u.created_at)).color(theme::MUTED));
+            },
+        );
     }
 
     fn crypto_policies(&mut self, ui: &mut egui::Ui) {
@@ -2822,7 +3651,11 @@ impl App {
              inventory by the shared qw-cbom engine - the same default policy set the gateway enforces.",
         ).color(theme::MUTED).small());
         if !self.export_status.is_empty() {
-            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(&self.export_status)
+                    .color(theme::MUTED)
+                    .small(),
+            );
         }
         ui.add_space(8.0);
 
@@ -2831,65 +3664,138 @@ impl App {
         let breached = results.iter().filter(|r| r.deadline_passed).count();
         ui.horizontal(|ui| {
             stat_card(ui, "policies", results.len(), theme::ACCENT);
-            stat_card(ui, "violated", violated, if violated > 0 { theme::CRIT } else { theme::GOOD });
+            stat_card(
+                ui,
+                "violated",
+                violated,
+                if violated > 0 {
+                    theme::CRIT
+                } else {
+                    theme::GOOD
+                },
+            );
             stat_card(ui, "compliant", results.len() - violated, theme::GOOD);
-            stat_card(ui, "deadline passed", breached, if breached > 0 { theme::CRIT } else { theme::MUTED });
+            stat_card(
+                ui,
+                "deadline passed",
+                breached,
+                if breached > 0 {
+                    theme::CRIT
+                } else {
+                    theme::MUTED
+                },
+            );
         });
         ui.add_space(8.0);
 
         egui::ScrollArea::vertical().show(ui, |ui| {
             for r in &results {
-                egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let (col, txt) = if r.status == "violated" {
-                            (theme::CRIT, "VIOLATED")
-                        } else {
-                            (theme::GOOD, "COMPLIANT")
-                        };
-                        ui.colored_label(col, txt);
-                        ui.label(egui::RichText::new(&r.name).strong());
-                        ui.label(egui::RichText::new(format!("[{}]", r.severity)).color(sev_str_color(&r.severity)).small());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            // Enforcement + action tell you what the gateway would do.
-                            ui.label(egui::RichText::new(format!("{} · {}", r.enforcement, r.action)).color(theme::MUTED).small());
-                        });
-                    });
-                    if !r.description.is_empty() {
-                        ui.label(egui::RichText::new(&r.description).color(theme::MUTED).small());
-                    }
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(format!("{} violation(s)", r.violation_count)).small());
-                        if let Some(d) = r.deadline {
-                            let (col, txt) = match r.days_to_deadline {
-                                _ if r.deadline_passed => (theme::CRIT, format!("deadline passed ({})", fmt_dt(d))),
-                                Some(days) if days < 180 => (theme::MED, format!("{days}d to deadline ({})", fmt_dt(d))),
-                                Some(days) => (theme::MUTED, format!("{days}d to deadline")),
-                                None => (theme::MUTED, format!("due {}", fmt_dt(d))),
+                egui::Frame::none()
+                    .fill(theme::CARD)
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::same(8.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (col, txt) = if r.status == "violated" {
+                                (theme::CRIT, "VIOLATED")
+                            } else {
+                                (theme::GOOD, "COMPLIANT")
                             };
-                            ui.label(egui::RichText::new("·").color(theme::MUTED).small());
-                            ui.colored_label(col, egui::RichText::new(txt).small());
+                            ui.colored_label(col, txt);
+                            ui.label(egui::RichText::new(&r.name).strong());
+                            ui.label(
+                                egui::RichText::new(format!("[{}]", r.severity))
+                                    .color(sev_str_color(&r.severity))
+                                    .small(),
+                            );
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    // Enforcement + action tell you what the gateway would do.
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{} · {}",
+                                            r.enforcement, r.action
+                                        ))
+                                        .color(theme::MUTED)
+                                        .small(),
+                                    );
+                                },
+                            );
+                        });
+                        if !r.description.is_empty() {
+                            ui.label(
+                                egui::RichText::new(&r.description)
+                                    .color(theme::MUTED)
+                                    .small(),
+                            );
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("{} violation(s)", r.violation_count))
+                                    .small(),
+                            );
+                            if let Some(d) = r.deadline {
+                                let (col, txt) = match r.days_to_deadline {
+                                    _ if r.deadline_passed => {
+                                        (theme::CRIT, format!("deadline passed ({})", fmt_dt(d)))
+                                    }
+                                    Some(days) if days < 180 => {
+                                        (theme::MED, format!("{days}d to deadline ({})", fmt_dt(d)))
+                                    }
+                                    Some(days) => (theme::MUTED, format!("{days}d to deadline")),
+                                    None => (theme::MUTED, format!("due {}", fmt_dt(d))),
+                                };
+                                ui.label(egui::RichText::new("·").color(theme::MUTED).small());
+                                ui.colored_label(col, egui::RichText::new(txt).small());
+                            }
+                        });
+                        // Drill-down into the specific violating assets.
+                        if !r.violations.is_empty() {
+                            let head = format!("{} violating asset(s)", r.violations.len());
+                            egui::CollapsingHeader::new(head)
+                                .id_salt(&r.id)
+                                .show(ui, |ui| {
+                                    egui::Grid::new(format!("viol-{}", r.id))
+                                        .striped(true)
+                                        .num_columns(4)
+                                        .spacing([14.0, 4.0])
+                                        .show(ui, |ui| {
+                                            for h in ["Location", "Algorithm", "PQC", "Severity"] {
+                                                ui.label(
+                                                    egui::RichText::new(h)
+                                                        .strong()
+                                                        .color(theme::MUTED)
+                                                        .small(),
+                                                );
+                                            }
+                                            ui.end_row();
+                                            for v in &r.violations {
+                                                ui.label(
+                                                    egui::RichText::new(&v.location)
+                                                        .monospace()
+                                                        .small(),
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        v.algorithm.as_deref().unwrap_or("-"),
+                                                    )
+                                                    .small(),
+                                                );
+                                                ui.colored_label(
+                                                    status_str_color(&v.pqc_status),
+                                                    egui::RichText::new(pretty_status(
+                                                        &v.pqc_status,
+                                                    ))
+                                                    .small(),
+                                                );
+                                                ui.label(egui::RichText::new(&v.severity).small());
+                                                ui.end_row();
+                                            }
+                                        });
+                                });
                         }
                     });
-                    // Drill-down into the specific violating assets.
-                    if !r.violations.is_empty() {
-                        let head = format!("{} violating asset(s)", r.violations.len());
-                        egui::CollapsingHeader::new(head).id_salt(&r.id).show(ui, |ui| {
-                            egui::Grid::new(format!("viol-{}", r.id)).striped(true).num_columns(4).spacing([14.0, 4.0]).show(ui, |ui| {
-                                for h in ["Location", "Algorithm", "PQC", "Severity"] {
-                                    ui.label(egui::RichText::new(h).strong().color(theme::MUTED).small());
-                                }
-                                ui.end_row();
-                                for v in &r.violations {
-                                    ui.label(egui::RichText::new(&v.location).monospace().small());
-                                    ui.label(egui::RichText::new(v.algorithm.as_deref().unwrap_or("-")).small());
-                                    ui.colored_label(status_str_color(&v.pqc_status), egui::RichText::new(pretty_status(&v.pqc_status)).small());
-                                    ui.label(egui::RichText::new(&v.severity).small());
-                                    ui.end_row();
-                                }
-                            });
-                        });
-                    }
-                });
                 ui.add_space(4.0);
             }
         });
@@ -2922,7 +3828,11 @@ impl App {
         let results = self.evaluate_crypto_policies();
         self.export_status = match serde_json::to_string_pretty(&results) {
             Ok(json) => match std::fs::write(&path, json) {
-                Ok(_) => format!("Exported {} policy results to {}", results.len(), path.display()),
+                Ok(_) => format!(
+                    "Exported {} policy results to {}",
+                    results.len(),
+                    path.display()
+                ),
                 Err(e) => format!("Export failed: {e}"),
             },
             Err(e) => format!("Serialize failed: {e}"),
@@ -2949,13 +3859,21 @@ impl App {
         let path = dir.join("quantawatch-board-report.html");
         let html = self.board_report_html();
         self.export_status = match std::fs::write(&path, html) {
-            Ok(_) => format!("Wrote board report to {} (open in a browser, Print to PDF)", path.display()),
+            Ok(_) => format!(
+                "Wrote board report to {} (open in a browser, Print to PDF)",
+                path.display()
+            ),
             Err(e) => format!("Board report failed: {e}"),
         };
     }
 
     fn board_report_html(&self) -> String {
-        let posture = self.data.posture.as_ref().map(|p| p.overall_score).unwrap_or(0.0);
+        let posture = self
+            .data
+            .posture
+            .as_ref()
+            .map(|p| p.overall_score)
+            .unwrap_or(0.0);
         let paths = self.graph.paths();
         let critical_paths = paths.iter().filter(|p| p.severity == "critical").count();
         let hndl = paths.iter().filter(|p| p.hndl).count();
@@ -2963,8 +3881,9 @@ impl App {
 
         // Composite Quantum Risk Score — identical weighting to the gateway report.
         let exposure_penalty = (critical_paths as f64 * 8.0).min(40.0);
-        let quantum_risk =
-            ((posture * 0.5 + compliance.overall_compliance_pct * 0.5) - exposure_penalty).clamp(0.0, 100.0);
+        let quantum_risk = ((posture * 0.5 + compliance.overall_compliance_pct * 0.5)
+            - exposure_penalty)
+            .clamp(0.0, 100.0);
         let grade = if quantum_risk >= 80.0 {
             ("A", "#1a7f52")
         } else if quantum_risk >= 60.0 {
@@ -3077,56 +3996,96 @@ impl App {
     fn compliance(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Compliance");
-        ui.label(egui::RichText::new("Computed in-process by the shared qw-cbom engine from your findings.").color(theme::MUTED).small());
+        ui.label(
+            egui::RichText::new(
+                "Computed in-process by the shared qw-cbom engine from your findings.",
+            )
+            .color(theme::MUTED)
+            .small(),
+        );
         ui.add_space(8.0);
         let report = ComplianceEngine::assess(&self.data.findings);
         ui.horizontal(|ui| {
             let col = score_color(report.overall_compliance_pct);
-            ui.label(egui::RichText::new(format!("{:.0}%", report.overall_compliance_pct)).size(30.0).strong().color(col));
+            ui.label(
+                egui::RichText::new(format!("{:.0}%", report.overall_compliance_pct))
+                    .size(30.0)
+                    .strong()
+                    .color(col),
+            );
             ui.vertical(|ui| {
                 ui.add_space(6.0);
-                ui.label(egui::RichText::new("overall compliant").color(theme::MUTED).small());
-                ui.label(egui::RichText::new(format!(
-                    "{} compliant · {} at risk · {} non-compliant",
-                    report.compliant, report.at_risk, report.non_compliant
-                )).small());
+                ui.label(
+                    egui::RichText::new("overall compliant")
+                        .color(theme::MUTED)
+                        .small(),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} compliant · {} at risk · {} non-compliant",
+                        report.compliant, report.at_risk, report.non_compliant
+                    ))
+                    .small(),
+                );
             });
         });
         ui.add_space(10.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("frameworks").striped(true).num_columns(4).spacing([16.0, 6.0]).show(ui, |ui| {
-                for h in ["Framework", "Authority", "Compliance", "Deadline"] {
-                    ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
-                }
-                ui.end_row();
-                for fw in &report.frameworks {
-                    ui.label(&fw.name);
-                    ui.label(egui::RichText::new(&fw.authority).color(theme::MUTED));
-                    ui.colored_label(score_color(fw.compliance_pct), format!("{:.0}%", fw.compliance_pct));
-                    ui.label(fw.nearest_deadline.map(|y| y.to_string()).unwrap_or_else(|| "-".to_string()));
+            egui::Grid::new("frameworks")
+                .striped(true)
+                .num_columns(4)
+                .spacing([16.0, 6.0])
+                .show(ui, |ui| {
+                    for h in ["Framework", "Authority", "Compliance", "Deadline"] {
+                        ui.label(egui::RichText::new(h).strong().color(theme::MUTED));
+                    }
                     ui.end_row();
-                }
-            });
+                    for fw in &report.frameworks {
+                        ui.label(&fw.name);
+                        ui.label(egui::RichText::new(&fw.authority).color(theme::MUTED));
+                        ui.colored_label(
+                            score_color(fw.compliance_pct),
+                            format!("{:.0}%", fw.compliance_pct),
+                        );
+                        ui.label(
+                            fw.nearest_deadline
+                                .map(|y| y.to_string())
+                                .unwrap_or_else(|| "-".to_string()),
+                        );
+                        ui.end_row();
+                    }
+                });
             if !report.migration_items.is_empty() {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("Migration items").strong());
                 ui.add_space(4.0);
                 for m in &report.migration_items {
-                    egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            let pc = match m.priority.as_str() {
-                                "p0" | "critical" => theme::CRIT,
-                                "p1" | "high" => theme::HIGH,
-                                _ => theme::MED,
-                            };
-                            ui.colored_label(pc, m.priority.to_uppercase());
-                            ui.label(egui::RichText::new(&m.title).small());
+                    egui::Frame::none()
+                        .fill(theme::CARD)
+                        .rounding(6.0)
+                        .inner_margin(egui::Margin::same(8.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let pc = match m.priority.as_str() {
+                                    "p0" | "critical" => theme::CRIT,
+                                    "p1" | "high" => theme::HIGH,
+                                    _ => theme::MED,
+                                };
+                                ui.colored_label(pc, m.priority.to_uppercase());
+                                ui.label(egui::RichText::new(&m.title).small());
+                            });
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} → {} · by {} · {} affected",
+                                    m.current_state,
+                                    m.target_state,
+                                    m.deadline_year,
+                                    m.affected_count
+                                ))
+                                .color(theme::MUTED)
+                                .small(),
+                            );
                         });
-                        ui.label(egui::RichText::new(format!(
-                            "{} → {} · by {} · {} affected",
-                            m.current_state, m.target_state, m.deadline_year, m.affected_count
-                        )).color(theme::MUTED).small());
-                    });
                     ui.add_space(4.0);
                 }
             }
@@ -3140,11 +4099,10 @@ impl App {
         ui.add_space(8.0);
 
         // Best-effort signals from what the local store reveals.
-        let at_rest = self
-            .data
-            .findings
-            .iter()
-            .any(|f| f.category.to_string().contains("at_rest") || f.category.to_string().contains("unencrypted"));
+        let at_rest = self.data.findings.iter().any(|f| {
+            f.category.to_string().contains("at_rest")
+                || f.category.to_string().contains("unencrypted")
+        });
         let signals = frameworks::Signals {
             auth_on: !self.data.users.is_empty() || !self.data.sessions.is_empty(),
             lockout: true,
@@ -3170,20 +4128,34 @@ impl App {
                     .default_open(true)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.colored_label(if pass { theme::GOOD } else { theme::HIGH },
-                                if pass { "PASS" } else { "GAPS" });
-                            ui.label(egui::RichText::new(f.description).color(theme::MUTED).small());
+                            ui.colored_label(
+                                if pass { theme::GOOD } else { theme::HIGH },
+                                if pass { "PASS" } else { "GAPS" },
+                            );
+                            ui.label(
+                                egui::RichText::new(f.description)
+                                    .color(theme::MUTED)
+                                    .small(),
+                            );
                         });
                         ui.add_space(4.0);
-                        egui::Grid::new(f.id).striped(true).num_columns(3).spacing([14.0, 4.0]).show(ui, |ui| {
-                            for ctl in &f.controls {
-                                let (col, txt) = fw_status(&ctl.status);
-                                ui.colored_label(col, txt);
-                                ui.label(egui::RichText::new(ctl.title).small());
-                                ui.label(egui::RichText::new(&ctl.evidence).color(theme::MUTED).small());
-                                ui.end_row();
-                            }
-                        });
+                        egui::Grid::new(f.id)
+                            .striped(true)
+                            .num_columns(3)
+                            .spacing([14.0, 4.0])
+                            .show(ui, |ui| {
+                                for ctl in &f.controls {
+                                    let (col, txt) = fw_status(&ctl.status);
+                                    ui.colored_label(col, txt);
+                                    ui.label(egui::RichText::new(ctl.title).small());
+                                    ui.label(
+                                        egui::RichText::new(&ctl.evidence)
+                                            .color(theme::MUTED)
+                                            .small(),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
                     });
                 ui.add_space(6.0);
             }
@@ -3210,22 +4182,29 @@ impl App {
             shared_identity: false,
         };
         let report = soc2::assess(&inputs);
-        ui.label(egui::RichText::new(format!(
-            "{} enforced · {} partial · {} configurable · {} manual",
-            report.enforced, report.partial, report.configurable, report.manual
-        )).small());
+        ui.label(
+            egui::RichText::new(format!(
+                "{} enforced · {} partial · {} configurable · {} manual",
+                report.enforced, report.partial, report.configurable, report.manual
+            ))
+            .small(),
+        );
         ui.add_space(8.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             for c in &report.controls {
-                egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let (col, txt) = soc2_status(&c.status);
-                        ui.colored_label(col, txt);
-                        ui.label(egui::RichText::new(c.criteria).monospace().small());
-                        ui.label(egui::RichText::new(c.title).strong());
+                egui::Frame::none()
+                    .fill(theme::CARD)
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::same(8.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (col, txt) = soc2_status(&c.status);
+                            ui.colored_label(col, txt);
+                            ui.label(egui::RichText::new(c.criteria).monospace().small());
+                            ui.label(egui::RichText::new(c.title).strong());
+                        });
+                        ui.label(egui::RichText::new(&c.evidence).color(theme::MUTED).small());
                     });
-                    ui.label(egui::RichText::new(&c.evidence).color(theme::MUTED).small());
-                });
                 ui.add_space(4.0);
             }
         });
@@ -3237,21 +4216,30 @@ impl App {
         ui.label(egui::RichText::new("Security events surfaced from the audit stream - blocked threats, policy & access violations.").color(theme::MUTED).small());
         ui.add_space(6.0);
         let d = &self.data;
+        #[allow(clippy::type_complexity)]
         let threats: Vec<(&AuditEntry, (String, &'static str, String, bool))> = d
             .audit
             .iter()
             .filter_map(|e| event_to_threat(&e.event).map(|t| (e, t)))
             .collect();
-        data_table(ui, "threats", &["Time", "Category", "Severity", "Action", "Detail"],
-            threats.len(), "No threats detected in the audit stream.", |ui, i| {
-            let (e, (cat, sev, msg, blocked)) = &threats[i];
-            ui.label(egui::RichText::new(fmt_dt(e.timestamp)).color(theme::MUTED));
-            ui.label(cat);
-            ui.colored_label(graphview::severity_color(sev), sev.to_uppercase());
-            ui.colored_label(if *blocked { theme::CRIT } else { theme::MED },
-                if *blocked { "blocked" } else { "flagged" });
-            ui.label(egui::RichText::new(msg).small());
-        });
+        data_table(
+            ui,
+            "threats",
+            &["Time", "Category", "Severity", "Action", "Detail"],
+            threats.len(),
+            "No threats detected in the audit stream.",
+            |ui, i| {
+                let (e, (cat, sev, msg, blocked)) = &threats[i];
+                ui.label(egui::RichText::new(fmt_dt(e.timestamp)).color(theme::MUTED));
+                ui.label(cat);
+                ui.colored_label(graphview::severity_color(sev), sev.to_uppercase());
+                ui.colored_label(
+                    if *blocked { theme::CRIT } else { theme::MED },
+                    if *blocked { "blocked" } else { "flagged" },
+                );
+                ui.label(egui::RichText::new(msg).small());
+            },
+        );
     }
 
     fn alerts(&mut self, ui: &mut egui::Ui) {
@@ -3261,18 +4249,28 @@ impl App {
         ui.add_space(6.0);
         let d = &self.data;
         let mut open = None;
-        data_table(ui, "alerts", &["Time", "Severity", "Kind", "Title", "Delivered"],
-            d.alerts.len(), "No alerts recorded.", |ui, i| {
-            let a = &d.alerts[i];
-            ui.label(egui::RichText::new(fmt_dt(a.timestamp)).color(theme::MUTED));
-            let (col, txt) = alert_sev(a.severity);
-            ui.colored_label(col, txt);
-            ui.label(egui::RichText::new(&a.kind).small());
-            if link_cell(ui, &a.title) {
-                open = Some(Selection::Alert(a.id.clone()));
-            }
-            ui.label(egui::RichText::new(a.delivered.to_string()).color(theme::MUTED).small());
-        });
+        data_table(
+            ui,
+            "alerts",
+            &["Time", "Severity", "Kind", "Title", "Delivered"],
+            d.alerts.len(),
+            "No alerts recorded.",
+            |ui, i| {
+                let a = &d.alerts[i];
+                ui.label(egui::RichText::new(fmt_dt(a.timestamp)).color(theme::MUTED));
+                let (col, txt) = alert_sev(a.severity);
+                ui.colored_label(col, txt);
+                ui.label(egui::RichText::new(&a.kind).small());
+                if link_cell(ui, &a.title) {
+                    open = Some(Selection::Alert(a.id.clone()));
+                }
+                ui.label(
+                    egui::RichText::new(a.delivered.to_string())
+                        .color(theme::MUTED)
+                        .small(),
+                );
+            },
+        );
         if let Some(s) = open {
             self.selected = Some(s);
         }
@@ -3291,13 +4289,16 @@ impl App {
         ui.add_space(6.0);
         ui.label(egui::RichText::new(&a.title).strong().size(15.0));
         ui.add_space(8.0);
-        egui::Grid::new("adetail").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-            kv(ui, "Raised", &fmt_dt(a.timestamp));
-            kv(ui, "Delivered", &a.delivered.to_string());
-            ui.label(egui::RichText::new("Alert id").color(theme::MUTED));
-            ui.label(egui::RichText::new(&a.id).monospace().small());
-            ui.end_row();
-        });
+        egui::Grid::new("adetail")
+            .num_columns(2)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                kv(ui, "Raised", &fmt_dt(a.timestamp));
+                kv(ui, "Delivered", &a.delivered.to_string());
+                ui.label(egui::RichText::new("Alert id").color(theme::MUTED));
+                ui.label(egui::RichText::new(&a.id).monospace().small());
+                ui.end_row();
+            });
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Message").strong());
         ui.label(&a.message);
@@ -3306,11 +4307,14 @@ impl App {
             ui.label(egui::RichText::new("Metadata").strong());
             let mut keys: Vec<&String> = a.metadata.keys().collect();
             keys.sort();
-            egui::Grid::new("ameta").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-                for k in keys {
-                    kv(ui, k, &a.metadata[k]);
-                }
-            });
+            egui::Grid::new("ameta")
+                .num_columns(2)
+                .spacing([10.0, 4.0])
+                .show(ui, |ui| {
+                    for k in keys {
+                        kv(ui, k, &a.metadata[k]);
+                    }
+                });
         }
     }
 
@@ -3322,27 +4326,59 @@ impl App {
         let d = &self.data;
         if let Some(g) = d.gov_hist.last() {
             ui.horizontal(|ui| {
-                stat_card(ui, "agility score", g.agility_score.round() as usize, score_color(g.agility_score));
+                stat_card(
+                    ui,
+                    "agility score",
+                    g.agility_score.round() as usize,
+                    score_color(g.agility_score),
+                );
                 stat_card(ui, "compliant", g.compliant as usize, theme::GOOD);
                 stat_card(ui, "deprecated", g.deprecated as usize, theme::MED);
                 stat_card(ui, "forbidden", g.forbidden as usize, theme::CRIT);
             });
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(format!("Latest verdict: {}   ({})", g.verdict, fmt_dt(g.timestamp))).small());
+            ui.label(
+                egui::RichText::new(format!(
+                    "Latest verdict: {}   ({})",
+                    g.verdict,
+                    fmt_dt(g.timestamp)
+                ))
+                .small(),
+            );
         } else {
-            ui.label(egui::RichText::new("No governance snapshots recorded yet.").color(theme::MUTED));
+            ui.label(
+                egui::RichText::new("No governance snapshots recorded yet.").color(theme::MUTED),
+            );
         }
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(6.0);
         ui.label(egui::RichText::new("PQC migration SLO").strong());
         if let Some(s) = d.slo_hist.last() {
-            let pct = if s.total > 0 { (s.passing as f64 / s.total as f64) * 100.0 } else { 0.0 };
+            let pct = if s.total > 0 {
+                (s.passing as f64 / s.total as f64) * 100.0
+            } else {
+                0.0
+            };
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("{pct:.0}% passing"))
-                    .size(20.0).strong()
-                    .color(if s.gate_breach { theme::CRIT } else { theme::GOOD }));
-                ui.label(egui::RichText::new(format!("{}/{} objectives · {} failing", s.passing, s.total, s.failing)).color(theme::MUTED).small());
+                ui.label(
+                    egui::RichText::new(format!("{pct:.0}% passing"))
+                        .size(20.0)
+                        .strong()
+                        .color(if s.gate_breach {
+                            theme::CRIT
+                        } else {
+                            theme::GOOD
+                        }),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}/{} objectives · {} failing",
+                        s.passing, s.total, s.failing
+                    ))
+                    .color(theme::MUTED)
+                    .small(),
+                );
                 if s.gate_breach {
                     ui.colored_label(theme::CRIT, "GATE BREACHED");
                 }
@@ -3356,21 +4392,49 @@ impl App {
         ui.columns(2, |cols| {
             cols[0].label(egui::RichText::new("Governance history").strong());
             cols[0].add_space(4.0);
-            data_table(&mut cols[0], "govhist", &["Time", "Score", "Verdict"], gh.len(), "No history yet.", |ui, i| {
-                let g = gh[i];
-                ui.label(egui::RichText::new(fmt_dt(g.timestamp)).color(theme::MUTED).small());
-                ui.label(format!("{:.0}", g.agility_score));
-                ui.label(egui::RichText::new(&g.verdict).small());
-            });
+            data_table(
+                &mut cols[0],
+                "govhist",
+                &["Time", "Score", "Verdict"],
+                gh.len(),
+                "No history yet.",
+                |ui, i| {
+                    let g = gh[i];
+                    ui.label(
+                        egui::RichText::new(fmt_dt(g.timestamp))
+                            .color(theme::MUTED)
+                            .small(),
+                    );
+                    ui.label(format!("{:.0}", g.agility_score));
+                    ui.label(egui::RichText::new(&g.verdict).small());
+                },
+            );
             cols[1].label(egui::RichText::new("SLO history").strong());
             cols[1].add_space(4.0);
-            data_table(&mut cols[1], "slohist", &["Time", "Pass/Total", "Gate"], sh.len(), "No history yet.", |ui, i| {
-                let s = sh[i];
-                ui.label(egui::RichText::new(fmt_dt(s.timestamp)).color(theme::MUTED).small());
-                ui.label(format!("{}/{}", s.passing, s.total));
-                ui.colored_label(if s.gate_breach { theme::CRIT } else { theme::GOOD },
-                    if s.gate_breach { "breach" } else { "ok" });
-            });
+            data_table(
+                &mut cols[1],
+                "slohist",
+                &["Time", "Pass/Total", "Gate"],
+                sh.len(),
+                "No history yet.",
+                |ui, i| {
+                    let s = sh[i];
+                    ui.label(
+                        egui::RichText::new(fmt_dt(s.timestamp))
+                            .color(theme::MUTED)
+                            .small(),
+                    );
+                    ui.label(format!("{}/{}", s.passing, s.total));
+                    ui.colored_label(
+                        if s.gate_breach {
+                            theme::CRIT
+                        } else {
+                            theme::GOOD
+                        },
+                        if s.gate_breach { "breach" } else { "ok" },
+                    );
+                },
+            );
         });
     }
 
@@ -3386,7 +4450,11 @@ impl App {
         });
         ui.label(egui::RichText::new("Every distinct cryptographic algorithm discovered across the estate, with its quantum-readiness. Built in-process from local scan findings - no network.").color(theme::MUTED).small());
         if !self.export_status.is_empty() {
-            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+            ui.label(
+                egui::RichText::new(&self.export_status)
+                    .color(theme::MUTED)
+                    .small(),
+            );
         }
         ui.add_space(6.0);
         let entries = cbom_entries(&self.data.findings);
@@ -3397,20 +4465,37 @@ impl App {
         let vuln = entries.iter().filter(|e| e.quantum_vulnerable).count();
         ui.horizontal(|ui| {
             stat_card(ui, "algorithms", entries.len(), theme::ACCENT);
-            stat_card(ui, "quantum-vulnerable", vuln, if vuln > 0 { theme::CRIT } else { theme::GOOD });
+            stat_card(
+                ui,
+                "quantum-vulnerable",
+                vuln,
+                if vuln > 0 { theme::CRIT } else { theme::GOOD },
+            );
             stat_card(ui, "quantum-safe", entries.len() - vuln, theme::GOOD);
         });
         ui.add_space(8.0);
-        data_table(ui, "cbom", &["Algorithm", "Used as", "Uses", "PQC", "Quantum-vulnerable"],
-            entries.len(), "-", |ui, i| {
-            let e = &entries[i];
-            ui.label(egui::RichText::new(&e.algorithm).monospace());
-            ui.label(egui::RichText::new(&e.kinds).color(theme::MUTED).small());
-            ui.label(e.count.to_string());
-            ui.colored_label(pqc_color(e.worst_pqc), pqc_label(e.worst_pqc));
-            ui.colored_label(if e.quantum_vulnerable { theme::CRIT } else { theme::GOOD },
-                if e.quantum_vulnerable { "yes" } else { "no" });
-        });
+        data_table(
+            ui,
+            "cbom",
+            &["Algorithm", "Used as", "Uses", "PQC", "Quantum-vulnerable"],
+            entries.len(),
+            "-",
+            |ui, i| {
+                let e = &entries[i];
+                ui.label(egui::RichText::new(&e.algorithm).monospace());
+                ui.label(egui::RichText::new(&e.kinds).color(theme::MUTED).small());
+                ui.label(e.count.to_string());
+                ui.colored_label(pqc_color(e.worst_pqc), pqc_label(e.worst_pqc));
+                ui.colored_label(
+                    if e.quantum_vulnerable {
+                        theme::CRIT
+                    } else {
+                        theme::GOOD
+                    },
+                    if e.quantum_vulnerable { "yes" } else { "no" },
+                );
+            },
+        );
     }
 
     fn export_cbom(&mut self) {
@@ -3422,7 +4507,11 @@ impl App {
         let entries = cbom_entries(&self.data.findings);
         self.export_status = match serde_json::to_string_pretty(&entries) {
             Ok(json) => match std::fs::write(&path, json) {
-                Ok(_) => format!("Exported {} crypto assets to {}", entries.len(), path.display()),
+                Ok(_) => format!(
+                    "Exported {} crypto assets to {}",
+                    entries.len(),
+                    path.display()
+                ),
                 Err(e) => format!("Export failed: {e}"),
             },
             Err(e) => format!("Serialize failed: {e}"),
@@ -3432,20 +4521,36 @@ impl App {
     fn audit(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Audit log");
-        ui.label(egui::RichText::new("Tamper-evident, ML-DSA-65-signed hash chain - read from the local store.").color(theme::MUTED).small());
+        ui.label(
+            egui::RichText::new(
+                "Tamper-evident, ML-DSA-65-signed hash chain - read from the local store.",
+            )
+            .color(theme::MUTED)
+            .small(),
+        );
         ui.add_space(6.0);
         let d = &self.data;
-        data_table(ui, "audit", &["Time", "Writer", "Seq", "Session", "Event"],
-            d.audit.len(), "No audit entries yet.", |ui, i| {
-            let e = &d.audit[i];
-            ui.label(egui::RichText::new(fmt_dt(e.timestamp)).color(theme::MUTED));
-            ui.label(egui::RichText::new(&e.writer_id).small());
-            ui.label(e.sequence.to_string());
-            ui.label(egui::RichText::new(truncate_str(&e.session_id, 10)).monospace().small());
-            let full = format!("{:?}", e.event);
-            ui.label(egui::RichText::new(truncate_str(&full, 72)).small())
-                .on_hover_text(&full);
-        });
+        data_table(
+            ui,
+            "audit",
+            &["Time", "Writer", "Seq", "Session", "Event"],
+            d.audit.len(),
+            "No audit entries yet.",
+            |ui, i| {
+                let e = &d.audit[i];
+                ui.label(egui::RichText::new(fmt_dt(e.timestamp)).color(theme::MUTED));
+                ui.label(egui::RichText::new(&e.writer_id).small());
+                ui.label(e.sequence.to_string());
+                ui.label(
+                    egui::RichText::new(truncate_str(&e.session_id, 10))
+                        .monospace()
+                        .small(),
+                );
+                let full = format!("{:?}", e.event);
+                ui.label(egui::RichText::new(truncate_str(&full, 72)).small())
+                    .on_hover_text(&full);
+            },
+        );
     }
 
     fn settings(&mut self, ui: &mut egui::Ui) {
@@ -3453,25 +4558,36 @@ impl App {
         ui.heading("Settings");
         ui.label(egui::RichText::new("App-local settings for this desktop client. Gateway policy (auth, enforcement, alerts, RBAC) is managed by the gateway config, not here.").color(theme::MUTED).small());
         ui.add_space(10.0);
-        egui::Grid::new("settings").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
-            ui.label("Store");
-            ui.label(egui::RichText::new(&self.source).monospace().small().color(theme::MUTED));
-            ui.end_row();
-            ui.label("Default scan directory");
-            ui.text_edit_singleline(&mut self.scan_path);
-            ui.end_row();
-            ui.label("Terminal");
-            ui.checkbox(&mut self.terminal_open, "open");
-            ui.end_row();
-            ui.label("Terminal mode");
-            ui.checkbox(&mut self.terminal_float, "floating window (else docked)");
-            ui.end_row();
-        });
+        egui::Grid::new("settings")
+            .num_columns(2)
+            .spacing([16.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Store");
+                ui.label(
+                    egui::RichText::new(&self.source)
+                        .monospace()
+                        .small()
+                        .color(theme::MUTED),
+                );
+                ui.end_row();
+                ui.label("Default scan directory");
+                ui.text_edit_singleline(&mut self.scan_path);
+                ui.end_row();
+                ui.label("Terminal");
+                ui.checkbox(&mut self.terminal_open, "open");
+                ui.end_row();
+                ui.label("Terminal mode");
+                ui.checkbox(&mut self.terminal_float, "floating window (else docked)");
+                ui.end_row();
+            });
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(6.0);
         ui.label(egui::RichText::new("Mode").strong());
-        ui.checkbox(&mut self.net_probes_enabled, "Online mode - allow network  (default: OFFLINE / air-gapped)");
+        ui.checkbox(
+            &mut self.net_probes_enabled,
+            "Online mode - allow network  (default: OFFLINE / air-gapped)",
+        );
         ui.label(egui::RichText::new(
             "Off by default the app is fully air-gapped: it makes no network calls and reads only the local \
              store. Turn this on to allow network features - reachability probes, live packet capture (tshark), \
@@ -3482,9 +4598,15 @@ impl App {
         ui.horizontal(|ui| {
             ui.label("Wireshark (tshark):");
             match &self.tshark_ver {
-                Some(v) if v.is_empty() => { ui.colored_label(theme::MUTED, "not detected on PATH"); }
-                Some(v) => { ui.colored_label(theme::GOOD, v); }
-                None => { ui.colored_label(theme::MUTED, "unknown"); }
+                Some(v) if v.is_empty() => {
+                    ui.colored_label(theme::MUTED, "not detected on PATH");
+                }
+                Some(v) => {
+                    ui.colored_label(theme::GOOD, v);
+                }
+                None => {
+                    ui.colored_label(theme::MUTED, "unknown");
+                }
             }
             if ui.small_button("Detect").clicked() {
                 self.tshark_ver = Some(tshark_version().unwrap_or_default());
@@ -3502,10 +4624,17 @@ impl App {
         if ui.button("Refresh from store").clicked() {
             self.refresh();
         }
-        ui.label(egui::RichText::new(format!(
-            "{} findings · {} hosts · {} assets · {} certs loaded",
-            self.data.findings.len(), self.data.targets.len(), self.data.assets.len(), self.data.certs.len()
-        )).color(theme::MUTED).small());
+        ui.label(
+            egui::RichText::new(format!(
+                "{} findings · {} hosts · {} assets · {} certs loaded",
+                self.data.findings.len(),
+                self.data.targets.len(),
+                self.data.assets.len(),
+                self.data.certs.len()
+            ))
+            .color(theme::MUTED)
+            .small(),
+        );
     }
 
     fn activity_bar(&mut self, ctx: &egui::Context) {
@@ -3515,25 +4644,41 @@ impl App {
             .show(ctx, |ui| {
                 ui.vertical_centered(|ui| {
                     ui.add_space(8.0);
-                    let go = |ui: &mut egui::Ui, icon: &str, tip: &str, p: Page, page: &mut Page| {
-                        if ui.selectable_label(*page == p, egui::RichText::new(icon).size(16.0)).on_hover_text(tip).clicked() {
-                            *page = p;
-                        }
-                        ui.add_space(2.0);
-                    };
+                    let go =
+                        |ui: &mut egui::Ui, icon: &str, tip: &str, p: Page, page: &mut Page| {
+                            if ui
+                                .selectable_label(*page == p, egui::RichText::new(icon).size(16.0))
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
+                                *page = p;
+                            }
+                            ui.add_space(2.0);
+                        };
                     go(ui, "📊", "Overview", Page::Overview, &mut self.page);
                     go(ui, "🎯", "Attack paths", Page::AttackPaths, &mut self.page);
                     go(ui, "⚠", "Findings", Page::Findings, &mut self.page);
                     go(ui, "🌐", "Estate", Page::Estate, &mut self.page);
                     go(ui, "📜", "Audit log", Page::Audit, &mut self.page);
                     ui.add_space(6.0);
-                    if ui.selectable_label(self.terminal_open, egui::RichText::new("💻").size(16.0)).on_hover_text("Terminal (Ctrl+`)").clicked() {
+                    if ui
+                        .selectable_label(self.terminal_open, egui::RichText::new("💻").size(16.0))
+                        .on_hover_text("Terminal (Ctrl+`)")
+                        .clicked()
+                    {
                         self.terminal_open = !self.terminal_open;
                     }
                 });
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                     ui.add_space(8.0);
-                    if ui.selectable_label(self.page == Page::Settings, egui::RichText::new("⚙").size(16.0)).on_hover_text("Settings").clicked() {
+                    if ui
+                        .selectable_label(
+                            self.page == Page::Settings,
+                            egui::RichText::new("⚙").size(16.0),
+                        )
+                        .on_hover_text("Settings")
+                        .clicked()
+                    {
                         self.page = Page::Settings;
                     }
                 });
@@ -3548,14 +4693,24 @@ impl App {
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Air-gap posture").strong());
         ui.label("* No embedded browser or webview - this is a native egui window.");
-        ui.label("* No network listener and no outbound calls - it reads the local store in-process.");
+        ui.label(
+            "* No network listener and no outbound calls - it reads the local store in-process.",
+        );
         ui.label("* Links the same qw-store / qw-scanner / qw-cbom crates the gateway uses.");
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Store path").strong());
-        ui.label(egui::RichText::new(&self.source).monospace().color(theme::MUTED));
+        ui.label(
+            egui::RichText::new(&self.source)
+                .monospace()
+                .color(theme::MUTED),
+        );
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Build").strong());
-        ui.label(egui::RichText::new(build_stamp()).monospace().color(theme::MUTED));
+        ui.label(
+            egui::RichText::new(build_stamp())
+                .monospace()
+                .color(theme::MUTED),
+        );
         ui.label(egui::RichText::new("If this build time is older than your last change, you're running a stale exe - rebuild.").color(theme::MUTED).small());
     }
 }
@@ -3607,20 +4762,48 @@ fn page_title(p: Page) -> &'static str {
 fn page_by_name(name: &str) -> Option<Page> {
     let n = name.trim().to_lowercase().replace([' ', '-', '_'], "");
     let pages = [
-        Page::Overview, Page::AttackPaths, Page::Estate, Page::Endpoints, Page::Assets,
-        Page::Findings, Page::Certificates, Page::Cbom, Page::Compliance, Page::CryptoPolicies,
-        Page::Frameworks, Page::Soc2, Page::Governance, Page::Scans, Page::Remediations, Page::Overlay,
-        Page::Connections, Page::Agents, Page::Sessions, Page::Threats, Page::Alerts,
-        Page::Audit, Page::Access, Page::Settings, Page::About,
+        Page::Overview,
+        Page::AttackPaths,
+        Page::Estate,
+        Page::Endpoints,
+        Page::Assets,
+        Page::Findings,
+        Page::Certificates,
+        Page::Cbom,
+        Page::Compliance,
+        Page::CryptoPolicies,
+        Page::Frameworks,
+        Page::Soc2,
+        Page::Governance,
+        Page::Scans,
+        Page::Remediations,
+        Page::Overlay,
+        Page::Connections,
+        Page::Agents,
+        Page::Sessions,
+        Page::Threats,
+        Page::Alerts,
+        Page::Audit,
+        Page::Access,
+        Page::Settings,
+        Page::About,
     ];
-    pages
-        .into_iter()
-        .find(|p| page_title(*p).to_lowercase().replace([' ', '-', '_', '(', ')'], "").starts_with(&n))
+    pages.into_iter().find(|p| {
+        page_title(*p)
+            .to_lowercase()
+            .replace([' ', '-', '_', '(', ')'], "")
+            .starts_with(&n)
+    })
 }
 
 fn nav_group(ui: &mut egui::Ui, label: &str) {
     ui.add_space(8.0);
-    ui.label(egui::RichText::new(label).color(theme::MUTED).small().strong());
+    ui.label(
+        egui::RichText::new(label)
+            .color(theme::MUTED)
+            .small()
+            .strong(),
+    );
     ui.add_space(2.0);
 }
 
@@ -3662,7 +4845,12 @@ fn stat_card(ui: &mut egui::Ui, label: &str, value: usize, color: egui::Color32)
         .inner_margin(egui::Margin::symmetric(18.0, 12.0))
         .show(ui, |ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(value.to_string()).size(26.0).strong().color(color));
+                ui.label(
+                    egui::RichText::new(value.to_string())
+                        .size(26.0)
+                        .strong()
+                        .color(color),
+                );
                 ui.label(egui::RichText::new(label).color(theme::MUTED).small());
             });
         });
@@ -3794,7 +4982,12 @@ fn cbom_entries(findings: &[FindingRecord]) -> Vec<CbomEntry> {
     }
     let mut map: BTreeMap<String, Acc> = BTreeMap::new();
     for f in findings {
-        let Some(alg) = f.algorithm.as_ref().map(|a| a.trim()).filter(|a| !a.is_empty()) else {
+        let Some(alg) = f
+            .algorithm
+            .as_ref()
+            .map(|a| a.trim())
+            .filter(|a| !a.is_empty())
+        else {
             continue;
         };
         let e = map.entry(alg.to_string()).or_insert_with(|| Acc {
@@ -3855,7 +5048,9 @@ fn sev_str_color(s: &str) -> egui::Color32 {
 
 /// Minimal HTML escaping for the board report (untrusted store strings).
 fn html_esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Severity → print-friendly hex color for the board report.
@@ -3944,7 +5139,10 @@ fn norm_sev(s: &str) -> &'static str {
 
 /// Detect tshark on PATH; returns its version line (empty string if not found).
 fn tshark_version() -> Option<String> {
-    let out = std::process::Command::new("tshark").arg("--version").output().ok()?;
+    let out = std::process::Command::new("tshark")
+        .arg("--version")
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -3970,7 +5168,10 @@ fn tshark_interfaces() -> Result<Vec<String>, String> {
             .unwrap_or("tshark -D failed")
             .to_string());
     }
-    Ok(String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect())
+    Ok(String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect())
 }
 
 /// Live packet capture to/from a host via tshark. Bounded by count and an 8s
@@ -4005,9 +5206,11 @@ fn tshark_capture(host: &str, count: usize) -> Result<Vec<String>, String> {
 fn normalize_probe_addr(addr: &str) -> String {
     let a = addr.trim().rsplit("://").next().unwrap_or(addr).trim();
     let a = a.split('/').next().unwrap_or(a); // drop any path
-    // If it already ends in `:<digits>`, keep it; else append :443.
+                                              // If it already ends in `:<digits>`, keep it; else append :443.
     match a.rsplit_once(':') {
-        Some((_, port)) if port.chars().all(|c| c.is_ascii_digit()) && !port.is_empty() => a.to_string(),
+        Some((_, port)) if port.chars().all(|c| c.is_ascii_digit()) && !port.is_empty() => {
+            a.to_string()
+        }
         _ => format!("{a}:443"),
     }
 }
@@ -4029,11 +5232,20 @@ fn probe_addr(addr: &str) -> ProbeState {
         }
     };
     let Some(sa) = resolved else {
-        return ProbeState { reachable: Some(false), detail: "unreachable (no address)".to_string() };
+        return ProbeState {
+            reachable: Some(false),
+            detail: "unreachable (no address)".to_string(),
+        };
     };
     match TcpStream::connect_timeout(&sa, Duration::from_secs(3)) {
-        Ok(_) => ProbeState { reachable: Some(true), detail: format!("reachable - TCP connect to {sa}") },
-        Err(e) => ProbeState { reachable: Some(false), detail: format!("unreachable ({e})") },
+        Ok(_) => ProbeState {
+            reachable: Some(true),
+            detail: format!("reachable - TCP connect to {sa}"),
+        },
+        Err(e) => ProbeState {
+            reachable: Some(false),
+            detail: format!("unreachable ({e})"),
+        },
     }
 }
 
@@ -4084,10 +5296,13 @@ fn node_to_selection(id: &str, data: &Snapshot) -> Option<Selection> {
 
 /// A clickable "link" table cell (accent color + hand cursor). Returns clicked.
 fn link_cell(ui: &mut egui::Ui, text: &str) -> bool {
-    ui.add(egui::Label::new(egui::RichText::new(text).color(theme::ACCENT)).sense(egui::Sense::click()))
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .on_hover_text("click for details")
-        .clicked()
+    ui.add(
+        egui::Label::new(egui::RichText::new(text).color(theme::ACCENT))
+            .sense(egui::Sense::click()),
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
+    .on_hover_text("click for details")
+    .clicked()
 }
 
 /// Resolve a finding's (usually relative) location against the scanned root, so
@@ -4121,7 +5336,10 @@ fn copy_value(ui: &mut egui::Ui, value: &str) {
     let resp = ui
         .add(
             egui::Label::new(
-                egui::RichText::new(value).monospace().small().color(theme::ACCENT),
+                egui::RichText::new(value)
+                    .monospace()
+                    .small()
+                    .color(theme::ACCENT),
             )
             .sense(egui::Sense::click()),
         )
@@ -4175,7 +5393,9 @@ fn soc2_status(s: &soc2::ControlStatus) -> (egui::Color32, &'static str) {
 }
 
 fn fmt_dt(dt: DateTime<Utc>) -> String {
-    dt.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string()
+    dt.with_timezone(&Local)
+        .format("%Y-%m-%d %H:%M")
+        .to_string()
 }
 fn fmt_opt_dt(dt: Option<DateTime<Utc>>) -> String {
     dt.map(fmt_dt).unwrap_or_else(|| "-".to_string())
@@ -4184,7 +5404,10 @@ fn truncate_str(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
         s.to_string()
     } else {
-        format!("{}...", s.chars().take(n.saturating_sub(1)).collect::<String>())
+        format!(
+            "{}...",
+            s.chars().take(n.saturating_sub(1)).collect::<String>()
+        )
     }
 }
 
@@ -4226,8 +5449,14 @@ mod tests {
     #[test]
     fn resolve_path_leaves_absolute_and_empty_root_alone() {
         // An already-absolute finding location is returned unchanged.
-        assert_eq!(resolve_path("C:\\repos\\app", "D:\\other\\x.rs"), "D:\\other\\x.rs");
-        assert_eq!(resolve_path("C:\\repos\\app", "/etc/ssl/openssl.cnf"), "/etc/ssl/openssl.cnf");
+        assert_eq!(
+            resolve_path("C:\\repos\\app", "D:\\other\\x.rs"),
+            "D:\\other\\x.rs"
+        );
+        assert_eq!(
+            resolve_path("C:\\repos\\app", "/etc/ssl/openssl.cnf"),
+            "/etc/ssl/openssl.cnf"
+        );
         // No meaningful root -> hand back the location as-is.
         assert_eq!(resolve_path(".", "src/tls.rs"), "src/tls.rs");
         assert_eq!(resolve_path("", "src/tls.rs"), "src/tls.rs");
@@ -4257,9 +5486,24 @@ mod tests {
     #[test]
     fn cbom_dedups_by_algorithm_and_keeps_worst_pqc() {
         let findings = vec![
-            finding("RSA-2048", CryptoAssetType::Certificate, PqcStatus::ClassicalSecure, "a.crt"),
-            finding("RSA-2048", CryptoAssetType::TlsConnection, PqcStatus::ClassicalWeak, "b.pem"),
-            finding("ML-KEM-768", CryptoAssetType::CryptoLibrary, PqcStatus::PqcReady, "kem.rs"),
+            finding(
+                "RSA-2048",
+                CryptoAssetType::Certificate,
+                PqcStatus::ClassicalSecure,
+                "a.crt",
+            ),
+            finding(
+                "RSA-2048",
+                CryptoAssetType::TlsConnection,
+                PqcStatus::ClassicalWeak,
+                "b.pem",
+            ),
+            finding(
+                "ML-KEM-768",
+                CryptoAssetType::CryptoLibrary,
+                PqcStatus::PqcReady,
+                "kem.rs",
+            ),
         ];
         let entries = cbom_entries(&findings);
         assert_eq!(entries.len(), 2, "two distinct algorithms");
@@ -4271,13 +5515,24 @@ mod tests {
         assert!(rsa.quantum_vulnerable);
         assert!(rsa.kinds.contains("Certificate") && rsa.kinds.contains("TlsConnection"));
 
-        let kem = entries.iter().find(|e| e.algorithm == "ML-KEM-768").unwrap();
-        assert!(!kem.quantum_vulnerable, "PQC-ready algorithm is not quantum-vulnerable");
+        let kem = entries
+            .iter()
+            .find(|e| e.algorithm == "ML-KEM-768")
+            .unwrap();
+        assert!(
+            !kem.quantum_vulnerable,
+            "PQC-ready algorithm is not quantum-vulnerable"
+        );
     }
 
     #[test]
     fn cbom_skips_findings_without_an_algorithm() {
-        let mut f = finding("", CryptoAssetType::DataStore, PqcStatus::ClassicalWeak, "x");
+        let mut f = finding(
+            "",
+            CryptoAssetType::DataStore,
+            PqcStatus::ClassicalWeak,
+            "x",
+        );
         f.algorithm = None;
         assert!(cbom_entries(&[f]).is_empty());
     }

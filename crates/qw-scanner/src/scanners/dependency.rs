@@ -311,7 +311,7 @@ impl DependencyScanner {
                                 )),
                                 _ => None,
                             },
-                            pqc_status: crypto_lib.pqc_status.clone(),
+                            pqc_status: crypto_lib.pqc_status,
                             metadata: HashMap::from([
                                 ("section".to_string(), section.to_string()),
                                 ("ecosystem".to_string(), "cargo".to_string()),
@@ -375,7 +375,7 @@ impl DependencyScanner {
                                 )),
                                 _ => None,
                             },
-                            pqc_status: crypto_lib.pqc_status.clone(),
+                            pqc_status: crypto_lib.pqc_status,
                             metadata: HashMap::from([
                                 ("section".to_string(), "workspace.dependencies".to_string()),
                                 ("ecosystem".to_string(), "cargo".to_string()),
@@ -450,7 +450,7 @@ impl DependencyScanner {
                                 )),
                                 _ => None,
                             },
-                            pqc_status: crypto_lib.pqc_status.clone(),
+                            pqc_status: crypto_lib.pqc_status,
                             metadata: HashMap::from([
                                 ("section".to_string(), section.to_string()),
                                 ("ecosystem".to_string(), "npm".to_string()),
@@ -526,7 +526,7 @@ impl DependencyScanner {
                             )),
                             _ => None,
                         },
-                        pqc_status: crypto_lib.pqc_status.clone(),
+                        pqc_status: crypto_lib.pqc_status,
                         metadata: HashMap::from([
                             ("ecosystem".to_string(), "pip".to_string()),
                         ]),
@@ -589,7 +589,7 @@ impl DependencyScanner {
                 )),
                 _ => None,
             },
-            pqc_status: crypto_lib.pqc_status.clone(),
+            pqc_status: crypto_lib.pqc_status,
             metadata: HashMap::from([("ecosystem".to_string(), ecosystem.to_string())]),
         }
     }

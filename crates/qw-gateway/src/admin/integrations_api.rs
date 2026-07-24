@@ -246,7 +246,9 @@ pub async fn run_integration_scan(
         files_scanned += 1;
 
         for result in &results {
-            state.store.record_scan(tenant, result, &target_with_content);
+            state
+                .store
+                .record_scan(tenant, result, &target_with_content);
         }
         all_results.extend(results);
     }

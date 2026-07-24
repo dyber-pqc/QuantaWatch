@@ -9,13 +9,18 @@ fn main() -> Result<()> {
     if args.get(1).map(String::as_str) == Some("service") {
         #[cfg(windows)]
         {
-            let config = args.get(3).cloned().unwrap_or_else(|| "quantawatch.yaml".to_string());
+            let config = args
+                .get(3)
+                .cloned()
+                .unwrap_or_else(|| "quantawatch.yaml".to_string());
             return match args.get(2).map(String::as_str) {
                 // Invoked by the Service Control Manager, not by a human.
                 Some("run") => qw_gateway::service::start_dispatcher(),
                 // Optional 4th arg overrides the account (default: virtual
                 // service account; pass "LocalSystem" for the old behaviour).
-                Some("install") => qw_gateway::service::install(&config, args.get(4).map(String::as_str)),
+                Some("install") => {
+                    qw_gateway::service::install(&config, args.get(4).map(String::as_str))
+                }
                 Some("uninstall") => qw_gateway::service::uninstall(),
                 _ => {
                     eprintln!("usage: quantawatch service <install [config.yaml]|uninstall|run>");

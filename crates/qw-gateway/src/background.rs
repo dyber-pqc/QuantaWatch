@@ -405,7 +405,7 @@ fn capture_provider_crypto(
                     endpoint: target.address.clone(),
                     tls_version: tls_version.clone(),
                     cipher_suite: cipher.clone(),
-                    pqc_status: finding.pqc_status.clone(),
+                    pqc_status: finding.pqc_status,
                     last_seen: chrono::Utc::now(),
                 },
             );

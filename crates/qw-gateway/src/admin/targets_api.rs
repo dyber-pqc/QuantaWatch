@@ -59,7 +59,10 @@ fn port_service(port: u16) -> &'static str {
 }
 
 fn port_of(location: &str) -> Option<u16> {
-    location.rsplit(':').next().and_then(|p| p.parse::<u16>().ok())
+    location
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse::<u16>().ok())
 }
 
 #[derive(Deserialize)]
@@ -92,11 +95,19 @@ pub async fn register(
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
     if body.host.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "host is required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "host is required" })),
+        )
+            .into_response();
     }
     let row = TargetRow {
         id: uuid::Uuid::new_v4().to_string(),
-        name: if body.name.trim().is_empty() { body.host.clone() } else { body.name },
+        name: if body.name.trim().is_empty() {
+            body.host.clone()
+        } else {
+            body.name
+        },
         host: body.host,
         kind: body.kind,
         reachability: body.reachability,
@@ -143,7 +154,11 @@ pub async fn get_target(
     let tenant = tenant_of(&ctx);
     match state.store.get_target(&tenant, &id) {
         Some(t) => Json(t).into_response(),
-        None => (StatusCode::NOT_FOUND, Json(json!({ "error": format!("target '{id}' not found") }))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("target '{id}' not found") })),
+        )
+            .into_response(),
     }
 }
 
@@ -173,18 +188,23 @@ pub async fn scan_target(
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
     let Some(mut target) = state.store.get_target(&tenant, &id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("target '{id}' not found") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("target '{id}' not found") })),
+        )
+            .into_response();
     };
 
     // A registered target is authorized, so run the network sweep directly (the
     // registry's network scanner may be disabled by default). It port-scans and
     // hands SSH/TLS/STARTTLS ports to the right fingerprinter.
-    let scanner = qw_scanner::scanners::network::NetworkScanner::new(qw_scanner::NetworkScannerConfig {
-        enabled: true,
-        connect_timeout_ms: 1500,
-        ports: qw_scanner::NetworkScannerConfig::default().ports,
-        targets: vec![],
-    });
+    let scanner =
+        qw_scanner::scanners::network::NetworkScanner::new(qw_scanner::NetworkScannerConfig {
+            enabled: true,
+            connect_timeout_ms: 1500,
+            ports: qw_scanner::NetworkScannerConfig::default().ports,
+            targets: vec![],
+        });
     let scan_target = ScanTarget::network_host(&target.host);
     let result = match scanner.scan(&scan_target).await {
         Ok(r) => r,
@@ -270,8 +290,11 @@ fn merge_services(
             }
         }
     }
-    let mut out: Vec<ExposedService> =
-        existing.iter().filter(|s| s.source != source).cloned().collect();
+    let mut out: Vec<ExposedService> = existing
+        .iter()
+        .filter(|s| s.source != source)
+        .cloned()
+        .collect();
     out.extend(fresh);
     out.sort_by_key(|s| (s.port, s.source.clone()));
     out
@@ -323,7 +346,11 @@ pub async fn deep_scan(
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
     let Some(mut target) = state.store.get_target(&tenant, &id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("target '{id}' not found") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("target '{id}' not found") })),
+        )
+            .into_response();
     };
 
     // Resolve credentials (used transiently; not stored).
@@ -342,7 +369,11 @@ pub async fn deep_scan(
         }
     };
     if body.username.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(json!({ "error": "username is required" }))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "username is required" })),
+        )
+            .into_response();
     }
 
     let port = body.port.unwrap_or(22);
@@ -375,13 +406,19 @@ pub async fn deep_scan(
             (
                 PqcStatus::Unknown,
                 FindingSeverity::Low,
-                format!("{} reachable from the network; crypto not yet fingerprinted.", svc.service),
+                format!(
+                    "{} reachable from the network; crypto not yet fingerprinted.",
+                    svc.service
+                ),
             )
         } else {
             (
                 PqcStatus::Unknown,
                 FindingSeverity::Info,
-                format!("{} bound to loopback (internal only) - invisible to a network scan.", svc.service),
+                format!(
+                    "{} bound to loopback (internal only) - invisible to a network scan.",
+                    svc.service
+                ),
             )
         };
 
@@ -488,7 +525,7 @@ pub async fn deep_scan(
 
 // ---- One-click remediation: finding -> fix (overlay / PQC cert) ----
 
-fn find_service<'a>(target: &'a TargetRow, port: u16) -> Option<&'a ExposedService> {
+fn find_service(target: &TargetRow, port: u16) -> Option<&ExposedService> {
     target.exposed_services.iter().find(|s| s.port == port)
 }
 
@@ -518,19 +555,32 @@ pub async fn protect_service(
     Path((id, port)): Path<(String, u16)>,
     body: Option<Json<ProtectRequest>>,
 ) -> impl IntoResponse {
-    let body = body
-        .map(|b| b.0)
-        .unwrap_or(ProtectRequest { mode: None, upstream_tls: None, listen: None });
+    let body = body.map(|b| b.0).unwrap_or(ProtectRequest {
+        mode: None,
+        upstream_tls: None,
+        listen: None,
+    });
     let tenant = tenant_of(&ctx);
     let Some(mut target) = state.store.get_target(&tenant, &id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("target '{id}' not found") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("target '{id}' not found") })),
+        )
+            .into_response();
     };
     let Some(svc) = find_service(&target, port) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("no service on port {port}") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("no service on port {port}") })),
+        )
+            .into_response();
     };
     // If the raw service speaks TLS (https/ssh-alt/etc.), re-encrypt upstream by
     // default so the internal leg stays protected too.
-    let default_upstream_tls = matches!(svc.service.as_str(), "https" | "https-alt" | "imaps" | "ldaps" | "smtps" | "pop3s" | "dns-over-tls");
+    let default_upstream_tls = matches!(
+        svc.service.as_str(),
+        "https" | "https-alt" | "imaps" | "ldaps" | "smtps" | "pop3s" | "dns-over-tls"
+    );
     let upstream = format!("{}:{}", target.host, port);
     let mode = body.mode.unwrap_or_else(|| "hybrid".to_string());
     let listen = body.listen.unwrap_or_else(|| "0.0.0.0:0".to_string());
@@ -538,7 +588,13 @@ pub async fn protect_service(
 
     match state
         .overlay
-        .add_route(&route_id, &listen, &upstream, body.upstream_tls.unwrap_or(default_upstream_tls), &mode)
+        .add_route(
+            &route_id,
+            &listen,
+            &upstream,
+            body.upstream_tls.unwrap_or(default_upstream_tls),
+            &mode,
+        )
         .await
     {
         Ok(stats) => {
@@ -601,12 +657,23 @@ pub async fn issue_service_cert(
     body: Option<Json<IssueCertRequest>>,
 ) -> impl IntoResponse {
     let tenant = tenant_of(&ctx);
-    let body = body.map(|b| b.0).unwrap_or(IssueCertRequest { validity_days: None, key_type: None });
+    let body = body.map(|b| b.0).unwrap_or(IssueCertRequest {
+        validity_days: None,
+        key_type: None,
+    });
     let Some(mut target) = state.store.get_target(&tenant, &id) else {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("target '{id}' not found") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("target '{id}' not found") })),
+        )
+            .into_response();
     };
     if find_service(&target, port).is_none() {
-        return (StatusCode::NOT_FOUND, Json(json!({ "error": format!("no service on port {port}") }))).into_response();
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": format!("no service on port {port}") })),
+        )
+            .into_response();
     }
     let Some(ca) = &state.ca else {
         return (
@@ -618,9 +685,11 @@ pub async fn issue_service_cert(
 
     let host = target.host.clone();
     let hybrid = body.key_type.as_deref() != Some("classical");
-    let days = body.validity_days.unwrap_or(state.config.pki.default_validity_days);
+    let days = body
+        .validity_days
+        .unwrap_or(state.config.pki.default_validity_days);
 
-    match ca.issue(&host, &[host.clone()], days, hybrid) {
+    match ca.issue(&host, std::slice::from_ref(&host), days, hybrid) {
         Ok((row, key_pem)) => {
             state.store.record_certificate(&tenant, &row);
             for s in target.exposed_services.iter_mut() {

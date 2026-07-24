@@ -105,9 +105,7 @@ impl Scanner for NetworkScanner {
         // A target may pin a single port (host:port) or name a bare host (sweep
         // the configured crypto-port list).
         let (host, ports): (String, Vec<u16>) = match target.address.rsplit_once(':') {
-            Some((h, p)) if p.parse::<u16>().is_ok() => {
-                (h.to_string(), vec![p.parse().unwrap()])
-            }
+            Some((h, p)) if p.parse::<u16>().is_ok() => (h.to_string(), vec![p.parse().unwrap()]),
             _ => (target.address.clone(), self.config.ports.clone()),
         };
 
@@ -150,7 +148,10 @@ impl Scanner for NetworkScanner {
             id: uuid::Uuid::new_v4().to_string(),
             category: FindingCategory::ClassicalCrypto,
             severity: FindingSeverity::Info,
-            title: format!("{} crypto-relevant port(s) open on {host}", open_ports.len()),
+            title: format!(
+                "{} crypto-relevant port(s) open on {host}",
+                open_ports.len()
+            ),
             description: format!("Exposed cryptographic surface: {}", surface.join(", ")),
             asset: CryptoAsset {
                 id: uuid::Uuid::new_v4().to_string(),

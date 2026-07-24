@@ -390,9 +390,18 @@ fn admin_routes() -> Router<AppState> {
             post(crate::admin::k8s_admission::admission_review),
         )
         // Host-agent endpoints (firmware / boot-chain crypto inventory).
-        .route("/api/endpoints", get(crate::admin::endpoints_api::list_endpoints))
-        .route("/api/endpoints/enroll", get(crate::admin::endpoints_api::enroll_info))
-        .route("/api/endpoints/report", post(crate::admin::endpoints_api::report))
+        .route(
+            "/api/endpoints",
+            get(crate::admin::endpoints_api::list_endpoints),
+        )
+        .route(
+            "/api/endpoints/enroll",
+            get(crate::admin::endpoints_api::enroll_info),
+        )
+        .route(
+            "/api/endpoints/report",
+            post(crate::admin::endpoints_api::report),
+        )
         .route(
             "/api/endpoints/{id}",
             axum::routing::delete(crate::admin::endpoints_api::delete_endpoint),
@@ -625,7 +634,7 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
     let channel_status = state
         .provider_crypto
         .get(provider_name)
-        .map(|c| c.pqc_status.clone());
+        .map(|c| c.pqc_status);
     let mut crypto_flag: Option<(String, String)> = None;
     match crate::crypto_policy::evaluate(
         &state.config.crypto_enforcement,

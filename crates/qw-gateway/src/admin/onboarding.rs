@@ -77,12 +77,12 @@ fn record_from_finding(f: &Finding) -> FindingRecord {
         id: f.id.clone(),
         scan_id: "onboarding".to_string(),
         category: f.category.clone(),
-        severity: f.severity.clone(),
+        severity: f.severity,
         title: f.title.clone(),
         description: f.description.clone(),
         asset_type: f.asset.asset_type.clone(),
         algorithm: f.asset.algorithm.clone(),
-        pqc_status: f.pqc_status.clone(),
+        pqc_status: f.pqc_status,
         location: f.asset.location.path.clone(),
         remediation: f.remediation.clone(),
         created_at: Utc::now(),
@@ -255,7 +255,10 @@ fn demo_finding(
         },
         remediation: None,
         pqc_status: pqc,
-        metadata: std::collections::HashMap::from([("source".to_string(), "demo-seed".to_string())]),
+        metadata: std::collections::HashMap::from([(
+            "source".to_string(),
+            "demo-seed".to_string(),
+        )]),
     }
 }
 
@@ -297,7 +300,12 @@ pub async fn seed_demo(
             reachability: vec!["tls".into()],
             environment: "production".into(),
             tags: vec!["demo".into()],
-            exposed_services: vec![demo_svc(443, "https", "classical_secure", "TLS 1.3 with a classical (X25519) key exchange — harvestable today.")],
+            exposed_services: vec![demo_svc(
+                443,
+                "https",
+                "classical_secure",
+                "TLS 1.3 with a classical (X25519) key exchange — harvestable today.",
+            )],
             containers: vec![],
             host_info: None,
             deep_scanned: false,
@@ -313,7 +321,12 @@ pub async fn seed_demo(
             reachability: vec!["tls".into()],
             environment: "production".into(),
             tags: vec!["demo".into()],
-            exposed_services: vec![demo_svc(5432, "postgresql", "classical_weak", "PostgreSQL reachable with data unencrypted at rest.")],
+            exposed_services: vec![demo_svc(
+                5432,
+                "postgresql",
+                "classical_weak",
+                "PostgreSQL reachable with data unencrypted at rest.",
+            )],
             containers: vec![],
             host_info: None,
             deep_scanned: false,
@@ -330,8 +343,18 @@ pub async fn seed_demo(
             environment: "staging".into(),
             tags: vec!["demo".into()],
             exposed_services: vec![
-                demo_svc(22, "ssh", "classical_weak", "SSH offers a deprecated MAC (hmac-sha1)."),
-                demo_svc(3389, "rdp", "classical_secure", "RDP negotiated CredSSP/NLA over classical TLS."),
+                demo_svc(
+                    22,
+                    "ssh",
+                    "classical_weak",
+                    "SSH offers a deprecated MAC (hmac-sha1).",
+                ),
+                demo_svc(
+                    3389,
+                    "rdp",
+                    "classical_secure",
+                    "RDP negotiated CredSSP/NLA over classical TLS.",
+                ),
             ],
             containers: vec![],
             host_info: None,
@@ -348,12 +371,66 @@ pub async fn seed_demo(
     // A synthetic scan spanning the finding spectrum (confidence + evidence are
     // derived automatically at record time).
     let findings = vec![
-        demo_finding("demo-web-01.acme.example:443", "TLS 1.3 on demo-web-01", "Classical X25519 key exchange — harvest-now-decrypt-later exposed.", AT::TlsConnection, Some("X25519"), PqcStatus::ClassicalSecure, FS::Medium, FC::MissingPqc),
-        demo_finding("demo-web-01.acme.example:443", "Certificate #1 for demo-web-01", "Leaf signed with RSA-2048 / SHA-256 — forgeable by a quantum computer.", AT::Certificate, Some("RSA-SHA256"), PqcStatus::ClassicalSecure, FS::Medium, FC::ClassicalCrypto),
-        demo_finding("demo-db-01.acme.example", "demo-db-01 data at rest", "Database stores data with no encryption at rest.", AT::DataStore, Some("none"), PqcStatus::ClassicalWeak, FS::High, FC::MissingPqc),
-        demo_finding("./demo-app/Cargo.toml", "Crypto dependency: openssl", "Depends on a classical-only crypto library (no PQC).", AT::CryptoLibrary, Some("openssl"), PqcStatus::ClassicalSecure, FS::Medium, FC::MissingPqc),
-        demo_finding("demo-legacy-01.acme.example:22", "SSH MAC on demo-legacy-01", "SSH server offers deprecated hmac-sha1 MAC.", AT::ProtocolEndpoint, Some("hmac-sha1"), PqcStatus::ClassicalWeak, FS::High, FC::WeakAlgorithm),
-        demo_finding("demo-edge-01.acme.example:443", "TLS 1.3 on demo-edge-01", "Already negotiates X25519MLKEM768 hybrid — post-quantum ready.", AT::TlsConnection, Some("X25519MLKEM768"), PqcStatus::Hybrid, FS::Info, FC::PqcReady),
+        demo_finding(
+            "demo-web-01.acme.example:443",
+            "TLS 1.3 on demo-web-01",
+            "Classical X25519 key exchange — harvest-now-decrypt-later exposed.",
+            AT::TlsConnection,
+            Some("X25519"),
+            PqcStatus::ClassicalSecure,
+            FS::Medium,
+            FC::MissingPqc,
+        ),
+        demo_finding(
+            "demo-web-01.acme.example:443",
+            "Certificate #1 for demo-web-01",
+            "Leaf signed with RSA-2048 / SHA-256 — forgeable by a quantum computer.",
+            AT::Certificate,
+            Some("RSA-SHA256"),
+            PqcStatus::ClassicalSecure,
+            FS::Medium,
+            FC::ClassicalCrypto,
+        ),
+        demo_finding(
+            "demo-db-01.acme.example",
+            "demo-db-01 data at rest",
+            "Database stores data with no encryption at rest.",
+            AT::DataStore,
+            Some("none"),
+            PqcStatus::ClassicalWeak,
+            FS::High,
+            FC::MissingPqc,
+        ),
+        demo_finding(
+            "./demo-app/Cargo.toml",
+            "Crypto dependency: openssl",
+            "Depends on a classical-only crypto library (no PQC).",
+            AT::CryptoLibrary,
+            Some("openssl"),
+            PqcStatus::ClassicalSecure,
+            FS::Medium,
+            FC::MissingPqc,
+        ),
+        demo_finding(
+            "demo-legacy-01.acme.example:22",
+            "SSH MAC on demo-legacy-01",
+            "SSH server offers deprecated hmac-sha1 MAC.",
+            AT::ProtocolEndpoint,
+            Some("hmac-sha1"),
+            PqcStatus::ClassicalWeak,
+            FS::High,
+            FC::WeakAlgorithm,
+        ),
+        demo_finding(
+            "demo-edge-01.acme.example:443",
+            "TLS 1.3 on demo-edge-01",
+            "Already negotiates X25519MLKEM768 hybrid — post-quantum ready.",
+            AT::TlsConnection,
+            Some("X25519MLKEM768"),
+            PqcStatus::Hybrid,
+            FS::Info,
+            FC::PqcReady,
+        ),
     ];
     let n = findings.len();
     let result = qw_scanner::ScanResult {
@@ -365,7 +442,9 @@ pub async fn seed_demo(
         status: qw_scanner::ScanStatus::Completed,
         error: None,
     };
-    state.store.record_scan(&tenant, &result, &ScanTarget::network_host("demo-seed"));
+    state
+        .store
+        .record_scan(&tenant, &result, &ScanTarget::network_host("demo-seed"));
     crate::admin::graph::snapshot_and_alert(&state, &tenant).await;
 
     Json(json!({

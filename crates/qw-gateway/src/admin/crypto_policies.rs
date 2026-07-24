@@ -137,7 +137,7 @@ pub async fn get_policy(
                 .and_then(|rec| qw_cbom::plan_migration(&rec));
             let mut vv = serde_json::to_value(v).unwrap_or_else(|_| json!({}));
             vv["plan"] = plan
-                .map(|p| serde_json::to_value(p).unwrap_or_else(|_| json!(null)))
+                .map(|p| serde_json::to_value(p).unwrap_or(json!(null)))
                 .unwrap_or(json!(null));
             vv
         })

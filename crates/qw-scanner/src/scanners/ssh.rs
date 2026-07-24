@@ -168,7 +168,9 @@ impl SshScanner {
             }
             // else: a banner line before the ident — keep reading.
         }
-        Err(ScannerError::ParseError("no SSH identification string".into()))
+        Err(ScannerError::ParseError(
+            "no SSH identification string".into(),
+        ))
     }
 
     /// Read and parse the server's `SSH_MSG_KEXINIT` (the first binary packet,
@@ -225,10 +227,12 @@ impl SshScanner {
         let mut findings = Vec::new();
 
         // --- Key exchange (the HNDL-critical family) ---
-        let offers_pqc = k
-            .kex
-            .iter()
-            .any(|a| matches!(Self::classify_kex(a), PqcStatus::Hybrid | PqcStatus::PqcReady));
+        let offers_pqc = k.kex.iter().any(|a| {
+            matches!(
+                Self::classify_kex(a),
+                PqcStatus::Hybrid | PqcStatus::PqcReady
+            )
+        });
         let preferred = k.kex.first().cloned().unwrap_or_default();
         let preferred_status = Self::classify_kex(&preferred);
 
@@ -379,7 +383,9 @@ fn make_finding(
 
 fn read_u32(buf: &[u8], pos: &mut usize) -> Result<u32, ScannerError> {
     if *pos + 4 > buf.len() {
-        return Err(ScannerError::ParseError("truncated name-list length".into()));
+        return Err(ScannerError::ParseError(
+            "truncated name-list length".into(),
+        ));
     }
     let v = u32::from_be_bytes([buf[*pos], buf[*pos + 1], buf[*pos + 2], buf[*pos + 3]]);
     *pos += 4;
@@ -429,7 +435,11 @@ impl Scanner for SshScanner {
         } else {
             format!("{}:22", target.address)
         };
-        let host = address.split(':').next().unwrap_or(&target.address).to_string();
+        let host = address
+            .split(':')
+            .next()
+            .unwrap_or(&target.address)
+            .to_string();
 
         let timeout = std::time::Duration::from_secs(self.config.timeout_secs);
 
@@ -540,7 +550,10 @@ mod tests {
             SshScanner::classify_mac("hmac-sha2-256"),
             PqcStatus::ClassicalSecure
         );
-        assert_eq!(SshScanner::classify_mac("hmac-md5"), PqcStatus::ClassicalWeak);
+        assert_eq!(
+            SshScanner::classify_mac("hmac-md5"),
+            PqcStatus::ClassicalWeak
+        );
     }
 
     #[test]
@@ -562,7 +575,8 @@ mod tests {
             ciphers: vec!["aes256-gcm@openssh.com".into()],
             macs: vec!["hmac-sha2-256".into()],
         };
-        let findings = SshScanner::evaluate(&target, "legacy.example.com", "SSH-2.0-OpenSSH_8.9", &k);
+        let findings =
+            SshScanner::evaluate(&target, "legacy.example.com", "SSH-2.0-OpenSSH_8.9", &k);
         let kex = &findings[0];
         assert!(matches!(kex.category, FindingCategory::MissingPqc));
         assert_eq!(kex.severity, FindingSeverity::High);
@@ -656,19 +670,27 @@ mod tests {
             .count();
         assert_eq!(weak, 3, "expected weak host_key + cipher + mac findings");
         // The server ident is captured in metadata.
-        assert!(kex.metadata.get("server_ident").unwrap().contains("OpenSSH_8.9"));
+        assert!(kex
+            .metadata
+            .get("server_ident")
+            .unwrap()
+            .contains("OpenSSH_8.9"));
     }
 
     #[test]
     fn evaluate_flags_weak_and_pqc_pref() {
         let target = ScanTarget::ssh("modern.example.com:22");
         let k = KexInit {
-            kex: vec!["sntrup761x25519-sha512@openssh.com".into(), "curve25519-sha256".into()],
+            kex: vec![
+                "sntrup761x25519-sha512@openssh.com".into(),
+                "curve25519-sha256".into(),
+            ],
             host_key: vec!["ssh-ed25519".into(), "ssh-rsa".into()],
             ciphers: vec!["chacha20-poly1305@openssh.com".into()],
             macs: vec!["hmac-sha2-256".into()],
         };
-        let findings = SshScanner::evaluate(&target, "modern.example.com", "SSH-2.0-OpenSSH_9.6", &k);
+        let findings =
+            SshScanner::evaluate(&target, "modern.example.com", "SSH-2.0-OpenSSH_9.6", &k);
         assert!(matches!(findings[0].category, FindingCategory::PqcReady));
         // ssh-rsa host key should raise a weak-algorithm finding.
         assert!(findings

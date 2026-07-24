@@ -13,7 +13,6 @@ pub mod middleware;
 pub mod oidc;
 pub mod overlay;
 pub mod pki;
-pub mod ssh_inventory;
 pub mod providers;
 pub mod ratelimit;
 pub mod rbac;
@@ -23,4 +22,5 @@ pub mod server;
 #[cfg(windows)]
 pub mod service;
 pub mod siem;
+pub mod ssh_inventory;
 pub mod state;

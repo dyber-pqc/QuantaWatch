@@ -240,11 +240,21 @@ impl AppState {
         // its port is taken) is logged and skipped rather than failing startup.
         for route in store.list_all_overlay_routes() {
             match overlay
-                .add_route(&route.id, &route.listen, &route.upstream, route.upstream_tls, &route.mode)
+                .add_route(
+                    &route.id,
+                    &route.listen,
+                    &route.upstream,
+                    route.upstream_tls,
+                    &route.mode,
+                )
                 .await
             {
-                Ok(_) => tracing::info!(route = %route.id, listen = %route.listen, upstream = %route.upstream, "overlay: re-bound persisted route"),
-                Err(e) => tracing::warn!(route = %route.id, listen = %route.listen, error = %e, "overlay: failed to re-bind persisted route"),
+                Ok(_) => {
+                    tracing::info!(route = %route.id, listen = %route.listen, upstream = %route.upstream, "overlay: re-bound persisted route")
+                }
+                Err(e) => {
+                    tracing::warn!(route = %route.id, listen = %route.listen, error = %e, "overlay: failed to re-bind persisted route")
+                }
             }
         }
 
@@ -317,7 +327,10 @@ fn expand_env_vars(input: &str) -> String {
                 match std::env::var(var) {
                     Ok(v) => out.push_str(&v),
                     Err(_) => {
-                        tracing::warn!(var, "config references an unset env var; expanding to empty")
+                        tracing::warn!(
+                            var,
+                            "config references an unset env var; expanding to empty"
+                        )
                     }
                 }
                 rest = &after[end + 1..];

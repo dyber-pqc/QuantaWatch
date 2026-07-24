@@ -71,7 +71,11 @@ impl CtScanner {
     /// Turn a classified crt.sh entry into a Finding.
     fn to_finding(e: &CrtShEntry, algorithm: String, pqc: PqcStatus) -> Finding {
         let cn = if e.common_name.is_empty() {
-            e.name_value.lines().next().unwrap_or("(unknown)").to_string()
+            e.name_value
+                .lines()
+                .next()
+                .unwrap_or("(unknown)")
+                .to_string()
         } else {
             e.common_name.clone()
         };
