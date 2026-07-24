@@ -533,6 +533,7 @@ enum Page {
     Certificates,
     Cbom,
     Compliance,
+    CryptoPolicies,
     Frameworks,
     Soc2,
     Governance,
@@ -943,6 +944,7 @@ impl eframe::App for App {
             Page::Certificates => self.certificates(ui),
             Page::Cbom => self.cbom(ui),
             Page::Compliance => self.compliance(ui),
+            Page::CryptoPolicies => self.crypto_policies(ui),
             Page::Frameworks => self.frameworks(ui),
             Page::Soc2 => self.soc2(ui),
             Page::Governance => self.governance(ui),
@@ -1027,6 +1029,7 @@ impl App {
 
                     nav_group(ui, "GOVERNANCE");
                     nav_item(ui, &mut self.page, Page::Compliance, "📋  Compliance", None);
+                    nav_item(ui, &mut self.page, Page::CryptoPolicies, "📐  Crypto policies", None);
                     nav_item(ui, &mut self.page, Page::Frameworks, "📚  Frameworks", None);
                     nav_item(ui, &mut self.page, Page::Soc2, "✅  SOC 2", None);
                     nav_item(ui, &mut self.page, Page::Governance, "📈  Governance/SLO", None);
@@ -2781,6 +2784,128 @@ impl App {
         });
     }
 
+    fn crypto_policies(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            ui.heading("Crypto policies");
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Export JSON").clicked() {
+                    self.export_crypto_policies();
+                }
+            });
+        });
+        ui.label(egui::RichText::new(
+            "Declarative crypto-agility rules (\"clicks, not code\") evaluated in-process against your local \
+             inventory by the shared qw-cbom engine - the same default policy set the gateway enforces.",
+        ).color(theme::MUTED).small());
+        if !self.export_status.is_empty() {
+            ui.label(egui::RichText::new(&self.export_status).color(theme::MUTED).small());
+        }
+        ui.add_space(8.0);
+
+        let results = self.evaluate_crypto_policies();
+        let violated = results.iter().filter(|r| r.status == "violated").count();
+        let breached = results.iter().filter(|r| r.deadline_passed).count();
+        ui.horizontal(|ui| {
+            stat_card(ui, "policies", results.len(), theme::ACCENT);
+            stat_card(ui, "violated", violated, if violated > 0 { theme::CRIT } else { theme::GOOD });
+            stat_card(ui, "compliant", results.len() - violated, theme::GOOD);
+            stat_card(ui, "deadline passed", breached, if breached > 0 { theme::CRIT } else { theme::MUTED });
+        });
+        ui.add_space(8.0);
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for r in &results {
+                egui::Frame::none().fill(theme::CARD).rounding(6.0).inner_margin(egui::Margin::same(8.0)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (col, txt) = if r.status == "violated" {
+                            (theme::CRIT, "VIOLATED")
+                        } else {
+                            (theme::GOOD, "COMPLIANT")
+                        };
+                        ui.colored_label(col, txt);
+                        ui.label(egui::RichText::new(&r.name).strong());
+                        ui.label(egui::RichText::new(format!("[{}]", r.severity)).color(sev_str_color(&r.severity)).small());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // Enforcement + action tell you what the gateway would do.
+                            ui.label(egui::RichText::new(format!("{} · {}", r.enforcement, r.action)).color(theme::MUTED).small());
+                        });
+                    });
+                    if !r.description.is_empty() {
+                        ui.label(egui::RichText::new(&r.description).color(theme::MUTED).small());
+                    }
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(format!("{} violation(s)", r.violation_count)).small());
+                        if let Some(d) = r.deadline {
+                            let (col, txt) = match r.days_to_deadline {
+                                _ if r.deadline_passed => (theme::CRIT, format!("deadline passed ({})", fmt_dt(d))),
+                                Some(days) if days < 180 => (theme::MED, format!("{days}d to deadline ({})", fmt_dt(d))),
+                                Some(days) => (theme::MUTED, format!("{days}d to deadline")),
+                                None => (theme::MUTED, format!("due {}", fmt_dt(d))),
+                            };
+                            ui.label(egui::RichText::new("·").color(theme::MUTED).small());
+                            ui.colored_label(col, egui::RichText::new(txt).small());
+                        }
+                    });
+                    // Drill-down into the specific violating assets.
+                    if !r.violations.is_empty() {
+                        let head = format!("{} violating asset(s)", r.violations.len());
+                        egui::CollapsingHeader::new(head).id_source(&r.id).show(ui, |ui| {
+                            egui::Grid::new(format!("viol-{}", r.id)).striped(true).num_columns(4).spacing([14.0, 4.0]).show(ui, |ui| {
+                                for h in ["Location", "Algorithm", "PQC", "Severity"] {
+                                    ui.label(egui::RichText::new(h).strong().color(theme::MUTED).small());
+                                }
+                                ui.end_row();
+                                for v in &r.violations {
+                                    ui.label(egui::RichText::new(&v.location).monospace().small());
+                                    ui.label(egui::RichText::new(v.algorithm.as_deref().unwrap_or("-")).small());
+                                    ui.colored_label(status_str_color(&v.pqc_status), egui::RichText::new(pretty_status(&v.pqc_status)).small());
+                                    ui.label(egui::RichText::new(&v.severity).small());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+                ui.add_space(4.0);
+            }
+        });
+    }
+
+    /// Evaluate the shared default crypto-agility policy set against the local
+    /// inventory. Fully offline - no gateway, no network.
+    fn evaluate_crypto_policies(&self) -> Vec<qw_cbom::PolicyResult> {
+        let policies = qw_cbom::default_policies();
+        let assets: Vec<qw_cbom::AssetContext> = self
+            .data
+            .assets
+            .iter()
+            .map(|a| qw_cbom::AssetContext {
+                address: a.address.clone(),
+                kind: a.kind.clone(),
+                environment: a.environment.clone(),
+                tags: a.tags.clone(),
+            })
+            .collect();
+        qw_cbom::evaluate_policies(&policies, &self.data.findings, &assets, Utc::now())
+    }
+
+    fn export_crypto_policies(&mut self) {
+        let dir = std::path::Path::new(&self.source)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| std::path::PathBuf::from("."));
+        let path = dir.join("quantawatch-crypto-policies.json");
+        let results = self.evaluate_crypto_policies();
+        self.export_status = match serde_json::to_string_pretty(&results) {
+            Ok(json) => match std::fs::write(&path, json) {
+                Ok(_) => format!("Exported {} policy results to {}", results.len(), path.display()),
+                Err(e) => format!("Export failed: {e}"),
+            },
+            Err(e) => format!("Serialize failed: {e}"),
+        };
+    }
+
     fn compliance(&mut self, ui: &mut egui::Ui) {
         ui.add_space(6.0);
         ui.heading("Compliance");
@@ -3292,6 +3417,7 @@ fn page_title(p: Page) -> &'static str {
         Page::Certificates => "Certificates",
         Page::Cbom => "Crypto (CBOM)",
         Page::Compliance => "Compliance",
+        Page::CryptoPolicies => "Crypto Policies",
         Page::Frameworks => "Frameworks",
         Page::Soc2 => "SOC 2",
         Page::Governance => "Governance/SLO",
@@ -3314,8 +3440,8 @@ fn page_by_name(name: &str) -> Option<Page> {
     let n = name.trim().to_lowercase().replace([' ', '-', '_'], "");
     let pages = [
         Page::Overview, Page::AttackPaths, Page::Estate, Page::Endpoints, Page::Assets,
-        Page::Findings, Page::Certificates, Page::Cbom, Page::Compliance, Page::Frameworks,
-        Page::Soc2, Page::Governance, Page::Scans, Page::Remediations, Page::Overlay,
+        Page::Findings, Page::Certificates, Page::Cbom, Page::Compliance, Page::CryptoPolicies,
+        Page::Frameworks, Page::Soc2, Page::Governance, Page::Scans, Page::Remediations, Page::Overlay,
         Page::Connections, Page::Agents, Page::Sessions, Page::Threats, Page::Alerts,
         Page::Audit, Page::Access, Page::Settings, Page::About,
     ];
@@ -3544,6 +3670,17 @@ fn status_str_color(s: &str) -> egui::Color32 {
         x if x.contains("weak") || x.contains("vulnerable") => theme::CRIT,
         x if x.contains("hybrid") => theme::LOW,
         x if x.contains("ready") || x.contains("pqc") => theme::GOOD,
+        _ => theme::MUTED,
+    }
+}
+
+/// Color for a severity given as a string ("low" | "medium" | "high" | "critical").
+fn sev_str_color(s: &str) -> egui::Color32 {
+    match s.to_lowercase().as_str() {
+        "critical" => theme::CRIT,
+        "high" => theme::HIGH,
+        "medium" => theme::MED,
+        "low" => theme::LOW,
         _ => theme::MUTED,
     }
 }
