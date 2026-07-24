@@ -226,7 +226,11 @@ jobs:
         run: cosign sign --yes "${{ matrix.image }}@${DIGEST}"
 
       # SLSA build provenance for the image (tamper-evident supply-chain record).
+      # Non-blocking: GitHub attestations aren't available on user-owned PRIVATE
+      # repos ("Feature not available..."). The image is still keyless-signed
+      # above. This starts working automatically if the repo goes public/org.
       - name: Attest build provenance
+        continue-on-error: true
         uses: actions/attest-build-provenance@v1
         with:
           subject-name: ${{ matrix.image }}
@@ -252,6 +256,9 @@ jobs:
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4
         with:
+          # Only the per-OS binary bundles - not the .dockerbuild record the
+          # docker job uploads (its ~-laden name broke the "download all").
+          pattern: quantawatch-*
           path: artifacts
 
       - name: Assemble release files + SHA256SUMS
@@ -292,7 +299,9 @@ jobs:
       - name: Sigstore sign the checksums
         run: cosign sign-blob --yes --output-signature dist/SHA256SUMS.cosign.sig --output-certificate dist/SHA256SUMS.cosign.pem dist/SHA256SUMS
 
+      # Non-blocking: attestations are unavailable on user-owned private repos.
       - name: Attest build provenance for the binaries
+        continue-on-error: true
         uses: actions/attest-build-provenance@v1
         with:
           subject-path: "dist/SHA256SUMS"
@@ -335,3 +344,6 @@ jobs:
         with:
           packages-dir: sdk/python/dist/
           password: ${{ secrets.PYPI_API_TOKEN }}
+          # 0.1.0 may already be published (a prior run succeeded here); skip
+          # rather than fail so re-tagged runs stay green.
+          skip-existing: true
