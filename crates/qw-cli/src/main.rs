@@ -699,15 +699,23 @@ fn collect_manifests(
         "__pycache__",
     ];
     if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-                if skip.contains(&base) || base.starts_with('.') {
-                    continue;
-                }
-                collect_manifests(&path, recursive, depth - 1, out);
-            }
+        // read_dir yields entries in filesystem order, which differs across
+        // platforms (NTFS vs ext4) - sort so the traversal, and therefore which
+        // manifest a multi-location dependency is first sourced from, is identical
+        // everywhere. Without this the `--deterministic` CBOM is not reproducible
+        // between a Windows dev box and Linux CI.
+        let mut subdirs: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .filter(|p| {
+                let base = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                !skip.contains(&base) && !base.starts_with('.')
+            })
+            .collect();
+        subdirs.sort();
+        for path in subdirs {
+            collect_manifests(&path, recursive, depth - 1, out);
         }
     }
 }
