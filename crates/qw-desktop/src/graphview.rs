@@ -62,6 +62,7 @@ fn sev_color(sev: &str) -> Color32 {
 }
 
 struct LNode {
+    id: String,
     label: String,
     detail: String,
     color: Color32,
@@ -213,6 +214,7 @@ impl GraphView {
                 detail.push_str("\nObserved in live traffic");
             }
             nodes.push(LNode {
+                id: n.id.clone(),
                 label: n.label.clone(),
                 detail,
                 color: node_color(&n.kind, &n.pqc_status, n.risk),
@@ -290,7 +292,8 @@ impl GraphView {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<(String, String)> {
+    /// Returns (node id, label, detail text) of the selected node, if any.
+    pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<(String, String, String)> {
         self.step();
         ui.ctx().request_repaint();
 
@@ -361,8 +364,13 @@ impl GraphView {
             );
         }
 
-        self.selected
-            .map(|i| (self.nodes[i].label.clone(), self.nodes[i].detail.clone()))
+        self.selected.map(|i| {
+            (
+                self.nodes[i].id.clone(),
+                self.nodes[i].label.clone(),
+                self.nodes[i].detail.clone(),
+            )
+        })
     }
 
     pub fn paths(&self) -> &[PathRow] {

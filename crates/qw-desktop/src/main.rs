@@ -1272,25 +1272,32 @@ impl App {
                 });
             });
 
-        let sel = self.graph.ui(ui);
-        if let Some((label, detail)) = sel {
-            egui::Window::new("Node detail")
-                .id(egui::Id::new("graph_node_detail"))
-                .collapsible(false)
-                .resizable(true)
-                .default_width(320.0)
-                .default_pos(egui::pos2(250.0, 130.0))
-                .show(ui.ctx(), |ui| {
-                    ui.label(egui::RichText::new(&label).strong().size(16.0));
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                    ui.label(egui::RichText::new(&detail).size(13.0));
-                    ui.add_space(6.0);
-                    if ui.button("Close").clicked() {
-                        self.graph.deselect();
-                    }
-                });
+        if let Some((id, label, detail)) = self.graph.ui(ui) {
+            // If the node maps to a store record, open the full detail panel
+            // (shows address, services, remediation, etc.). Otherwise a small
+            // floating card for nodes with no store row (provider/data/agent).
+            if let Some(sel) = node_to_selection(&id, &self.data) {
+                self.selected = Some(sel);
+                self.graph.deselect();
+            } else {
+                egui::Window::new("Node detail")
+                    .id(egui::Id::new("graph_node_detail"))
+                    .collapsible(false)
+                    .resizable(true)
+                    .default_width(320.0)
+                    .default_pos(egui::pos2(250.0, 130.0))
+                    .show(ui.ctx(), |ui| {
+                        ui.label(egui::RichText::new(&label).strong().size(16.0));
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        ui.label(egui::RichText::new(&detail).size(13.0));
+                        ui.add_space(6.0);
+                        if ui.button("Close").clicked() {
+                            self.graph.deselect();
+                        }
+                    });
+            }
         }
     }
 
@@ -2842,6 +2849,37 @@ fn probe_badge(ui: &mut egui::Ui, state: Option<&ProbeState>, air_gapped: bool) 
     };
     ui.colored_label(col, egui::RichText::new(txt).small())
         .on_hover_text(&ps.detail);
+}
+
+/// Map an attack-graph node id (e.g. `asset:prod-api-edge`, `host:h1`,
+/// `service:h1:5432`, `dependency:sha3`) to the store record it represents, so
+/// clicking it opens the full detail panel. Returns None for nodes with no
+/// backing row (provider / data / agent / identity).
+fn node_to_selection(id: &str, data: &Snapshot) -> Option<Selection> {
+    if let Some(aid) = id.strip_prefix("asset:") {
+        if data.assets.iter().any(|a| a.id == aid) {
+            return Some(Selection::Asset(aid.to_string()));
+        }
+    }
+    if let Some(hid) = id.strip_prefix("host:") {
+        if data.targets.iter().any(|t| t.id == hid) {
+            return Some(Selection::Host(hid.to_string()));
+        }
+    }
+    if let Some(rest) = id.strip_prefix("service:") {
+        // service:{target_id}:{port} -> its host
+        if let Some((tid, _port)) = rest.rsplit_once(':') {
+            if data.targets.iter().any(|t| t.id == tid) {
+                return Some(Selection::Host(tid.to_string()));
+            }
+        }
+    }
+    if let Some(lib) = id.strip_prefix("dependency:") {
+        if let Some(f) = data.findings.iter().find(|f| f.title.contains(lib)) {
+            return Some(Selection::Finding(f.id.clone()));
+        }
+    }
+    None
 }
 
 /// A clickable "link" table cell (accent color + hand cursor). Returns clicked.
