@@ -4,12 +4,13 @@
 //! left→right tiers (Identities · Data · Agents · Providers · Assets & Hosts)
 //! and lists the exploitability-ranked attack paths. No gateway, no network.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use eframe::egui::{self, Color32, Pos2, Sense, Stroke, Vec2};
 
 use qw_graph::{build_graph, AgentInput, GraphInputs};
 use qw_scanner::types::FindingRecord;
+use qw_scanner::PqcStatus;
 use qw_store::{AssetRow, FlowRow, TargetRow};
 
 use crate::theme;
@@ -88,6 +89,11 @@ pub struct GraphView {
     zoom: f32,
     selected: Option<usize>,
     signature: u64,
+    // Remediation simulation: force these providers' channel posture.
+    overrides: HashMap<String, PqcStatus>,
+    providers: Vec<String>,
+    base_risk: f64,
+    sim_risk: f64,
 }
 
 impl Default for GraphView {
@@ -100,6 +106,10 @@ impl Default for GraphView {
             zoom: 1.0,
             selected: None,
             signature: u64::MAX,
+            overrides: HashMap::new(),
+            providers: Vec::new(),
+            base_risk: 0.0,
+            sim_risk: 0.0,
         }
     }
 }
@@ -154,7 +164,24 @@ impl GraphView {
             assets,
             targets,
         };
-        let g = build_graph(&inputs, &HashMap::new());
+        // Baseline (no remediation) for risk comparison + the provider work-list.
+        let base = build_graph(&inputs, &HashMap::new());
+        self.base_risk = base.paths.iter().map(|p| p.score).sum();
+        self.providers = base
+            .paths
+            .iter()
+            .filter(|p| !["", "-", "—"].contains(&p.provider.as_str()))
+            .map(|p| p.provider.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        // Simulated graph (with any "harden to hybrid" overrides applied).
+        let g = if self.overrides.is_empty() {
+            base
+        } else {
+            build_graph(&inputs, &self.overrides)
+        };
+        self.sim_risk = g.paths.iter().map(|p| p.score).sum();
 
         // Convert engine nodes → laid-out nodes.
         let mut idx: HashMap<String, usize> = HashMap::new();
@@ -331,6 +358,38 @@ impl GraphView {
 
     pub fn paths(&self) -> &[PathRow] {
         &self.paths
+    }
+
+    /// Providers that appear in attack paths (candidates to harden).
+    pub fn providers(&self) -> &[String] {
+        &self.providers
+    }
+    pub fn is_hardened(&self, provider: &str) -> bool {
+        self.overrides.contains_key(provider)
+    }
+    /// Toggle a provider's simulated "harden to hybrid" override; forces a rebuild.
+    pub fn set_override(&mut self, provider: &str, hardened: bool) {
+        if hardened {
+            self.overrides.insert(provider.to_string(), PqcStatus::Hybrid);
+        } else {
+            self.overrides.remove(provider);
+        }
+        self.signature = u64::MAX;
+    }
+    pub fn clear_overrides(&mut self) {
+        if !self.overrides.is_empty() {
+            self.overrides.clear();
+            self.signature = u64::MAX;
+        }
+    }
+    pub fn base_risk(&self) -> f64 {
+        self.base_risk
+    }
+    pub fn sim_risk(&self) -> f64 {
+        self.sim_risk
+    }
+    pub fn has_overrides(&self) -> bool {
+        !self.overrides.is_empty()
     }
     pub fn reset_view(&mut self) {
         self.pan = Vec2::ZERO;

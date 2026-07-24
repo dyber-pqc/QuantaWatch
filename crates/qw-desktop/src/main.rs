@@ -1207,6 +1207,34 @@ impl App {
             .default_width(300.0)
             .show_inside(ui, |ui| {
                 ui.add_space(4.0);
+                // Remediation simulation: harden provider channels to hybrid and
+                // watch the risk drop (recomputes via the shared engine, offline).
+                egui::CollapsingHeader::new("Remediation simulation")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        let providers = self.graph.providers().to_vec();
+                        if providers.is_empty() {
+                            ui.label(egui::RichText::new("No provider channels to harden.").color(theme::MUTED).small());
+                        } else {
+                            ui.label(egui::RichText::new("harden to hybrid ML-KEM:").color(theme::MUTED).small());
+                            for p in &providers {
+                                let mut on = self.graph.is_hardened(p);
+                                if ui.checkbox(&mut on, p).changed() {
+                                    self.graph.set_override(p, on);
+                                }
+                            }
+                            if self.graph.has_overrides() {
+                                let base = self.graph.base_risk();
+                                let sim = self.graph.sim_risk();
+                                let red = if base > 0.0 { (base - sim) / base * 100.0 } else { 0.0 };
+                                ui.colored_label(theme::GOOD, format!("risk {base:.0} -> {sim:.0}  (-{red:.0}%)"));
+                                if ui.small_button("reset").clicked() {
+                                    self.graph.clear_overrides();
+                                }
+                            }
+                        }
+                    });
+                ui.separator();
                 ui.label(egui::RichText::new("Toxic combinations").strong());
                 ui.label(
                     egui::RichText::new("attack paths, worst first")
@@ -2368,12 +2396,13 @@ impl App {
         ui.add_space(10.0);
         ui.separator();
         ui.add_space(6.0);
-        ui.label(egui::RichText::new("Network").strong());
-        ui.checkbox(&mut self.net_probes_enabled, "Enable reachability probes (leaves the air gap)");
+        ui.label(egui::RichText::new("Mode").strong());
+        ui.checkbox(&mut self.net_probes_enabled, "Online mode - allow network  (default: OFFLINE / air-gapped)");
         ui.label(egui::RichText::new(
-            "Off by default, the app makes no network calls. When on, 'Verify reachability' TCP-connects \
-             to an asset/host to confirm it is actually reachable - and flags any target tagged air-gapped \
-             that still answers. Nothing else touches the network.",
+            "Off by default the app is fully air-gapped: it makes no network calls and reads only the local \
+             store. Turn this on to allow network features - reachability probes, live packet capture (tshark), \
+             and, as they land, connection tests / ticket sync / certificate operations. The top-bar badge \
+             always shows the current mode.",
         ).color(theme::MUTED).small());
         ui.add_space(8.0);
         ui.horizontal(|ui| {
