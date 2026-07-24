@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:2f3c4b28-7e24-ec2d-1896-737b53259214",
+  "serialNumber": "urn:uuid:d59f06c1-e4b0-2cb1-907c-5a20d29fa5f3",
   "version": 1,
   "metadata": {
     "timestamp": "1970-01-01T00:00:00Z",
@@ -19,6 +19,26 @@
       "bomRef": "comp-3656df70b7ab6cbc",
       "type": "library",
       "name": "argon2",
+      "cryptoProperties": {
+        "assetType": "related-crypto-material",
+        "algorithmProperties": {
+          "primitive": "unknown",
+          "parameterSetIdentifier": ""
+        }
+      },
+      "evidence": {
+        "scannerId": "dependency",
+        "scanTimestamp": "1970-01-01T00:00:00Z",
+        "source": "crates/qw-crypto/Cargo.toml",
+        "confidence": 0.9
+      },
+      "x-quantawatch-posture-score": 60.0,
+      "x-quantawatch-pqc-status": "classical_secure"
+    },
+    {
+      "bomRef": "comp-de8d2511ca8262ad",
+      "type": "library",
+      "name": "chacha20poly1305",
       "cryptoProperties": {
         "assetType": "related-crypto-material",
         "algorithmProperties": {
@@ -118,7 +138,7 @@
       "x-quantawatch-pqc-status": "pqc_ready"
     },
     {
-      "bomRef": "comp-b150c45b8dc9bd97",
+      "bomRef": "comp-f5a76106c526c854",
       "type": "library",
       "name": "rustls",
       "cryptoProperties": {
@@ -131,7 +151,7 @@
       "evidence": {
         "scannerId": "dependency",
         "scanTimestamp": "1970-01-01T00:00:00Z",
-        "source": "crates/qw-scanner/Cargo.toml",
+        "source": "crates/qw-gateway/Cargo.toml",
         "confidence": 0.9
       },
       "x-quantawatch-posture-score": 60.0,
@@ -180,10 +200,10 @@
   ],
   "services": [],
   "x-quantawatch-posture": {
-    "overallScore": 92.5,
-    "totalAssets": 8,
+    "overallScore": 92.2,
+    "totalAssets": 9,
     "byStatus": {
-      "classical_secure": 6,
+      "classical_secure": 7,
       "pqc_ready": 2
     },
     "byCategory": [
@@ -199,8 +219,8 @@
       },
       {
         "category": "Dependencies",
-        "score": 70.0,
-        "assetCount": 8
+        "score": 68.88888888888889,
+        "assetCount": 9
       },
       {
         "category": "Keys & Code",
