@@ -9,6 +9,7 @@ pub mod config;
 pub mod crypto_policy;
 pub mod error;
 pub mod metrics;
+pub mod mfa;
 pub mod middleware;
 pub mod oidc;
 pub mod overlay;

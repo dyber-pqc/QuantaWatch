@@ -169,6 +169,16 @@ pub struct DbUser {
     pub org: String,
     pub password_hash: String,
     pub created_at: DateTime<Utc>,
+    /// Base32 TOTP shared secret (RFC 6238). `None` until the user enrolls.
+    #[serde(default)]
+    pub totp_secret: Option<String>,
+    /// True once the user has confirmed a TOTP code — login then requires 2FA.
+    #[serde(default)]
+    pub totp_enabled: bool,
+    /// SHA3-256 hashes of one-time backup recovery codes (never the plaintext).
+    /// Each is consumed (removed) on use.
+    #[serde(default)]
+    pub backup_code_hashes: Vec<String>,
 }
 
 /// A point-in-time snapshot of SLO evaluation (for breach trends).

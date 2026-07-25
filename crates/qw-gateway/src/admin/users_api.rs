@@ -127,6 +127,10 @@ pub async fn create_user(
         org: body.org.unwrap_or(tenant),
         password_hash,
         created_at: chrono::Utc::now(),
+        // New users enroll 2FA on first login (required for all).
+        totp_secret: None,
+        totp_enabled: false,
+        backup_code_hashes: Vec::new(),
     };
     state.store.upsert_user(&user);
     (StatusCode::CREATED, Json(json!({ "username": user.username, "role": user.role, "org": user.org, "source": "db" }))).into_response()
