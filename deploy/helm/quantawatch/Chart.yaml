@@ -2,8 +2,8 @@ apiVersion: v2
 name: quantawatch
 description: QuantaWatch — post-quantum Cryptographic Posture Management gateway with hardware-attested CBOM, agent-aware crypto posture, and a quantum attack-path graph.
 type: application
-version: 0.1.2
-appVersion: "0.1.2"
+version: 0.1.3
+appVersion: "0.1.3"
 home: https://dyber.org
 sources:
   - https://github.com/dyber-pqc/QuantaWatch
