@@ -67,6 +67,16 @@ pub async fn login(
             )
                 .into_response()
         }
+        LoginOutcome::TotpRequired { pending } => (
+            StatusCode::OK,
+            Json(json!({ "status": "totp_required", "pending": pending })),
+        )
+            .into_response(),
+        LoginOutcome::EnrollmentRequired { pending } => (
+            StatusCode::OK,
+            Json(json!({ "status": "enroll_required", "pending": pending })),
+        )
+            .into_response(),
         LoginOutcome::LockedOut { retry_after_secs } => {
             state
                 .audit_logger
@@ -106,6 +116,153 @@ pub async fn login(
             )
                 .into_response()
         }
+    }
+}
+
+/// Whether a fresh install still needs first-run setup, plus whether auth is on.
+pub async fn status(State(state): State<AppState>) -> impl IntoResponse {
+    Json(json!({
+        "setupRequired": state.auth_manager.setup_required(),
+        "authEnabled": state.auth_manager.enabled(),
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetupRequest {
+    pub username: String,
+    pub password: String,
+}
+
+/// First-run setup: create the initial admin. Only works on an empty install;
+/// returns an enrollment pending token so the admin immediately sets up 2FA.
+pub async fn setup(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SetupRequest>,
+) -> impl IntoResponse {
+    match state
+        .auth_manager
+        .setup_admin(&body.username, &body.password)
+    {
+        Ok(pending) => {
+            state
+                .audit_logger
+                .log(
+                    &body.username,
+                    qw_audit::AuditEvent::LoginSucceeded {
+                        principal: body.username.clone(),
+                        auth_method: "first-run-setup".to_string(),
+                        client_ip: client_ip(&headers),
+                    },
+                )
+                .await
+                .ok();
+            (
+                StatusCode::OK,
+                Json(json!({ "status": "enroll_required", "pending": pending })),
+            )
+                .into_response()
+        }
+        Err(e) => (StatusCode::CONFLICT, Json(json!({ "error": e }))).into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PendingCodeRequest {
+    pub pending: String,
+    pub code: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PendingRequest {
+    pub pending: String,
+}
+
+/// Step 2 of login: verify a TOTP (or backup) code and issue a session.
+pub async fn verify_2fa(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PendingCodeRequest>,
+) -> impl IntoResponse {
+    use crate::auth::LoginOutcome;
+    match state
+        .auth_manager
+        .verify_totp_login(&body.pending, &body.code)
+    {
+        LoginOutcome::Ok { token, role, ttl } => (
+            StatusCode::OK,
+            Json(json!({ "token": token, "role": role, "expiresIn": ttl })),
+        )
+            .into_response(),
+        _ => {
+            state
+                .audit_logger
+                .log(
+                    "unknown",
+                    qw_audit::AuditEvent::LoginFailed {
+                        username: "2fa".to_string(),
+                        client_ip: client_ip(&headers),
+                    },
+                )
+                .await
+                .ok();
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid or expired code" })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Begin 2FA enrollment — returns the secret + otpauth URL to show as a QR.
+pub async fn enroll_begin(
+    State(state): State<AppState>,
+    Json(body): Json<PendingRequest>,
+) -> impl IntoResponse {
+    match state.auth_manager.begin_enrollment(&body.pending) {
+        Some(info) => (
+            StatusCode::OK,
+            Json(json!({
+                "secret": info.secret,
+                "otpauthUrl": info.otpauth_url,
+                "pending": info.pending,
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "invalid or expired enrollment session" })),
+        )
+            .into_response(),
+    }
+}
+
+/// Confirm 2FA enrollment — verify the first code, enable 2FA, return a session
+/// and the one-time backup codes (shown exactly once).
+pub async fn enroll_confirm(
+    State(state): State<AppState>,
+    Json(body): Json<PendingCodeRequest>,
+) -> impl IntoResponse {
+    match state
+        .auth_manager
+        .confirm_enrollment(&body.pending, &body.code)
+    {
+        Some(res) => (
+            StatusCode::OK,
+            Json(json!({
+                "token": res.token,
+                "role": res.role,
+                "expiresIn": res.ttl,
+                "backupCodes": res.backup_codes,
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "invalid code or enrollment session" })),
+        )
+            .into_response(),
     }
 }
 

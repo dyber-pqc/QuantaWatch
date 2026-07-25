@@ -14,6 +14,7 @@ qw-crypto = { path = "../qw-crypto" }
 qw-audit = { path = "../qw-audit" }
 qw-scanner = { path = "../qw-scanner" }
 qw-cbom = { path = "../qw-cbom" }
+qw-store = { path = "../qw-store" }
 clap.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

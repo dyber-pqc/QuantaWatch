@@ -102,6 +102,19 @@ pub struct SessionRow {
 
 /// A persisted admin auth session (a bearer token's principal), stored so a
 /// login on one gateway replica is valid on all of them. Keyed in the DB by the
+/// A short-lived challenge issued after a correct password but before a full
+/// session — the second factor (or first-login enrollment) must be completed to
+/// upgrade it into a session. Keyed by the SHA3-256 hash of the pending token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MfaPending {
+    pub username: String,
+    /// "verify" (user has 2FA, needs a code) or "enroll" (first login / setup,
+    /// must set 2FA up before proceeding).
+    pub kind: String,
+    pub expires_at: DateTime<Utc>,
+}
+
 /// SHA3-256 hash of the token — the raw token is never persisted, so a database
 /// read can't hand an attacker a live session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -651,6 +664,7 @@ const PG_SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS mfa_pending (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS audit_entries (gseq BIGSERIAL PRIMARY KEY, writer_id TEXT NOT NULL, seq BIGINT NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq));
     CREATE TABLE IF NOT EXISTS audit_checkpoints (checkpoint_seq BIGINT PRIMARY KEY, content_hash TEXT NOT NULL, data TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_audit_writer ON audit_entries(writer_id, seq);
@@ -958,6 +972,9 @@ impl Store {
             CREATE TABLE IF NOT EXISTS oidc_states (
                 state TEXT PRIMARY KEY, expires_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS mfa_pending (
+                token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS audit_entries (
                 gseq INTEGER PRIMARY KEY AUTOINCREMENT, writer_id TEXT NOT NULL, seq INTEGER NOT NULL,
                 content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq)
@@ -1005,6 +1022,7 @@ impl Store {
             CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE login_lockouts (username TEXT PRIMARY KEY, data TEXT NOT NULL);
             CREATE TABLE oidc_states (state TEXT PRIMARY KEY, expires_at TEXT NOT NULL);
+            CREATE TABLE mfa_pending (token_hash TEXT PRIMARY KEY, data TEXT NOT NULL, expires_at TEXT NOT NULL);
             CREATE TABLE audit_entries (gseq INTEGER PRIMARY KEY AUTOINCREMENT, writer_id TEXT NOT NULL, seq INTEGER NOT NULL, content_hash TEXT NOT NULL, data TEXT NOT NULL, UNIQUE (writer_id, seq));
             CREATE TABLE audit_checkpoints (checkpoint_seq INTEGER PRIMARY KEY, content_hash TEXT NOT NULL, data TEXT NOT NULL);
             "#,
@@ -1299,6 +1317,31 @@ impl Store {
             "SELECT data FROM auth_sessions WHERE token_hash = ?1",
             &[token_hash],
         )
+    }
+
+    /// Persist a pending MFA challenge (keyed by the token's SHA3-256 hash).
+    pub fn put_mfa_pending(&self, token_hash: &str, pending: &MfaPending) {
+        let json = serde_json::to_string(pending).unwrap_or_default();
+        let exp = pending.expires_at.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        self.exec_pg(
+            "INSERT OR REPLACE INTO mfa_pending (token_hash, data, expires_at) VALUES (?1, ?2, ?3)",
+            "INSERT INTO mfa_pending (token_hash, data, expires_at) VALUES ($1, $2, $3) ON CONFLICT (token_hash) DO UPDATE SET data = EXCLUDED.data, expires_at = EXCLUDED.expires_at",
+            &[token_hash, json.as_str(), exp.as_str()],
+        );
+    }
+
+    /// Fetch-and-delete a pending MFA challenge. Returns it only if it existed
+    /// and has not expired (single-use: it's removed either way).
+    pub fn consume_mfa_pending(&self, token_hash: &str) -> Option<MfaPending> {
+        let pending: Option<MfaPending> = self.one_de(
+            "SELECT data FROM mfa_pending WHERE token_hash = ?1",
+            &[token_hash],
+        );
+        self.exec(
+            "DELETE FROM mfa_pending WHERE token_hash = ?1",
+            &[token_hash],
+        );
+        pending.filter(|p| p.expires_at > Utc::now())
     }
 
     /// Revoke every live session belonging to a user (used when their account is

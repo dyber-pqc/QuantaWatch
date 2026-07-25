@@ -69,6 +69,16 @@ pub fn hash_backup_code(code: &str) -> String {
     sha3_256_hex(code.trim().to_lowercase().as_bytes())
 }
 
+/// Test-only: the current valid TOTP code for a secret (to exercise the login
+/// and enrollment flows without a real authenticator app).
+#[cfg(test)]
+pub(crate) fn current_code(secret_b32: &str, account: &str) -> String {
+    build(secret_b32, account)
+        .unwrap()
+        .generate_current()
+        .unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

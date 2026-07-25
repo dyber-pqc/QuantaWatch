@@ -5259,6 +5259,7 @@ dependencies = [
  "qw-cbom",
  "qw-crypto",
  "qw-scanner",
+ "qw-store",
  "serde_json",
  "tokio",
 ]

@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use qw_crypto::{random_token, sha3_256_hex, verify_password};
+use qw_crypto::{hash_password, random_token, sha3_256_hex, verify_password};
 use qw_store::Store;
 
 use crate::config::AuthConfig;
@@ -48,9 +48,43 @@ impl Role {
 
 /// Result of a username/password login attempt.
 pub enum LoginOutcome {
-    Ok { token: String, role: Role, ttl: u64 },
+    Ok {
+        token: String,
+        role: Role,
+        ttl: u64,
+    },
+    /// Password was correct and the user has 2FA — a code is required next.
+    /// `pending` is a short-lived token to present to `verify_totp_login`.
+    TotpRequired {
+        pending: String,
+    },
+    /// Password was correct but the user has no 2FA yet — they must enroll
+    /// before a session is issued (2FA is mandatory).
+    EnrollmentRequired {
+        pending: String,
+    },
     BadCredentials,
-    LockedOut { retry_after_secs: u64 },
+    LockedOut {
+        retry_after_secs: u64,
+    },
+}
+
+/// Handed to the client to render a TOTP QR / manual-entry secret during
+/// enrollment.
+pub struct EnrollInfo {
+    pub secret: String,
+    pub otpauth_url: String,
+    /// Fresh pending token to present to `confirm_enrollment`.
+    pub pending: String,
+}
+
+/// Result of confirming 2FA enrollment: a real session plus the one-time backup
+/// codes (shown to the user exactly once).
+pub struct EnrollResult {
+    pub token: String,
+    pub role: Role,
+    pub ttl: u64,
+    pub backup_codes: Vec<String>,
 }
 
 /// Injected into request extensions after successful auth.
@@ -198,11 +232,173 @@ impl AuthManager {
                 return LoginOutcome::BadCredentials;
             };
 
-        // Success — clear any accumulated failures.
+        // Password OK — clear any accumulated failures.
         self.store.clear_login_lockout(username);
-        let role = Role::parse(&role_name);
-        let (token, ttl) = self.issue_session(username, role, &org);
+
+        // Config-declared users are a break-glass path with no DB-stored 2FA
+        // (the config is read-only). They get a session directly; the mandatory
+        // 2FA policy applies to runtime (DB) users, which is the normal path.
+        if self.config.users.iter().any(|u| u.username == username) {
+            let role = Role::parse(&role_name);
+            let (token, ttl) = self.issue_session(username, role, &org);
+            return LoginOutcome::Ok { token, role, ttl };
+        }
+
+        // DB users: enforce 2FA. Enrolled -> require a code; not yet -> enroll.
+        let enrolled = self
+            .store
+            .get_user(username)
+            .map(|u| u.totp_enabled)
+            .unwrap_or(false);
+        if enrolled {
+            LoginOutcome::TotpRequired {
+                pending: self.issue_pending(username, "verify"),
+            }
+        } else {
+            LoginOutcome::EnrollmentRequired {
+                pending: self.issue_pending(username, "enroll"),
+            }
+        }
+    }
+
+    /// Mint a short-lived pending token for a two-step login (2FA verify) or
+    /// first-login/setup enrollment. Persisted by its SHA3-256 hash.
+    fn issue_pending(&self, username: &str, kind: &str) -> String {
+        let token = random_token(32);
+        self.store.put_mfa_pending(
+            &sha3_256_hex(token.as_bytes()),
+            &qw_store::MfaPending {
+                username: username.to_string(),
+                kind: kind.to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::seconds(600),
+            },
+        );
+        token
+    }
+
+    /// True when no users exist at all (config or DB) — a fresh install that must
+    /// run first-time setup before it can be used.
+    pub fn setup_required(&self) -> bool {
+        self.config.users.is_empty() && self.store.list_users().is_empty()
+    }
+
+    /// First-run setup: create the initial admin. Refuses once any user exists
+    /// (so this can't be used to add an admin to a live system). Returns an
+    /// enrollment pending token — the admin must set up 2FA to finish.
+    pub fn setup_admin(&self, username: &str, password: &str) -> Result<String, String> {
+        if !self.setup_required() {
+            return Err("setup already completed".to_string());
+        }
+        let username = username.trim();
+        if username.is_empty() {
+            return Err("username is required".to_string());
+        }
+        if password.chars().count() < 12 {
+            return Err("password must be at least 12 characters".to_string());
+        }
+        let password_hash = hash_password(password).map_err(|e| format!("hash: {e}"))?;
+        let user = qw_store::DbUser {
+            username: username.to_string(),
+            role: "admin".to_string(),
+            org: qw_store::DEFAULT_TENANT.to_string(),
+            password_hash,
+            created_at: chrono::Utc::now(),
+            totp_secret: None,
+            totp_enabled: false,
+            backup_code_hashes: Vec::new(),
+        };
+        self.store.upsert_user(&user);
+        Ok(self.issue_pending(username, "enroll"))
+    }
+
+    /// Step 2 of login for an enrolled user: verify a TOTP code (or a one-time
+    /// backup code) against the pending challenge and issue a session.
+    pub fn verify_totp_login(&self, pending_token: &str, code: &str) -> LoginOutcome {
+        let Some(p) = self
+            .store
+            .consume_mfa_pending(&sha3_256_hex(pending_token.as_bytes()))
+            .filter(|p| p.kind == "verify")
+        else {
+            return LoginOutcome::BadCredentials;
+        };
+        let Some(mut user) = self.store.get_user(&p.username) else {
+            return LoginOutcome::BadCredentials;
+        };
+        let secret = user.totp_secret.clone().unwrap_or_default();
+        let ok = crate::mfa::verify_totp(&secret, &p.username, code)
+            || self.consume_backup_code(&mut user, code);
+        if !ok {
+            self.record_login_failure(&p.username, chrono::Utc::now());
+            return LoginOutcome::BadCredentials;
+        }
+        let role = Role::parse(&user.role);
+        let (token, ttl) = self.issue_session(&p.username, role, &user.org);
         LoginOutcome::Ok { token, role, ttl }
+    }
+
+    /// If `code` matches one of the user's backup codes, consume it (single-use)
+    /// and return true.
+    fn consume_backup_code(&self, user: &mut qw_store::DbUser, code: &str) -> bool {
+        let h = crate::mfa::hash_backup_code(code);
+        if let Some(pos) = user.backup_code_hashes.iter().position(|x| *x == h) {
+            user.backup_code_hashes.remove(pos);
+            self.store.upsert_user(user);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Begin 2FA enrollment: validate the enroll pending, persist a (disabled)
+    /// TOTP secret on the user, and hand back the secret + otpauth URL plus a
+    /// fresh pending token for `confirm_enrollment`. Re-uses an existing unenabled
+    /// secret so retries keep the same QR.
+    pub fn begin_enrollment(&self, pending_token: &str) -> Option<EnrollInfo> {
+        let p = self
+            .store
+            .consume_mfa_pending(&sha3_256_hex(pending_token.as_bytes()))
+            .filter(|p| p.kind == "enroll")?;
+        let mut user = self.store.get_user(&p.username)?;
+        let secret = user
+            .totp_secret
+            .clone()
+            .filter(|_| !user.totp_enabled)
+            .unwrap_or_else(crate::mfa::generate_secret);
+        let otpauth_url = crate::mfa::otpauth_url(&secret, &p.username).ok()?;
+        user.totp_secret = Some(secret.clone());
+        user.totp_enabled = false;
+        self.store.upsert_user(&user);
+        Some(EnrollInfo {
+            secret,
+            otpauth_url,
+            pending: self.issue_pending(&p.username, "enroll"),
+        })
+    }
+
+    /// Confirm enrollment: verify the first code against the pending secret, then
+    /// enable 2FA, mint one-time backup codes, and issue a session.
+    pub fn confirm_enrollment(&self, pending_token: &str, code: &str) -> Option<EnrollResult> {
+        let p = self
+            .store
+            .consume_mfa_pending(&sha3_256_hex(pending_token.as_bytes()))
+            .filter(|p| p.kind == "enroll")?;
+        let mut user = self.store.get_user(&p.username)?;
+        let secret = user.totp_secret.clone()?;
+        if !crate::mfa::verify_totp(&secret, &p.username, code) {
+            return None;
+        }
+        let (plain, hashes) = crate::mfa::generate_backup_codes();
+        user.totp_enabled = true;
+        user.backup_code_hashes = hashes;
+        self.store.upsert_user(&user);
+        let role = Role::parse(&user.role);
+        let (token, ttl) = self.issue_session(&p.username, role, &user.org);
+        Some(EnrollResult {
+            token,
+            role,
+            ttl,
+            backup_codes: plain,
+        })
     }
 
     /// Record a failed login and lock the account once the threshold is reached.
@@ -319,5 +515,94 @@ pub fn required_role(method: &axum::http::Method, path: &str) -> Role {
     match *method {
         Method::GET | Method::HEAD | Method::OPTIONS => Role::Viewer,
         _ => Role::Operator,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AuthConfig;
+
+    fn mgr() -> AuthManager {
+        let store = Arc::new(qw_store::Store::open_in_memory().unwrap());
+        let config = AuthConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        AuthManager::new(config, store)
+    }
+
+    fn totp_pending(m: &AuthManager, user: &str, pw: &str) -> String {
+        match m.login(user, pw) {
+            LoginOutcome::TotpRequired { pending } => pending,
+            _ => panic!("expected TotpRequired"),
+        }
+    }
+
+    #[test]
+    fn setup_enroll_login_verify_and_backup_codes() {
+        let m = mgr();
+        assert!(m.setup_required(), "fresh install needs setup");
+
+        // First-run setup creates the admin; returns an enrollment challenge.
+        let pending = m.setup_admin("admin", "correct horse battery").unwrap();
+        assert!(
+            !m.setup_required(),
+            "setup no longer required once a user exists"
+        );
+        // Setup is locked after the first user — no adding admins to a live system.
+        assert!(m.setup_admin("intruder", "another password!!").is_err());
+
+        // Enroll: obtain a secret, produce a valid code, confirm 2FA on.
+        let info = m.begin_enrollment(&pending).expect("begin enrollment");
+        let code = crate::mfa::current_code(&info.secret, "admin");
+        let res = m
+            .confirm_enrollment(&info.pending, &code)
+            .expect("confirm enrollment");
+        assert!(!res.token.is_empty());
+        assert_eq!(res.backup_codes.len(), crate::mfa::BACKUP_CODE_COUNT);
+        let backup0 = res.backup_codes[0].clone();
+
+        // Password alone no longer yields a session — 2FA is required.
+        let p1 = totp_pending(&m, "admin", "correct horse battery");
+        assert!(matches!(
+            m.login("admin", "wrong"),
+            LoginOutcome::BadCredentials
+        ));
+
+        // A valid TOTP code upgrades the pending challenge to a session.
+        let code2 = crate::mfa::current_code(&info.secret, "admin");
+        assert!(matches!(
+            m.verify_totp_login(&p1, &code2),
+            LoginOutcome::Ok { .. }
+        ));
+
+        // A backup code also works — exactly once.
+        let p2 = totp_pending(&m, "admin", "correct horse battery");
+        assert!(matches!(
+            m.verify_totp_login(&p2, &backup0),
+            LoginOutcome::Ok { .. }
+        ));
+        let p3 = totp_pending(&m, "admin", "correct horse battery");
+        assert!(
+            matches!(
+                m.verify_totp_login(&p3, &backup0),
+                LoginOutcome::BadCredentials
+            ),
+            "a backup code must not be reusable"
+        );
+    }
+
+    #[test]
+    fn pending_token_is_single_use_and_typed() {
+        let m = mgr();
+        let pending = m.setup_admin("admin", "correct horse battery").unwrap();
+        // An enroll pending can't be used at the verify step.
+        assert!(matches!(
+            m.verify_totp_login(&pending, "000000"),
+            LoginOutcome::BadCredentials
+        ));
+        // ...and it was consumed, so a subsequent begin_enrollment fails.
+        assert!(m.begin_enrollment(&pending).is_none());
     }
 }

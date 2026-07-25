@@ -287,7 +287,11 @@ alerts:
 # Generate API keys with:         qw hash-password --api-key
 # Roles: viewer (read), operator (+ trigger scans/remediation), admin (+ config).
 auth:
-  enabled: false
+  # Turn auth on for any real deployment. With auth on and no users defined
+  # (below) or created yet, a fresh install shows a first-run setup wizard in the
+  # dashboard: you create the initial admin account and are then required to
+  # enroll TOTP 2FA (backup codes are shown once). There is NO default password.
+  enabled: true
   session_ttl_secs: 28800          # absolute session lifetime
   # Auth hardening (SOC2 CC6.1). Failed-login lockout is stored in the shared
   # store, so it holds across ALL replicas — not just the one that saw the
@@ -300,11 +304,13 @@ auth:
   # posture history, remediations, alerts) is partitioned per org in the store.
   # `role` is a built-in role (viewer | auditor | operator | admin) OR a custom
   # role defined under `roles:` below.
-  users:
-    - username: admin
-      password_hash: "$argon2id$v=19$m=19456,t=2,p=1$...replace-me..."
-      role: admin
-      org: default
+  #
+  # Leave `users` empty for the recommended flow: the dashboard's first-run setup
+  # creates your admin (with forced 2FA) — no password ever lives in this file.
+  # Any users listed here are a config-managed "break-glass" path: they log in
+  # with password only (2FA can't be stored for read-only config users), so use
+  # them sparingly. Generate a hash with `qw hash-password`.
+  users: []
   api_keys:
     - name: ci
       key_hash: "sha3-256-hex-of-the-key"

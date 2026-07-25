@@ -119,8 +119,36 @@ enum Commands {
         #[arg(long)]
         public_key: PathBuf,
     },
+    /// Operator recovery for locked-out accounts (run on the server).
+    Admin {
+        #[command(subcommand)]
+        action: AdminAction,
+    },
     /// Show version and build info
     Version,
+}
+
+#[derive(Subcommand)]
+enum AdminAction {
+    /// Clear a user's 2FA so they re-enroll on next login (lost authenticator).
+    Reset2fa {
+        /// Username to reset.
+        username: String,
+        /// Data directory holding quantawatch.db.
+        #[arg(long, default_value = "./data")]
+        data: PathBuf,
+    },
+    /// Set a new password for a user (lost password).
+    ResetPassword {
+        /// Username to reset.
+        username: String,
+        /// The new password (min 12 chars). Consider your shell history.
+        #[arg(long)]
+        password: String,
+        /// Data directory holding quantawatch.db.
+        #[arg(long, default_value = "./data")]
+        data: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -631,6 +659,35 @@ async fn async_main() -> Result<()> {
                 std::process::exit(1);
             }
         }
+        Commands::Admin { action } => match action {
+            AdminAction::Reset2fa { username, data } => {
+                let store = qw_store::Store::open(&data.join("quantawatch.db"))?;
+                let mut user = store
+                    .get_user(&username)
+                    .ok_or_else(|| anyhow::anyhow!("no such user: {username}"))?;
+                user.totp_secret = None;
+                user.totp_enabled = false;
+                user.backup_code_hashes.clear();
+                store.upsert_user(&user);
+                println!("2FA cleared for '{username}'. They will re-enroll on next login.");
+            }
+            AdminAction::ResetPassword {
+                username,
+                password,
+                data,
+            } => {
+                if password.chars().count() < 12 {
+                    anyhow::bail!("password must be at least 12 characters");
+                }
+                let store = qw_store::Store::open(&data.join("quantawatch.db"))?;
+                let mut user = store
+                    .get_user(&username)
+                    .ok_or_else(|| anyhow::anyhow!("no such user: {username}"))?;
+                user.password_hash = qw_crypto::hash_password(&password)?;
+                store.upsert_user(&user);
+                println!("Password reset for '{username}'.");
+            }
+        },
         Commands::Version => {
             println!("QuantaWatch CLI v{}", env!("CARGO_PKG_VERSION"));
             println!("PQC: ML-DSA-65 (FIPS 204), ML-KEM-768 (FIPS 203)");

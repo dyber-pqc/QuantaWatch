@@ -84,6 +84,12 @@ async fn auth_layer(
     if path.ends_with("/api/auth/login")
         || path.ends_with("/api/health")
         || path.ends_with("/api/auth/config")
+        || path.ends_with("/api/auth/status")
+        // First-run setup (self-guards: only works on an empty install) and the
+        // 2FA steps, which are protected by short-lived pending tokens rather
+        // than a full session.
+        || path.ends_with("/api/auth/setup")
+        || path.contains("/api/auth/2fa/")
         || path.contains("/api/auth/oidc/")
         || path.contains("/api/webhooks/")
         // Host-agent report: authenticated by the enrollment token in-handler.
@@ -189,6 +195,20 @@ fn admin_routes() -> Router<AppState> {
         // scrape with an API key (Prometheus `authorization` credentials).
         .route("/metrics", get(crate::admin::metrics_api::get_metrics))
         .route("/api/auth/login", post(crate::admin::auth_api::login))
+        .route("/api/auth/status", get(crate::admin::auth_api::status))
+        .route("/api/auth/setup", post(crate::admin::auth_api::setup))
+        .route(
+            "/api/auth/2fa/verify",
+            post(crate::admin::auth_api::verify_2fa),
+        )
+        .route(
+            "/api/auth/2fa/enroll",
+            post(crate::admin::auth_api::enroll_begin),
+        )
+        .route(
+            "/api/auth/2fa/confirm",
+            post(crate::admin::auth_api::enroll_confirm),
+        )
         .route("/api/auth/logout", post(crate::admin::auth_api::logout))
         .route("/api/auth/me", get(crate::admin::auth_api::me))
         .route("/api/auth/config", get(crate::admin::auth_api::auth_config))
