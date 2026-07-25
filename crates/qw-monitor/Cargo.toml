@@ -5,12 +5,24 @@ edition.workspace = true
 license.workspace = true
 description = "Prompt security monitor for QuantaWatch"
 
+[features]
+# Off by default: compiles the candle-based semantic classifier backend and its
+# (heavy) inference deps. The detector *seam* is always compiled; only the
+# backend is gated so the default build stays lean and dependency-free.
+default = []
+ml = ["dep:candle-core", "dep:candle-nn"]
+
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 regex.workspace = true
+# Pure-Rust CPU tensor math for the optional semantic classifier backend. No C
+# toolchain / model runtime required; the tokenizer is a plain JSON vocab (see
+# ml.rs) so the `ml` feature stays dependency-light and cross-compiles cleanly.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

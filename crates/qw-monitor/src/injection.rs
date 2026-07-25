@@ -29,7 +29,7 @@ impl InjectionDetector {
                     pattern_name: pattern.name.to_string(),
                     description: pattern.description.to_string(),
                     matched_text: m.as_str().to_string(),
-                    severity: pattern.severity.clone(),
+                    severity: pattern.severity,
                     confidence: pattern.confidence,
                 });
             }

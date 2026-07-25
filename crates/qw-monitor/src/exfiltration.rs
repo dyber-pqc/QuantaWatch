@@ -29,7 +29,7 @@ impl ExfiltrationDetector {
                     pattern_name: pattern.name.to_string(),
                     description: pattern.description.to_string(),
                     matched_text: truncate_match(m.as_str(), 100),
-                    severity: pattern.severity.clone(),
+                    severity: pattern.severity,
                     confidence: pattern.confidence,
                 });
             }

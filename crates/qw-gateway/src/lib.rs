@@ -14,6 +14,7 @@ pub mod oidc;
 pub mod overlay;
 pub mod pki;
 pub mod providers;
+pub mod proxy_stream;
 pub mod ratelimit;
 pub mod rbac;
 pub mod resilience;

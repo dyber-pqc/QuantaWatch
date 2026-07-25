@@ -7,4 +7,7 @@ pub enum MonitorError {
 
     #[error("scan error: {0}")]
     ScanError(String),
+
+    #[error("ml detector: {0}")]
+    Ml(String),
 }

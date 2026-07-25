@@ -319,8 +319,12 @@ your own:
 cargo bench -p qw-crypto      # ML-DSA / ML-KEM / SHA3 / Merkle microbenchmarks
 ```
 
-Note that the proxy currently **buffers** each upstream response before scanning
-and forwarding it, so streaming responses are not yet streamed end-to-end.
+By default the proxy **buffers** each upstream response, scans it, then forwards
+— so it can block a bad response before any byte reaches the client. Set
+`monitor.stream_responses: true` to instead stream chunks through with
+incremental scanning and **cut the stream off** on detection (lower latency, at
+the cost that already-forwarded bytes can't be recalled — detect-and-cutoff, not
+pre-send block).
 
 ## Honest status
 
@@ -333,9 +337,11 @@ QuantaWatch is pre-1.0. In the interest of being auditable, here is what is
   platform-CA certificate-chain flow, but a **real** TPM 2.0 / AWS Nitro / SEV-SNP
   quote is not yet wired in. The dashboard and CLI report the actual provider
   type honestly &mdash; there is no hardware root of trust today.
-- **Detection is pattern + heuristic based**, not ML/semantic. It catches known
-  phrasings, obfuscation, and paraphrased overrides, but is not a trained
-  classifier.
+- **Detection is pattern + heuristic based by default.** It catches known
+  phrasings, obfuscation, and paraphrased overrides. An **optional trained
+  classifier** slots in behind the `ml` build feature
+  (`monitor.ml.enabled` + a model on disk) — the plumbing and enforcement are
+  shipped and tested, but **no model is bundled**; you supply the weights.
 - **Single-replica.** State is SQLite on a `ReadWriteOnce` volume; horizontal
   scale-out (external DB) is on the roadmap.
 - **Cloud connectors** cover common resource types and read credentials from the

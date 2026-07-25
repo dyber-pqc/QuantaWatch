@@ -654,12 +654,23 @@ pub struct MonitorConfig {
     pub blocking_threshold: String,
     #[serde(default = "default_true")]
     pub scan_responses: bool,
+    /// Stream upstream responses to the client chunk-by-chunk, scanning
+    /// incrementally and cutting the stream off on detection, instead of
+    /// buffering the whole response first. Off by default (buffering blocks
+    /// before any byte is sent; streaming is detect-and-cutoff — bytes already
+    /// forwarded can't be recalled).
+    #[serde(default)]
+    pub stream_responses: bool,
     #[serde(default = "default_true")]
     pub prompt_injection: bool,
     #[serde(default = "default_true")]
     pub data_exfiltration: bool,
     #[serde(default = "default_true")]
     pub pii_detection: bool,
+    /// Optional trained-classifier (semantic) detector. Disabled by default;
+    /// requires a gateway built with `--features ml` and a model on disk.
+    #[serde(default)]
+    pub ml: qw_monitor::MlConfig,
 }
 
 impl Default for MonitorConfig {
@@ -667,9 +678,11 @@ impl Default for MonitorConfig {
         Self {
             blocking_threshold: default_blocking_threshold(),
             scan_responses: true,
+            stream_responses: false,
             prompt_injection: true,
             data_exfiltration: true,
             pii_detection: true,
+            ml: qw_monitor::MlConfig::default(),
         }
     }
 }

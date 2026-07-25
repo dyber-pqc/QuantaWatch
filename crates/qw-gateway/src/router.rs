@@ -791,6 +791,33 @@ async fn proxy_handler(State(state): State<AppState>, request: Request) -> Respo
 
     let status = upstream_response.status();
     let response_headers = upstream_response.headers().clone();
+
+    // Opt-in: stream the response to the client chunk-by-chunk, scanning
+    // incrementally and cutting off on detection, instead of buffering it whole.
+    // Default (below) buffers, which can block before any byte is sent.
+    if state.config.monitor.stream_responses && status.is_success() {
+        let ctx = crate::proxy_stream::StreamCtx {
+            provider: provider_name.to_string(),
+            session_id: session_ctx.session_id.clone(),
+            model: model.clone(),
+            prompt_hash: prompt_hash.clone(),
+            tools_requested: tools_requested.clone(),
+            policy_decision: policy_result
+                .as_ref()
+                .map(|p| p.decision_reason.clone())
+                .unwrap_or_else(|| "allowed".to_string()),
+            crypto_flag: crypto_flag.clone(),
+            start,
+        };
+        return crate::proxy_stream::stream_response(
+            state.clone(),
+            upstream_response,
+            response_headers,
+            ctx,
+        )
+        .await;
+    }
+
     let response_body = match upstream_response.bytes().await {
         Ok(b) => b,
         Err(e) => {

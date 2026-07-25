@@ -88,7 +88,13 @@ impl AppState {
             "critical" => qw_monitor::Severity::Critical,
             _ => qw_monitor::Severity::High,
         };
-        let security_monitor = Arc::new(SecurityMonitor::new(blocking_threshold));
+        // Optional trained-classifier detector. Errors loudly if configured-on
+        // but unavailable (no model, or gateway built without `--features ml`)
+        // rather than silently running without the classifier the operator asked
+        // for.
+        let semantic = qw_monitor::ml::build_detector(&config.monitor.ml)?;
+        let security_monitor =
+            Arc::new(SecurityMonitor::new(blocking_threshold).with_semantic(semantic));
 
         // Initialize provider registry
         let provider_registry = Arc::new(providers::build_registry(&config));

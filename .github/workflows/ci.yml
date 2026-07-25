@@ -42,6 +42,38 @@ jobs:
       - name: Run tests
         run: cargo test --workspace
 
+  ml-feature:
+    name: ML detector feature
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            target/
+          key: ${{ runner.os }}-cargo-ml-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-ml-
+            ${{ runner.os }}-cargo-
+
+      # The optional semantic-detection backend (candle) is off by default, so
+      # the main job never compiles it. Build + test it here so it can't rot,
+      # including the real-model inference test in qw-monitor.
+      - name: Clippy (ml feature)
+        run: cargo clippy -p qw-monitor -p qw-gateway --features ml -- -D warnings
+
+      - name: Test (ml feature)
+        run: cargo test -p qw-monitor --features ml
+
   windows-desktop:
     name: Windows Desktop
     runs-on: windows-latest

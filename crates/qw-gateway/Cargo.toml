@@ -13,6 +13,12 @@ path = "src/lib.rs"
 name = "quantawatch"
 path = "src/main.rs"
 
+[features]
+default = []
+# Compile the optional semantic (ML) threat-detection backend. Off by default so
+# the standard gateway build stays lean; enable to run a trained classifier.
+ml = ["qw-monitor/ml"]
+
 [dependencies]
 qw-crypto = { path = "../qw-crypto" }
 qw-policy = { path = "../qw-policy" }
@@ -44,6 +50,8 @@ async-trait.workspace = true
 dashmap.workspace = true
 base64 = "0.22"
 bytes = "1"
+futures-util = "0.3"
+async-stream = "0.3"
 http = "1"
 # PQC-terminating overlay: a rustls TLS server on the aws-lc-rs backend (offers
 # the X25519MLKEM768 hybrid group) fronting legacy upstreams. rcgen mints a

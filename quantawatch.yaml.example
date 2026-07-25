@@ -129,6 +129,23 @@ monitor:
   prompt_injection: true
   data_exfiltration: true
   pii_detection: true
+  # Stream upstream responses to the client chunk-by-chunk, scanning incrementally
+  # and cutting the stream off on detection, instead of buffering the whole
+  # response first. Off by default: buffering blocks a bad response before any
+  # byte is sent; streaming is detect-and-cutoff (bytes already forwarded can't be
+  # recalled). Turn on for lower latency / true streaming where that trade is OK.
+  stream_responses: false
+  # Optional trained-classifier (semantic) detector. Off by default. Requires a
+  # gateway built with `--features ml` AND a model on disk; if enabled without
+  # both, the gateway refuses to start rather than silently skip it. No model is
+  # bundled — supply your own (safetensors weights + a JSON `{"token": id}` vocab).
+  ml:
+    enabled: false
+    model_path: ""        # e.g. ./models/injection.safetensors
+    tokenizer_path: ""    # e.g. ./models/vocab.json
+    threshold: 0.5        # P(injection) at/above which text is flagged
+    severity: high        # severity assigned to a positive detection
+    max_chars: 4000       # truncate longer input before classifying
 
 # PQC-signed, tamper-evident audit log. Entries live in the store (the same
 # SQLite/Postgres backend as scanner.store_path), so with a shared Postgres store

@@ -29,7 +29,7 @@ impl PiiDetector {
                     pattern_name: pattern.name.to_string(),
                     description: pattern.description.to_string(),
                     matched_text: redact_match(m.as_str()),
-                    severity: pattern.severity.clone(),
+                    severity: pattern.severity,
                     confidence: pattern.confidence,
                 });
             }
