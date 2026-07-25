@@ -64,3 +64,6 @@ quantawatch-findings.json
 *.tfvars
 !*.tfvars.example
 crash.log
+
+# TypeScript incremental build cache
+*.tsbuildinfo
