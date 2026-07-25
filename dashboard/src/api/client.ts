@@ -358,15 +358,99 @@ export async function fetchFramework(id: string): Promise<FrameworkDetail> {
   return fetchJSON<FrameworkDetail>(`/api/frameworks/${id}`);
 }
 
-export async function login(username: string, password: string): Promise<void> {
+/** Where the caller must go next after a correct password. */
+export type AuthStep =
+  | { kind: "ok" } // session issued (token stored)
+  | { kind: "totp"; pending: string } // enrolled user must enter a code
+  | { kind: "enroll"; pending: string }; // user must set 2FA up first
+
+export async function login(username: string, password: string): Promise<AuthStep> {
   const res = await fetch("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ username, password }),
   });
-  if (!res.ok) throw new Error("Invalid username or password");
-  const data = await res.json();
-  setToken(data.token);
+  if (res.status === 429) throw new Error("Account temporarily locked. Try again later.");
+  if (res.status === 401) throw new Error("Invalid username or password");
+  if (!res.ok) throw new Error("Login failed");
+  const d = await res.json();
+  if (d.token) {
+    setToken(d.token);
+    return { kind: "ok" };
+  }
+  if (d.status === "totp_required") return { kind: "totp", pending: d.pending };
+  if (d.status === "enroll_required") return { kind: "enroll", pending: d.pending };
+  throw new Error("Unexpected login response");
+}
+
+export interface AuthStatus {
+  setupRequired: boolean;
+  authEnabled: boolean;
+}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  try {
+    const res = await fetch("/api/auth/status");
+    return await res.json();
+  } catch {
+    return { setupRequired: false, authEnabled: false };
+  }
+}
+
+/** First-run setup: create the initial admin. Returns an enroll pending token. */
+export async function setupAdmin(username: string, password: string): Promise<{ pending: string }> {
+  const res = await fetch("/api/auth/setup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const e = await res.json().catch(() => ({}));
+    throw new Error(e.error || "Setup failed");
+  }
+  return { pending: (await res.json()).pending };
+}
+
+export interface EnrollInfo {
+  secret: string;
+  otpauthUrl: string;
+  pending: string;
+}
+
+/** Begin 2FA enrollment — returns the secret + otpauth URL (render as a QR). */
+export async function enrollBegin(pending: string): Promise<EnrollInfo> {
+  const res = await fetch("/api/auth/2fa/enroll", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pending }),
+  });
+  if (!res.ok) throw new Error("Enrollment session expired — please sign in again.");
+  const d = await res.json();
+  return { secret: d.secret, otpauthUrl: d.otpauthUrl, pending: d.pending };
+}
+
+/** Confirm enrollment — stores the session token, returns one-time backup codes. */
+export async function enrollConfirm(pending: string, code: string): Promise<string[]> {
+  const res = await fetch("/api/auth/2fa/confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pending, code }),
+  });
+  if (!res.ok) throw new Error("Invalid code");
+  const d = await res.json();
+  setToken(d.token);
+  return d.backupCodes as string[];
+}
+
+/** Second login step: verify a TOTP (or backup) code and store the session. */
+export async function verify2fa(pending: string, code: string): Promise<void> {
+  const res = await fetch("/api/auth/2fa/verify", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pending, code }),
+  });
+  if (!res.ok) throw new Error("Invalid or expired code");
+  setToken((await res.json()).token);
 }
 
 export async function logout(): Promise<void> {
