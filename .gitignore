@@ -48,6 +48,15 @@ evidence-tampered.json
 .env
 .env.*
 
+# Real operational data / exports / signing material — never commit (belt-and-
+# suspenders on top of /data, /keys, /audit above). Your scans, findings, DB, and
+# release seed are local-only; the public repo must not carry them.
+/release-keys/
+quantawatch-findings.json
+*.cbom.local.json
+*.sqlite
+*.sqlite3
+
 # Terraform
 .terraform/
 *.tfstate
