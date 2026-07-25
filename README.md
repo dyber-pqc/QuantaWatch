@@ -99,7 +99,20 @@ verifiers (`qw verify`, `qw verify-attestation`, `qw verify-evidence`) work
 
 ## Quick Start
 
-> Not yet published to crates.io / PyPI / npm &mdash; build from source.
+Install a published release ([all releases](https://github.com/dyber-pqc/QuantaWatch/releases)):
+
+```bash
+# Python SDK — on PyPI
+pip install quantawatch
+
+# Container images — gateway + admin API, and the dashboard
+docker pull ghcr.io/dyber-pqc/quantawatch:latest
+docker pull ghcr.io/dyber-pqc/quantawatch-dashboard:latest
+
+# Desktop app — download the Windows MSI (or Inno setup.exe) from a release
+```
+
+Or run the whole stack locally:
 
 ### Docker Compose
 
@@ -183,7 +196,7 @@ curl -s -X POST http://localhost:9091/api/onboarding/scan \
 ### Desktop app
 
 A native, browser-free, offline-first build of the dashboard for air-gapped and
-high-assurance use. Install the signed Windows MSI from a
+high-assurance use. Download the Windows MSI (or Inno `setup.exe`) from a
 [release](https://github.com/dyber-pqc/QuantaWatch/releases), or build it:
 
 ```bash
@@ -228,9 +241,10 @@ cargo run -p qw-cli -- verify-evidence ./evidence.json
 cargo run -p qw-cli -- verify-file SHA256SUMS --signature SHA256SUMS.sig --public-key docs/release-signing-key.pub
 ```
 
-Releases are reproducible and signed twice — with Sigstore and with
-QuantaWatch's own post-quantum ML-DSA-65 signature. See
-[`docs/RELEASES.md`](docs/RELEASES.md) to verify a release or reproduce a build.
+Releases are reproducible and Sigstore-signed; when a release signing seed is
+configured, they additionally carry QuantaWatch's own post-quantum ML-DSA-65
+signature. See [`docs/RELEASES.md`](docs/RELEASES.md) to verify a release or
+reproduce a build.
 
 ## Configuration
 
@@ -326,7 +340,10 @@ QuantaWatch is pre-1.0. In the interest of being auditable, here is what is
   scale-out (external DB) is on the roadmap.
 - **Cloud connectors** cover common resource types and read credentials from the
   environment; they are not exhaustive.
-- **Not published** to crates.io / PyPI / npm yet &mdash; build from source.
+- **Installers are not yet code-signed.** The Windows MSI / `setup.exe` are
+  unsigned, so SmartScreen shows an "unknown publisher" warning until an
+  Authenticode certificate is wired in. The Python SDK (PyPI) and container
+  images are published; the Rust crates and npm SDK are not yet.
 
 ## Development
 

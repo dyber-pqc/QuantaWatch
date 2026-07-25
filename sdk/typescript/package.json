@@ -1,6 +1,6 @@
 {
   "name": "@quantawatch/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "QuantaWatch TypeScript SDK - AI gateway protection and audit SDK",
   "type": "module",
   "main": "./dist/index.js",

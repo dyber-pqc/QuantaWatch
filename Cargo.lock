@@ -4776,7 +4776,7 @@ dependencies = [
 
 [[package]]
 name = "qw-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64",
  "chrono",
@@ -4793,7 +4793,7 @@ dependencies = [
 
 [[package]]
 name = "qw-cbom"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "hex",
@@ -4808,7 +4808,7 @@ dependencies = [
 
 [[package]]
 name = "qw-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4823,7 +4823,7 @@ dependencies = [
 
 [[package]]
 name = "qw-crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argon2",
  "base64",
@@ -4850,7 +4850,7 @@ dependencies = [
 
 [[package]]
 name = "qw-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4871,7 +4871,7 @@ dependencies = [
 
 [[package]]
 name = "qw-gateway"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4920,7 +4920,7 @@ dependencies = [
 
 [[package]]
 name = "qw-graph"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "qw-scanner",
  "qw-store",
@@ -4930,7 +4930,7 @@ dependencies = [
 
 [[package]]
 name = "qw-integrations"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "base64",
@@ -4947,7 +4947,7 @@ dependencies = [
 
 [[package]]
 name = "qw-monitor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "regex",
  "serde",
@@ -4959,7 +4959,7 @@ dependencies = [
 
 [[package]]
 name = "qw-pki"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -4974,7 +4974,7 @@ dependencies = [
 
 [[package]]
 name = "qw-policy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cedar-policy",
  "glob",
@@ -4989,7 +4989,7 @@ dependencies = [
 
 [[package]]
 name = "qw-scanner"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5013,7 +5013,7 @@ dependencies = [
 
 [[package]]
 name = "qw-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64",
