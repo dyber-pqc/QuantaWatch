@@ -351,5 +351,5 @@ public issues for security vulnerabilities.
 ---
 
 <p align="center">
-  Built by <a href="https://dyber.io">Dyber, Inc.</a>
+  Built by <a href="https://dyber.org">Dyber, Inc.</a>
 </p>

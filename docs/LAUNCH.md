@@ -86,7 +86,7 @@ publish.
 - [x] `LICENSE` (Apache-2.0), `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`,
       `CODE_OF_CONDUCT.md`, issue templates, PR template.
 - [x] `SECURITY.md` lists all crates and a real disclosure address
-      (`security@dyber.io` — confirm it's monitored before launch).
+      (`security@dyber.org` — confirm it's monitored before launch).
 - [ ] Set the repo description, topics, and social preview on GitHub.
 - [ ] Decide branch protection on `main` (require CI + review) before external
       contributors arrive.

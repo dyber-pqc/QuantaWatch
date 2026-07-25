@@ -4,7 +4,7 @@ description: QuantaWatch — post-quantum Cryptographic Posture Management gatew
 type: application
 version: 1.0.0
 appVersion: "1.0.0"
-home: https://dyber.io
+home: https://dyber.org
 sources:
   - https://github.com/dyber-pqc/QuantaWatch
 keywords:
@@ -15,4 +15,4 @@ keywords:
   - ai-gateway
 maintainers:
   - name: Dyber, Inc.
-    email: security@dyber.io
+    email: security@dyber.org

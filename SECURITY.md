@@ -10,7 +10,7 @@
 
 **Please do not open public GitHub issues for security vulnerabilities.**
 
-Report them via email to **security@dyber.io**. Include:
+Report them via email to **security@dyber.org**. Include:
 
 1. Description of the vulnerability
 2. Steps to reproduce
