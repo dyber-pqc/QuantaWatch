@@ -411,14 +411,14 @@ export async function setupAdmin(username: string, password: string): Promise<{ 
   return { pending: (await res.json()).pending };
 }
 
-export interface EnrollInfo {
+export interface Enroll2faInfo {
   secret: string;
   otpauthUrl: string;
   pending: string;
 }
 
 /** Begin 2FA enrollment — returns the secret + otpauth URL (render as a QR). */
-export async function enrollBegin(pending: string): Promise<EnrollInfo> {
+export async function enrollBegin(pending: string): Promise<Enroll2faInfo> {
   const res = await fetch("/api/auth/2fa/enroll", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
