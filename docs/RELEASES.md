@@ -108,24 +108,28 @@ cargo wix --package qw-desktop --no-build                       # MSI
 iscc crates\qw-desktop\installer\quantawatch-desktop.iss        # setup.exe
 ```
 
-Authenticode code-signing is applied when a signing certificate is configured,
-and skipped (with a warning) otherwise — an unsigned exe + MSI still ship.
+Authenticode code-signing is applied when SSL.com eSigner is configured, and
+skipped (with a warning) otherwise — an unsigned exe + MSI still ship.
 
-**Maintainer: one-time Authenticode setup.** Provide a code-signing certificate
-as a PKCS#12 (`.pfx`). **The certificate is yours to obtain and safeguard — it is
-never generated in CI.** Store it as two GitHub Actions secrets:
+**Maintainer: one-time eSigner setup.** SSL.com **EV** code-signing keys live on
+a cloud HSM and can't be exported as a `.pfx`, so signing goes through SSL.com's
+**eSigner** cloud service (the `sslcom/esigner-codesign` action). **The
+certificate is yours to obtain and safeguard — it is never generated in CI.**
+From your SSL.com account, enable eSigner on the certificate and note the
+credential ID, then set the TOTP/OTP secret up for automated signing. Store four
+GitHub Actions secrets (repo Settings → Secrets):
 
-```bash
-# Base64-encode your .pfx and store it as WINDOWS_CERT_PFX
-base64 -w0 codesign.pfx     # -> repo Settings > Secrets > WINDOWS_CERT_PFX
+| Secret | Where it comes from |
+|--------|---------------------|
+| `ES_USERNAME` | your SSL.com account username |
+| `ES_PASSWORD` | your SSL.com account password |
+| `ES_CREDENTIAL_ID` | the eSigner credential/certificate ID |
+| `ES_TOTP_SECRET` | the eSigner automated-signing TOTP secret (base32) |
 
-# Store its password as WINDOWS_CERT_PASSWORD
-#   -> repo Settings > Secrets > WINDOWS_CERT_PASSWORD
-```
-
-The pipeline decodes the `.pfx` into a temp file on the runner, signs with
-`signtool` (SHA-256, RFC-3161 timestamped via `timestamp.digicert.com`), and
-deletes it. The MSI's `UpgradeCode` is fixed, so new versions upgrade in place.
+The pipeline signs the desktop exe (before packaging) and both installers via
+eSigner (`environment_name: PROD`, SHA-256, timestamped). No key material touches
+the runner. The MSI's `UpgradeCode` is fixed, so new versions upgrade in place.
+Only `ES_USERNAME` gates the steps; all four are required for signing to succeed.
 
 Locally (with WiX installed) you can build the MSI without CI:
 

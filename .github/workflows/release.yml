@@ -14,11 +14,11 @@ jobs:
   build-binaries:
     name: Build Binaries (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # Hoist signing secrets to env: the `secrets` context is not allowed in `if:`
-    # conditions, but `env` is. Steps test `env.WINDOWS_CERT_PFX`.
+    # Hoist a signing-secret marker to env: the `secrets` context is not allowed
+    # in `if:` conditions, but `env` is. Steps test `env.ES_USERNAME` to decide
+    # whether SSL.com eSigner (cloud) code-signing is configured.
     env:
-      WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
-      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      ES_USERNAME: ${{ secrets.ES_USERNAME }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -57,24 +57,24 @@ jobs:
         if: runner.os == 'Windows'
         run: cargo build --release --locked -p qw-gateway -p qw-cli -p qw-desktop
 
-      # Authenticode-sign the desktop exe *before* packaging so the MSI carries a
-      # signed binary. Runs only when the signing cert secret is present; a
-      # signing hiccup is non-fatal (an unsigned exe still ships, with a warning).
-      - name: Sign desktop executable (Windows)
-        if: ${{ runner.os == 'Windows' && env.WINDOWS_CERT_PFX != '' }}
+      # Authenticode-sign the desktop exe *before* packaging so the MSI/Inno
+      # installers embed a signed binary. SSL.com EV certs live on a cloud HSM
+      # (no exportable .pfx), so we sign via eSigner. Runs only when the eSigner
+      # secrets are present; a signing hiccup is non-fatal (unsigned still ships).
+      - name: Sign desktop executable (SSL.com eSigner)
+        if: ${{ runner.os == 'Windows' && env.ES_USERNAME != '' }}
         continue-on-error: true
-        shell: pwsh
-        env:
-          CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
-          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        run: |
-          $pfx = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX))
-          $st = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          & $st.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 `
-            /tr http://timestamp.digicert.com /td SHA256 target\release\quantawatch-desktop.exe
-          Remove-Item $pfx
+        uses: sslcom/esigner-codesign@v1.3.2
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ github.workspace }}/target/release/quantawatch-desktop.exe
+          override: true
+          malware_block: false
+          environment_name: PROD
 
       # Package the desktop app as an MSI (cargo-wix + WiX v3). Non-blocking: if
       # WiX tooling misbehaves the release still ships the raw signed exe.
@@ -107,30 +107,43 @@ jobs:
           & $iscc "/DMyAppVersion=$ver" "/Otarget\inno" `
             crates\qw-desktop\installer\quantawatch-desktop.iss
 
-      # Authenticode-sign both installers (whichever exist) when the cert is set.
-      - name: Sign installers (Windows)
-        if: ${{ runner.os == 'Windows' && env.WINDOWS_CERT_PFX != '' }}
+      # Authenticode-sign the installers via eSigner (one file per step). Each is
+      # non-fatal so a skipped MSI/Inno build (or a signing hiccup) doesn't fail
+      # the release. eSigner errors if the file is absent — continue-on-error
+      # absorbs that when packaging was skipped.
+      - name: Sign MSI (SSL.com eSigner)
+        if: ${{ runner.os == 'Windows' && env.ES_USERNAME != '' }}
         continue-on-error: true
-        shell: pwsh
-        env:
-          CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
-          CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
-        run: |
-          $pfx = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX))
-          $st = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' |
-            Sort-Object FullName -Descending | Select-Object -First 1
-          foreach ($f in @('target\wix\quantawatch-desktop.msi', 'target\inno\quantawatch-desktop-setup.exe')) {
-            if (Test-Path $f) {
-              & $st.FullName sign /f $pfx /p $env:CERT_PASSWORD /fd SHA256 `
-                /tr http://timestamp.digicert.com /td SHA256 $f
-            }
-          }
-          Remove-Item $pfx
+        uses: sslcom/esigner-codesign@v1.3.2
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ github.workspace }}/target/wix/quantawatch-desktop.msi
+          override: true
+          malware_block: false
+          environment_name: PROD
 
-      - name: Warn if Windows signing cert is not configured
-        if: ${{ runner.os == 'Windows' && env.WINDOWS_CERT_PFX == '' }}
-        run: echo "::warning::WINDOWS_CERT_PFX not set - shipping an UNSIGNED desktop exe + MSI. See docs/RELEASES.md."
+      - name: Sign Inno setup.exe (SSL.com eSigner)
+        if: ${{ runner.os == 'Windows' && env.ES_USERNAME != '' }}
+        continue-on-error: true
+        uses: sslcom/esigner-codesign@v1.3.2
+        with:
+          command: sign
+          username: ${{ secrets.ES_USERNAME }}
+          password: ${{ secrets.ES_PASSWORD }}
+          credential_id: ${{ secrets.ES_CREDENTIAL_ID }}
+          totp_secret: ${{ secrets.ES_TOTP_SECRET }}
+          file_path: ${{ github.workspace }}/target/inno/quantawatch-desktop-setup.exe
+          override: true
+          malware_block: false
+          environment_name: PROD
+
+      - name: Warn if eSigner signing is not configured
+        if: ${{ runner.os == 'Windows' && env.ES_USERNAME == '' }}
+        run: echo "::warning::ES_USERNAME not set - shipping an UNSIGNED desktop exe + MSI + setup.exe. Configure SSL.com eSigner secrets. See docs/RELEASES.md."
 
       - name: Upload artifacts (Unix)
         if: runner.os != 'Windows'
