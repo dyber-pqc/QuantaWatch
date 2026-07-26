@@ -94,6 +94,9 @@ async fn auth_layer(
         || path.contains("/api/webhooks/")
         // Host-agent report: authenticated by the enrollment token in-handler.
         || path.ends_with("/api/endpoints/report")
+        // Bundled agent scripts for one-line enrollment (not secret).
+        || path.ends_with("/api/endpoints/agent.ps1")
+        || path.ends_with("/api/endpoints/agent.sh")
         // K8s admission webhook: caller is the apiserver over mTLS, no bearer.
         || path.ends_with("/api/k8s/admission")
     {
@@ -421,6 +424,16 @@ fn admin_routes() -> Router<AppState> {
         .route(
             "/api/endpoints/report",
             post(crate::admin::endpoints_api::report),
+        )
+        // Bundled agent scripts, served for one-line download-and-run enrollment
+        // (public — the script isn't secret; the enrollment token is).
+        .route(
+            "/api/endpoints/agent.ps1",
+            get(crate::admin::endpoints_api::agent_script_ps1),
+        )
+        .route(
+            "/api/endpoints/agent.sh",
+            get(crate::admin::endpoints_api::agent_script_sh),
         )
         .route(
             "/api/endpoints/{id}",

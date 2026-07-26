@@ -69,7 +69,7 @@ export default function AuditPage() {
                 {verifyResult.valid ? "Audit chain integrity verified" : "Chain integrity violation detected"}
               </p>
               <p className="mt-0.5 text-xs text-gray-400">
-                {verifyResult.checked} entries checked
+                {verifyResult.entries_checked.toLocaleString()} entries across {verifyResult.writers_checked} writer chain(s)
                 {verifyResult.errors.length > 0 && ` · ${verifyResult.errors.length} error(s)`}
               </p>
             </div>
@@ -79,6 +79,21 @@ export default function AuditPage() {
               </svg>
             </button>
           </div>
+          {verifyResult.valid && (
+            <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 border-t border-white/5 pt-3 text-xs sm:grid-cols-4">
+              {[
+                { k: "Hash chain", v: verifyResult.chain_intact ? "Intact" : "Broken", hint: "SHA3-256 links, no gaps/reorders" },
+                { k: "Signatures", v: `${verifyResult.signatures_valid.toLocaleString()}/${verifyResult.entries_checked.toLocaleString()}`, hint: "ML-DSA-65 vs gateway public key" },
+                { k: "Merkle roots", v: `${verifyResult.merkle_roots_valid} verified`, hint: "batch roots" },
+                { k: "Checkpoints", v: `${verifyResult.checkpoints_checked} anchored`, hint: "signed global anchors" },
+              ].map((c) => (
+                <div key={c.k} title={c.hint}>
+                  <dt className="qw-eyebrow text-gray-500">{c.k}</dt>
+                  <dd className="mt-0.5 font-mono text-emerald-300">{c.v}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
           {verifyResult.errors.length > 0 && (
             <ul className="mt-2 space-y-1 text-xs text-rose-400">
               {verifyResult.errors.map((err, i) => (

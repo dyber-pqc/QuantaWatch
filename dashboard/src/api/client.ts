@@ -706,8 +706,17 @@ export async function verifyAuditChain(): Promise<AuditVerifyResult> {
       method: "POST",
     });
   } catch {
-    console.warn("API unavailable, returning mock verification result");
-    return { valid: true, checked: MOCK_AUDIT_ENTRIES.length, errors: [] };
+    // Never fake a VALID chain: if we can't reach the verifier, say so.
+    return {
+      valid: false,
+      entries_checked: 0,
+      signatures_valid: 0,
+      chain_intact: false,
+      merkle_roots_valid: 0,
+      writers_checked: 0,
+      checkpoints_checked: 0,
+      errors: ["could not reach the audit verifier (POST /api/audit/verify)"],
+    };
   }
 }
 

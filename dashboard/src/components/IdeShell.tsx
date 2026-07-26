@@ -212,7 +212,20 @@ export default function IdeShell({ children }: { children: ReactNode }) {
         case "clear": setTerm([]); break;
         case "whoami": { const m = await fetchMe(); push(`${m.username ?? "anonymous"} · role ${m.role ?? "—"} · auth ${m.authEnabled ? "on" : "off"}`); break; }
         case "posture": { const p = await fetchPosture(); push(`posture ${Math.round(p.overallScore)}/100 · ${p.totalAssets} assets`); break; }
-        case "verify": { const v = await verifyAuditChain(); push(v.valid ? `audit chain VALID · ${v.checked} entries` : `audit chain INVALID: ${v.errors.join("; ")}`); break; }
+        case "verify": {
+          const v = await verifyAuditChain();
+          if (!v.valid) {
+            push(`audit chain INVALID — ${v.errors.length} error(s):`);
+            v.errors.forEach((e) => push(`  ✗ ${e}`));
+            break;
+          }
+          push(`audit chain VALID — ${v.entries_checked.toLocaleString()} entries across ${v.writers_checked} writer chain(s)`);
+          push(`  ✓ hash chain    intact · each entry SHA3-256-linked to its predecessor (no gaps/reorders)`);
+          push(`  ✓ signatures    ${v.signatures_valid.toLocaleString()}/${v.entries_checked.toLocaleString()} ML-DSA-65 signatures valid vs the gateway public key`);
+          push(`  ✓ merkle roots  ${v.merkle_roots_valid} batch root(s) verified`);
+          push(`  ✓ checkpoints   ${v.checkpoints_checked} signed global checkpoint(s) anchoring all chains`);
+          break;
+        }
         case "sync": { const r = await syncRemediations(); push(`remediation sync · ${r.changed} updated`); break; }
         case "scan": { push("running full scan…"); const r = await triggerScan([]); push(`scan complete · ${r.scans_completed} scans · ${r.total_findings} findings`); break; }
         case "targets": case "estate": { const t = await fetchTargets(); push(`${t.total} target(s) · ${t.exposedServices} services · ${t.quantumVulnerable} vulnerable`); t.targets.slice(0, 8).forEach((x) => push(`  ${x.name.padEnd(22)} ${x.host.padEnd(24)} ${x.pqcStatus}`)); break; }

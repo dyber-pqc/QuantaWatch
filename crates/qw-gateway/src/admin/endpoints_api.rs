@@ -409,13 +409,43 @@ pub async fn list_endpoints(
 /// commands (admin only; this is the secret an agent presents).
 pub async fn enroll_info(State(state): State<AppState>) -> impl IntoResponse {
     let token = state.agent_enroll_token.as_str();
+    // Download-and-run one-liners: the gateway serves the agent script itself
+    // (see agent_script_ps1/sh), so a host enrolls with no repo checkout. The
+    // dashboard substitutes <gateway-url> with its own origin before display.
     Json(json!({
         "token": token,
         "reportPath": "/api/endpoints/report",
-        "linux": format!("QW_URL=<gateway-url> QW_TOKEN={token} sh qw-agent.sh"),
-        "windows": format!("$env:QW_URL='<gateway-url>'; $env:QW_TOKEN='{token}'; .\\qw-agent.ps1"),
-        "note": "The agent gathers TPM, Secure Boot, measured-boot, disk-encryption and host-key crypto and POSTs it. The token authenticates the report; it grants report-only access, not admin.",
+        "linux": format!("QW_URL='<gateway-url>' QW_TOKEN='{token}' sh -c \"$(curl -fsSL '<gateway-url>/api/endpoints/agent.sh')\""),
+        "windows": format!("$env:QW_URL='<gateway-url>'; $env:QW_TOKEN='{token}'; irm '<gateway-url>/api/endpoints/agent.ps1' | iex"),
+        "note": "The agent gathers TPM, Secure Boot, measured-boot, disk-encryption and host-key crypto and POSTs it. Run the Windows line in an elevated PowerShell. The token authenticates the report; it grants report-only access, not admin.",
     }))
+}
+
+/// GET /api/endpoints/agent.ps1 — the Windows host-agent script, bundled into
+/// the binary and served so a host can enroll with a one-line download-and-run
+/// (no repo checkout). The script is not a secret; the enrollment token that the
+/// caller presents at runtime is. Public route (see the auth-layer allowlist).
+pub async fn agent_script_ps1() -> impl IntoResponse {
+    const SCRIPT: &str = include_str!("../../../../deploy/agent/qw-agent.ps1");
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        SCRIPT,
+    )
+}
+
+/// GET /api/endpoints/agent.sh — the POSIX host-agent script (see agent_script_ps1).
+pub async fn agent_script_sh() -> impl IntoResponse {
+    const SCRIPT: &str = include_str!("../../../../deploy/agent/qw-agent.sh");
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; charset=utf-8",
+        )],
+        SCRIPT,
+    )
 }
 
 /// DELETE /api/endpoints/{id}

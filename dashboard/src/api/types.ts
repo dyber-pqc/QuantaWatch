@@ -45,7 +45,18 @@ export interface Stats {
 
 export interface AuditVerifyResult {
   valid: boolean;
-  checked: number;
+  /** Total audit entries re-verified (content hash + chain linkage + signature). */
+  entries_checked: number;
+  /** How many entries carried a valid ML-DSA-65 signature. */
+  signatures_valid: number;
+  /** True if every entry links to its predecessor via SHA3-256 (no gaps/reorders). */
+  chain_intact: boolean;
+  /** Number of Merkle batch roots verified. */
+  merkle_roots_valid: number;
+  /** Distinct per-writer chains checked (active/active sharded model). */
+  writers_checked: number;
+  /** Signed global checkpoints anchoring all writer chains. */
+  checkpoints_checked: number;
   errors: string[];
 }
 
