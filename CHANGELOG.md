@@ -60,3 +60,23 @@ describes the current state of `main`.
 - Docker, Helm chart, and Terraform deployment artifacts.
 - CLI: `verify`, `inspect`, `keygen`, `scan`, `posture`, `cbom`,
   `verify-evidence`, `verify-attestation`, `version`.
+
+## [0.1.5] - 2026-07-26
+
+### Fixed
+
+- **Host-agent enrollment works off a clean install (no repo checkout).** The
+  gateway now bundles and serves the agent scripts at `GET
+  /api/endpoints/agent.ps1` and `/api/endpoints/agent.sh` (public routes — the
+  enrollment token is the secret, not the script). The install command shown in
+  the dashboard is now a one-line download-and-run instead of referencing a
+  local `qw-agent.ps1` that only existed in the source tree.
+- **Audit-chain `verify` reports real integrity evidence.** The `verify`
+  console command and the Audit page previously showed an unpopulated entry
+  count (read the wrong field) and no justification. They now report entries
+  checked, ML-DSA-65 signatures validated, SHA3-256 hash-chain linkage, Merkle
+  batch roots, and signed global checkpoints — the evidence the backend already
+  computed but discarded.
+- **No more falsely "valid" audit chain when the verifier is unreachable.** The
+  dashboard client returned a mock `valid: true` result on API failure; it now
+  reports the failure honestly.
