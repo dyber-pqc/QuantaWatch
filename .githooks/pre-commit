@@ -1,6 +1,0 @@
-#!/usr/bin/env bash
-# Repo-tracked git hooks. Enabled per-clone with:
-#     git config core.hooksPath .githooks
-# (git does not auto-apply core.hooksPath on clone, by design.)
-set -e
-"$(git rev-parse --show-toplevel)/scripts/sync-dev-notes.sh"

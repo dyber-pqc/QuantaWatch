@@ -67,3 +67,6 @@ crash.log
 
 # TypeScript incremental build cache
 *.tsbuildinfo
+
+# Internal engineering notes mirrored from local memory — keep out of the public repo
+/docs/dev-notes/

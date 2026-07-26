@@ -342,8 +342,12 @@ QuantaWatch is pre-1.0. In the interest of being auditable, here is what is
   classifier** slots in behind the `ml` build feature
   (`monitor.ml.enabled` + a model on disk) — the plumbing and enforcement are
   shipped and tested, but **no model is bundled**; you supply the weights.
-- **Single-replica.** State is SQLite on a `ReadWriteOnce` volume; horizontal
-  scale-out (external DB) is on the roadmap.
+- **Storage tiers.** The single-node default is embedded SQLite (a
+  `ReadWriteOnce` volume). For **horizontal scale-out**, point every replica at a
+  shared PostgreSQL / FortressQL store and share the signing identity
+  (`identity.seed_env`) — sessions, lockouts, and the audit chain are all
+  replica-aware, and active/active has been verified with multiple replicas
+  behind one store.
 - **Cloud connectors** cover common resource types and read credentials from the
   environment; they are not exhaustive.
 - **Installers are not yet code-signed.** The Windows MSI / `setup.exe` are
