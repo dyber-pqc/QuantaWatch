@@ -5,6 +5,9 @@ FROM rust:1.93-bookworm AS builder
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ crates/
+# qw-gateway embeds the host-agent scripts via include_str!; they must be in the
+# build context or the compile fails with "couldn't read .../deploy/agent/...".
+COPY deploy/agent/ deploy/agent/
 
 # Build release binary
 RUN cargo build --release -p qw-gateway -p qw-cli

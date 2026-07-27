@@ -1,7 +1,7 @@
 {
   "bomFormat": "CycloneDX",
   "specVersion": "1.6",
-  "serialNumber": "urn:uuid:de9dfa6d-0db4-f9c9-a73d-8429eb3e44da",
+  "serialNumber": "urn:uuid:a8747ddb-4b04-9b8a-464c-7432b5ab5e14",
   "version": 1,
   "metadata": {
     "timestamp": "1970-01-01T00:00:00Z",
@@ -9,7 +9,7 @@
       {
         "vendor": "Dyber, Inc.",
         "name": "QuantaWatch",
-        "version": "0.1.4",
+        "version": "0.1.5",
         "fingerprint": "cli"
       }
     ]
